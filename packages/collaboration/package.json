@@ -1,0 +1,92 @@
+{
+  "name": "@adonis-agora/collaboration",
+  "version": "0.1.0",
+  "description": "Collaborative editing (CRDT) for AdonisJS 7 — Yjs (Hocuspocus) and Automerge drivers, Redis-backed presence, unified version control. Part of the Agora ecosystem.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agora-collaboration.git",
+    "directory": "packages/collaboration"
+  },
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    },
+    "./types": {
+      "types": "./dist/src/types.d.ts",
+      "import": "./dist/src/types.js",
+      "default": "./dist/src/types.js"
+    },
+    "./drivers/yjs": {
+      "types": "./dist/src/drivers/yjs/yjs_driver.d.ts",
+      "import": "./dist/src/drivers/yjs/yjs_driver.js",
+      "default": "./dist/src/drivers/yjs/yjs_driver.js"
+    },
+    "./drivers/automerge": {
+      "types": "./dist/src/drivers/automerge/automerge_driver.d.ts",
+      "import": "./dist/src/drivers/automerge/automerge_driver.js",
+      "default": "./dist/src/drivers/automerge/automerge_driver.js"
+    },
+    "./storage/file_system": {
+      "types": "./dist/src/storage/file_system_storage.d.ts",
+      "import": "./dist/src/storage/file_system_storage.js",
+      "default": "./dist/src/storage/file_system_storage.js"
+    }
+  },
+  "files": ["dist/", "README.md", "CHANGELOG.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "pnpm run clean && tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run build",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hocuspocus/server": "^4.6.0",
+    "@hocuspocus/transformer": "^4.6.0",
+    "@automerge/automerge": "^3.4.1",
+    "ioredis": "^5.11.1",
+    "ws": "^8.18.0",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.27"
+  },
+  "peerDependencies": {
+    "@adonisjs/core": "^7.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@adonisjs/core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@adonisjs/core": "7.5.0",
+    "@swc/core": "1.15.47",
+    "@types/node": "22.20.1",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.3",
+    "unplugin-swc": "1.5.11",
+    "vitest": "3.2.7"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "keywords": [
+    "adonisjs",
+    "adonis",
+    "crdt",
+    "yjs",
+    "automerge",
+    "collaboration",
+    "websocket",
+    "realtime",
+    "agora"
+  ]
+}

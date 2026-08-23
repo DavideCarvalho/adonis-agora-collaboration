@@ -1,0 +1,14 @@
+{
+  // The typecheck/editor config. `tsconfig.build.json` is the emitting build; it extends
+  // this one and turns `incremental` off.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": ".typecheck.tsbuildinfo",
+    "types": ["node"],
+    "experimentalDecorators": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["**/*.spec.ts", "**/*.test.ts", "test/**", "dist/**"]
+}
