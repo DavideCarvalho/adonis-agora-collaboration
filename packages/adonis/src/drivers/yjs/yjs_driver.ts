@@ -3,6 +3,7 @@ import { TiptapTransformer } from '@hocuspocus/transformer';
 import { WebSocketServer } from 'ws';
 import * as Y from 'yjs';
 import type { CollaborationDriver } from '../../driver.js';
+import { InMemoryCollaborationStorage } from '../../storage/in_memory_storage.js';
 import type {
   CollabDiffSummary,
   CollabPermission,
@@ -31,9 +32,23 @@ export class YjsDriver implements CollaborationDriver {
   private hocuspocus: Hocuspocus;
   private wss?: WebSocketServer;
   private config: CollaborationConfig;
+  #memoryStorage?: InMemoryCollaborationStorage;
+
+  /** Storage configurado ou in-memory (dev). */
+  #storage() {
+    if (this.config.storage) {
+      return this.config.storage;
+    }
+    this.#memoryStorage ??= new InMemoryCollaborationStorage();
+    return this.#memoryStorage;
+  }
 
   constructor(config: CollaborationConfig) {
     this.config = config;
+
+    // Capturados fora do callback: o `this` dentro dos hooks do Hocuspocus
+    // não é a instância do driver.
+    const storage = () => this.#storage();
 
     this.hocuspocus = new Hocuspocus({
       async onAuthenticate({ documentName, token }: onAuthenticatePayload) {
@@ -49,7 +64,7 @@ export class YjsDriver implements CollaborationDriver {
       },
 
       async onStoreDocument({ documentName, document }) {
-        await config.storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+        await storage().saveDocument(documentName, Y.encodeStateAsUpdate(document));
       },
 
       debounce: config.debounce ?? 2000,
@@ -73,7 +88,7 @@ export class YjsDriver implements CollaborationDriver {
     const existing = this.liveDoc(name);
     if (existing) return existing;
 
-    const stored = await this.config.storage.loadDocument(name);
+    const stored = await this.#storage().loadDocument(name);
     return this.hydrate(stored?.state ?? new Uint8Array());
   }
 
@@ -102,7 +117,7 @@ export class YjsDriver implements CollaborationDriver {
     if (live) {
       return Y.encodeStateAsUpdate(live);
     }
-    const stored = await this.config.storage.loadDocument(docName);
+    const stored = await this.#storage().loadDocument(docName);
     return stored?.state ?? new Uint8Array();
   }
 
@@ -125,15 +140,15 @@ export class YjsDriver implements CollaborationDriver {
     label: string | null,
   ): Promise<CollabVersion> {
     const doc = await this.ensureDoc(docName);
-    const existing = await this.config.storage.listVersions(docName);
+    const existing = await this.#storage().listVersions(docName);
     const version = createVersionMetadata(createdBy, label, seqVersions(existing));
 
-    await this.config.storage.saveVersion(docName, version, Y.encodeStateAsUpdate(doc));
+    await this.#storage().saveVersion(docName, version, Y.encodeStateAsUpdate(doc));
     return version;
   }
 
   async listVersions(docName: string): Promise<CollabVersion[]> {
-    return this.config.storage.listVersions(docName);
+    return this.#storage().listVersions(docName);
   }
 
   async restoreVersion(
@@ -153,7 +168,7 @@ export class YjsDriver implements CollaborationDriver {
       applyRestoredContent(live, restoredDoc);
     });
 
-    await this.config.storage.saveDocument(docName, Y.encodeStateAsUpdate(live));
+    await this.#storage().saveDocument(docName, Y.encodeStateAsUpdate(live));
   }
 
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
@@ -169,7 +184,7 @@ export class YjsDriver implements CollaborationDriver {
   }
 
   private async versionState(docName: string, versionId: string): Promise<Uint8Array> {
-    const persisted = await this.config.storage.loadVersionSnapshot(docName, versionId);
+    const persisted = await this.#storage().loadVersionSnapshot(docName, versionId);
     if (!persisted) throw new Error(`Versão ${versionId} não encontrada`);
     return persisted;
   }

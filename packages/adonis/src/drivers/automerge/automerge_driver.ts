@@ -2,7 +2,13 @@ import * as A from '@automerge/automerge';
 import { next as ANext } from '@automerge/automerge';
 import { WebSocketServer } from 'ws';
 import type { CollaborationDriver } from '../../driver.js';
-import type { CollabDiffSummary, CollabVersion, CollaborationConfig } from '../../types.js';
+import { InMemoryCollaborationStorage } from '../../storage/in_memory_storage.js';
+import type {
+  CollabDiffSummary,
+  CollabVersion,
+  CollaborationConfig,
+  CollaborationStorage,
+} from '../../types.js';
 import { createVersionMetadata, seqVersions } from '../../versioning.js';
 
 /**
@@ -34,11 +40,21 @@ export class AutomergeDriver implements CollaborationDriver {
 
   constructor(private config: CollaborationConfig) {}
 
+  /** Storage configurado ou in-memory (dev). */
+  #storage(): CollaborationStorage {
+    if (this.config.storage) {
+      return this.config.storage;
+    }
+    this.#memoryStorage ??= new InMemoryCollaborationStorage();
+    return this.#memoryStorage;
+  }
+  #memoryStorage?: InMemoryCollaborationStorage;
+
   private async loadRoom(docName: string): Promise<Room> {
     let room = this.rooms.get(docName);
     if (room) return room;
 
-    const stored = await this.config.storage.loadDocument(docName);
+    const stored = await this.#storage().loadDocument(docName);
     const doc = stored
       ? A.load<Record<string, unknown>>(stored.state)
       : A.from({ content: '' } as Record<string, unknown>);
@@ -138,7 +154,7 @@ export class AutomergeDriver implements CollaborationDriver {
       this.persistTimers.set(
         docName,
         setTimeout(() => {
-          void this.config.storage
+          void this.#storage()
             .saveDocument(docName, A.save(room.text))
             .finally(() => resolve());
         }, this.config.debounce ?? 2000),
@@ -165,7 +181,7 @@ export class AutomergeDriver implements CollaborationDriver {
   ): Promise<CollabVersion> {
     const room = await this.loadRoom(docName);
     const heads = ANext.getHeads(room.text);
-    const existing = await this.config.storage.listVersions(docName);
+    const existing = await this.#storage().listVersions(docName);
 
     const version: CollabVersion = {
       ...createVersionMetadata(createdBy, label, seqVersions(existing)),
@@ -174,12 +190,12 @@ export class AutomergeDriver implements CollaborationDriver {
 
     // Snapshot = save binário do doc até esses heads (o Automerge comprime
     // bem; guardar o doc inteiro como "snapshot" mantém restore O(1)).
-    await this.config.storage.saveVersion(docName, version, A.save(room.text));
+    await this.#storage().saveVersion(docName, version, A.save(room.text));
     return version;
   }
 
   async listVersions(docName: string): Promise<CollabVersion[]> {
-    return this.config.storage.listVersions(docName);
+    return this.#storage().listVersions(docName);
   }
 
   async restoreVersion(
@@ -187,7 +203,7 @@ export class AutomergeDriver implements CollaborationDriver {
     versionId: string,
     _restoredBy: string | null,
   ): Promise<void> {
-    const bytes = await this.config.storage.loadVersionSnapshot(docName, versionId);
+    const bytes = await this.#storage().loadVersionSnapshot(docName, versionId);
     if (!bytes) throw new Error(`Versão ${versionId} não encontrada`);
 
     const snapshotDoc = A.load<Record<string, unknown>>(bytes);
@@ -203,13 +219,13 @@ export class AutomergeDriver implements CollaborationDriver {
 
     room.text = finalDoc;
     this.broadcast(room, A.save(finalDoc));
-    await this.config.storage.saveDocument(docName, A.save(finalDoc));
+    await this.#storage().saveDocument(docName, A.save(finalDoc));
   }
 
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
     const [aBytes, bBytes] = await Promise.all([
-      this.config.storage.loadVersionSnapshot(docName, aId),
-      this.config.storage.loadVersionSnapshot(docName, bId),
+      this.#storage().loadVersionSnapshot(docName, aId),
+      this.#storage().loadVersionSnapshot(docName, bId),
     ]);
     if (!aBytes || !bBytes) throw new Error('Versão não encontrada');
 

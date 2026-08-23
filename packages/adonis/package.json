@@ -37,22 +37,39 @@
       "types": "./dist/src/storage/file_system_storage.d.ts",
       "import": "./dist/src/storage/file_system_storage.js",
       "default": "./dist/src/storage/file_system_storage.js"
+    },
+    "./services/main": {
+      "types": "./dist/src/services/main.d.ts",
+      "import": "./dist/src/services/main.js",
+      "default": "./dist/src/services/main.js"
+    },
+    "./collaboration_provider": {
+      "types": "./dist/providers/collaboration_provider.d.ts",
+      "import": "./dist/providers/collaboration_provider.js",
+      "default": "./dist/providers/collaboration_provider.js"
+    },
+    "./configure": {
+      "types": "./dist/configure.d.ts",
+      "import": "./dist/configure.js",
+      "default": "./dist/configure.js"
     }
   },
   "files": ["dist/", "README.md", "CHANGELOG.md"],
   "sideEffects": false,
   "scripts": {
-    "build": "pnpm run clean && tsc -p tsconfig.build.json",
+    "build": "pnpm run clean && tsc -p tsconfig.build.json && pnpm run copy:stubs",
+    "check:dist": "node ../../scripts/assert-build-output.mjs dist src/index.js",
     "clean": "rm -rf dist",
-    "prepack": "pnpm run build",
+    "copy:stubs": "mkdir -p dist/stubs/config && cp stubs/main.ts dist/stubs/main.js && cp stubs/config/collaboration.stub dist/stubs/config/collaboration.stub",
+    "prepack": "pnpm run check:dist",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@automerge/automerge": "^3.4.1",
     "@hocuspocus/server": "^4.6.0",
     "@hocuspocus/transformer": "^4.6.0",
-    "@automerge/automerge": "^3.4.1",
     "ioredis": "^5.11.1",
     "ws": "^8.18.0",
     "y-protocols": "^1.0.7",
@@ -67,6 +84,7 @@
     }
   },
   "devDependencies": {
+    "@adonisjs/assembler": "8.5.0",
     "@adonisjs/core": "7.5.0",
     "@swc/core": "1.15.47",
     "@types/node": "22.20.1",

@@ -9,6 +9,6 @@
     "types": ["node"],
     "experimentalDecorators": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "providers/**/*.ts", "configure.ts"],
   "exclude": ["**/*.spec.ts", "**/*.test.ts", "test/**", "dist/**"]
 }

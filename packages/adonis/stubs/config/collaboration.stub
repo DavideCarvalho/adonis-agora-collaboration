@@ -1,0 +1,39 @@
+{{{
+  exports({ to: app.configPath('collaboration.ts') })
+}}}
+import { defineConfig } from '@adonis-agora/collaboration'
+
+/**
+ * Configuration for @adonis-agora/collaboration.
+ *
+ * The engine picks the CRDT backend: 'yjs' (Hocuspocus sync server, default)
+ * or 'automerge' (native history). Documents are identified by name — e.g.
+ * `researches/<id>/writing` — and resolved by your `authorize` callback.
+ */
+export default defineConfig({
+  engine: 'yjs',
+
+  /** WebSocket upgrade path on the Adonis HTTP server. */
+  path: '/collaboration',
+
+  /** Redis connection for cross-instance presence (omit for single-instance dev). */
+  // redisUrl: env.get('REDIS_URL'),
+
+  /** Persist debounce in ms (onStoreDocument). */
+  debounce: 2000,
+
+  /**
+   * Authorization per document. Return canRead/canWrite/canComment; the
+   * driver drops the connection when canRead is false.
+   */
+  async authorize(_ctx, _docName) {
+    throw new Error('Configure authorize() in config/collaboration.ts')
+  },
+
+  /**
+   * Storage backend for document states and versions. The default persists
+   * to disk (.collab-data) — swap for a Lucid/S3-backed implementation in
+   * production.
+   */
+  storage: undefined,
+})

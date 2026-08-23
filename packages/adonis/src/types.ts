@@ -67,7 +67,8 @@ export interface CollaborationStorage {
 /** Configuração do manager. */
 export interface CollaborationConfig {
   engine: CollaborationEngine;
-  storage: CollaborationStorage;
+  /** Omitido = in-memory (só dev). O stub de config publica um default. */
+  storage?: CollaborationStorage;
   /**
    * Autorização por documento. Chamada no handshake (onAuthenticate) e a cada
    * mudança de permissão relevante — retorna false pra derrubar a conexão.
