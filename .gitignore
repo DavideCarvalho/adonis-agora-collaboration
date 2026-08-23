@@ -3,7 +3,3 @@ dist/
 .turbo/
 coverage/
 *.tsbuildinfo
-.DS_Store
-.env
-.env.local
-.migrations-tmp/
