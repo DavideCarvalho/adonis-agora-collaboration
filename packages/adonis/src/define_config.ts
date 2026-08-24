@@ -1,27 +1,23 @@
 import type { CollaborationConfig } from './types.js';
 
 /**
- * Config helper (type-safe) usado no `config/collaboration.ts` do app —
- * mesmo padrão do `defineConfig` do @adonisjs/*.
+ * Shape do `config/collaboration.ts` publicado pelo stub — versão "app-friendly"
+ * do {@link CollaborationConfig} (redisUrl como string, storage opcional).
  */
-export function defineConfig(config: {
+export type CollaborationAppConfig = {
   engine?: CollaborationConfig['engine'];
   path?: string;
   redisUrl?: string;
   debounce?: number;
   authorize: CollaborationConfig['authorize'];
-  storage?: CollaborationConfig['storage'];
-}): CollaborationAppConfig {
-  return config as CollaborationAppConfig;
-}
-
-/** Shape publicado no stub de config (sem storage obrigatório). */
-export type CollaborationAppConfig = {
-  engine?: 'yjs' | 'automerge';
-  path?: string;
-  redisUrl?: string;
-  debounce?: number;
-  authorize: CollaborationConfig['authorize'];
-  /** Omitido = storage em disco (.collab-data), útil só em dev. */
+  /** Omitido = in-memory (só dev). Produção passa um storage persistente. */
   storage?: CollaborationConfig['storage'];
 };
+
+/**
+ * Config helper (type-safe) usado no `config/collaboration.ts` do app —
+ * mesmo padrão do `defineConfig` do @adonisjs/*.
+ */
+export function defineConfig(config: CollaborationAppConfig): CollaborationAppConfig {
+  return config;
+}

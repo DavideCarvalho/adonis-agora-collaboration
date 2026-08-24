@@ -1,22 +1,26 @@
 import type { CollaborationDriver } from './driver.js';
 import { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 import { YjsDriver } from './drivers/yjs/yjs_driver.js';
+import { CommentService } from './services/comment_service.js';
 import { type PresenceMember, PresenceService } from './services/presence_service.js';
-import type { CollabDiffSummary, CollabVersion, CollaborationConfig } from './types.js';
+import { InMemoryCollaborationStorage } from './storage/in_memory_storage.js';
+import type { CollabComment, CollabDiffSummary, CollabVersion, CollaborationConfig } from './types.js';
 
 /**
  * Fachada da lib: escolhe o driver pela config e expõe a API unificada
- * (documento + versões + presença) pro app hospedeiro.
+ * (documento + versões + presença + comentários) pro app hospedeiro.
  */
 export class CollaborationManager {
   private driver: CollaborationDriver;
   presence: PresenceService;
+  comments: CommentService;
 
   constructor(private config: CollaborationConfig) {
     this.driver =
       config.engine === 'automerge' ? new AutomergeDriver(config) : new YjsDriver(config);
 
     this.presence = new PresenceService(config.redis?.url);
+    this.comments = new CommentService(config.storage ?? new InMemoryCollaborationStorage());
   }
 
   get engine(): string {

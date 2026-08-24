@@ -53,15 +53,30 @@ export default class CollaborationServiceProvider {
     });
   }
 
-  async boot() {
+  async ready() {
+    // O attach fica no `ready` (fase 4 do ciclo de vida): o Ignitor já criou
+    // o node HTTP server em `start()` (fase 3), então getNodeServer() existe.
+    // Em comandos ace não há HTTP server — a colaboração simplesmente não
+    // sobe (o manager segue disponível pra uso programático).
+    // Sem HTTP server fora do processo web (ace/console, test, repl) — a
+    // colaboração não sobe; o manager segue disponível pra uso programático.
+    const env = this.app.getEnvironment() as string;
+    if (env !== 'web') {
+      return;
+    }
+
     const manager = await this.app.container.make(CollaborationManager);
 
-    // O HttpServerService do Adonis expõe o Server node cru via getInstance()
-    // (é assim que integrações WebSocket se anexam ao processo principal).
-    const httpServer = await this.app.container.make('server');
-    const nodeServer = (
-      httpServer as unknown as { getInstance(): import('node:http').Server }
-    ).getInstance();
+    const adonisServer = (await this.app.container.make('server')) as {
+      getNodeServer?(): import('node:http').Server | undefined;
+    };
+
+    const nodeServer = adonisServer.getNodeServer?.();
+    if (!nodeServer) {
+      throw new Error(
+        '[@adonis-agora/collaboration] getNodeServer() indisponível no ready() — verifique a versão do @adonisjs/http-server',
+      );
+    }
 
     await manager.attach(nodeServer);
   }

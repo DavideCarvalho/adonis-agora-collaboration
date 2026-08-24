@@ -8,7 +8,32 @@
  */
 
 /** Motor CRDT subjacente. */
-export type CollaborationEngine = 'yjs' | 'automerge';
+export type CollaborationEngine = 'yjs' | 'automerge'
+
+/**
+ * Âncora de um comentário — genérica por tipo de conteúdo.
+ * A lib persiste a âncora + lifecycle; quem sabe interpretá-la é o resolver
+ * registrado pelo app (texto → offsets, canvas → shapeId, mídia → timestamp).
+ */
+export type CommentAnchor =
+  | { kind: 'text-range'; start: number; end: number; selectedText: string }
+  | { kind: 'canvas-object'; shapeId: string; relativeX: number; relativeY: number }
+  | { kind: 'timestamp'; at: number; end?: number }
+
+/** Comentário persistido pela lib (thread + resolved + autor). */
+export interface CollabComment {
+  id: string
+  documentName: string
+  /** Espaço do documento onde a âncora vive ('text', 'canvas', ...). */
+  space: string
+  anchor: CommentAnchor
+  body: string
+  userId: string
+  authorName?: string | null
+  resolvedAt: string | null
+  createdAt: string
+  updatedAt: string | null
+};
 
 /** Payload de autenticação anexado à conexão WebSocket. */
 export interface CollabConnectionContext {
@@ -53,8 +78,8 @@ export interface CollabDiffSummary {
 }
 
 /**
- * Persistência de documentos + versões. O app hospedeiro implementa isso
- * (banco, S3…) e a lib só conhece a interface.
+ * Persistência de documentos + versões + comentários. O app hospedeiro
+ * implementa isso (banco, S3…) e a lib só conhece a interface.
  */
 export interface CollaborationStorage {
   loadDocument(docName: string): Promise<{ state: Uint8Array } | null>;
@@ -62,6 +87,10 @@ export interface CollaborationStorage {
   listVersions(docName: string): Promise<CollabVersion[]>;
   saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>;
   loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>;
+  /** Comentários de um documento (por espaço). */
+  listComments(docName: string, space?: string): Promise<CollabComment[]>;
+  saveComment(docName: string, comment: CollabComment): Promise<void>;
+  deleteComment(docName: string, commentId: string): Promise<void>;
 }
 
 /** Configuração do manager. */

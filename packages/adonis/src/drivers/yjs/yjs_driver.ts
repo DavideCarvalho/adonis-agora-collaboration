@@ -3,8 +3,10 @@ import { TiptapTransformer } from '@hocuspocus/transformer';
 import { WebSocketServer } from 'ws';
 import * as Y from 'yjs';
 import type { CollaborationDriver } from '../../driver.js';
+import { CommentService } from '../../services/comment_service.js';
 import { InMemoryCollaborationStorage } from '../../storage/in_memory_storage.js';
 import type {
+  CollabComment,
   CollabDiffSummary,
   CollabPermission,
   CollabVersion,
@@ -21,6 +23,7 @@ import { createVersionMetadata, seqVersions } from '../../versioning.js';
  *  - `restoreVersion`: aplica o conteúdo da versão no doc vivo via transação
  *    — clientes conectados recebem em tempo real pelo protocolo de sync;
  *  - `diffVersions`: materializa as duas versões e compara por linha.
+ *  - Comentários ancorados: delegam pro CommentService (anchor genérica).
  */
 
 /** Permissões por conexão (userId:docName), preenchidas no authenticate. */
@@ -32,6 +35,7 @@ export class YjsDriver implements CollaborationDriver {
   private hocuspocus: Hocuspocus;
   private wss?: WebSocketServer;
   private config: CollaborationConfig;
+  private commentsService: CommentService;
   #memoryStorage?: InMemoryCollaborationStorage;
 
   /** Storage configurado ou in-memory (dev). */
@@ -45,6 +49,7 @@ export class YjsDriver implements CollaborationDriver {
 
   constructor(config: CollaborationConfig) {
     this.config = config;
+    this.commentsService = new CommentService(config.storage ?? new InMemoryCollaborationStorage());
 
     // Capturados fora do callback: o `this` dentro dos hooks do Hocuspocus
     // não é a instância do driver.
@@ -187,6 +192,31 @@ export class YjsDriver implements CollaborationDriver {
     const persisted = await this.#storage().loadVersionSnapshot(docName, versionId);
     if (!persisted) throw new Error(`Versão ${versionId} não encontrada`);
     return persisted;
+  }
+
+  /* ───────────────────────── comentários ancorados ───────────────────────── */
+
+  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
+    return this.commentsService.list(docName, space);
+  }
+
+  async createComment(
+    docName: string,
+    comment: Omit<CollabComment, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt'>,
+  ): Promise<CollabComment> {
+    return this.commentsService.create(docName, comment);
+  }
+
+  async resolveComment(
+    docName: string,
+    commentId: string,
+    resolved: boolean,
+  ): Promise<CollabComment | null> {
+    return this.commentsService.resolve(docName, commentId, resolved);
+  }
+
+  async deleteComment(docName: string, commentId: string): Promise<boolean> {
+    return this.commentsService.remove(docName, commentId);
   }
 
   async close(): Promise<void> {

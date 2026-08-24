@@ -2,8 +2,10 @@ import * as A from '@automerge/automerge';
 import { next as ANext } from '@automerge/automerge';
 import { WebSocketServer } from 'ws';
 import type { CollaborationDriver } from '../../driver.js';
+import { CommentService } from '../../services/comment_service.js';
 import { InMemoryCollaborationStorage } from '../../storage/in_memory_storage.js';
 import type {
+  CollabComment,
   CollabDiffSummary,
   CollabVersion,
   CollaborationConfig,
@@ -37,8 +39,11 @@ export class AutomergeDriver implements CollaborationDriver {
 
   private rooms = new Map<string, Room>();
   private wss?: WebSocketServer;
+  private commentsService: CommentService;
 
-  constructor(private config: CollaborationConfig) {}
+  constructor(private config: CollaborationConfig) {
+    this.commentsService = new CommentService(config.storage ?? new InMemoryCollaborationStorage());
+  }
 
   /** Storage configurado ou in-memory (dev). */
   #storage(): CollaborationStorage {
@@ -235,6 +240,31 @@ export class AutomergeDriver implements CollaborationDriver {
     };
 
     return diffByLine(textOf(aBytes), textOf(bBytes));
+  }
+
+  /* ───────────────────────── comentários ancorados ───────────────────────── */
+
+  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
+    return this.commentsService.list(docName, space);
+  }
+
+  async createComment(
+    docName: string,
+    comment: Omit<CollabComment, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt'>,
+  ): Promise<CollabComment> {
+    return this.commentsService.create(docName, comment);
+  }
+
+  async resolveComment(
+    docName: string,
+    commentId: string,
+    resolved: boolean,
+  ): Promise<CollabComment | null> {
+    return this.commentsService.resolve(docName, commentId, resolved);
+  }
+
+  async deleteComment(docName: string, commentId: string): Promise<boolean> {
+    return this.commentsService.remove(docName, commentId);
   }
 
   async close(): Promise<void> {
