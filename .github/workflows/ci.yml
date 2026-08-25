@@ -36,11 +36,12 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Typecheck
-        run: pnpm --filter './packages/*' typecheck
-
+      # Build first so the .d.ts exist before dependents typecheck.
       - name: Build
-        run: pnpm --filter './packages/*' build
+        run: pnpm -r build
+
+      - name: Typecheck
+        run: pnpm -r typecheck
 
       - name: Test
-        run: pnpm --filter './packages/*' test
+        run: pnpm -r test
