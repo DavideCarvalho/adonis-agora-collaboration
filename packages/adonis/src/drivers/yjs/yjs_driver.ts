@@ -224,6 +224,7 @@ export class YjsDriver implements CollaborationDriver {
     // destroy — o Server embutido é que tem).
     this.hocuspocus.flushPendingStores();
     this.hocuspocus.closeConnections();
+    if (!this.wss) return;
     return new Promise((resolve) => {
       this.wss?.close(() => resolve());
     });
