@@ -6,7 +6,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DavideCarvalho/adonis-agora-collaboration.git",
-    "directory": "packages/collaboration"
+    "directory": "packages/adonis"
   },
   "author": "Davi Carvalho <davi@goflip.ai>",
   "type": "module",
