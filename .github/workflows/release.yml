@@ -38,18 +38,25 @@ jobs:
           cache: pnpm
           registry-url: 'https://registry.npmjs.org'
 
+      # Trusted publishing needs npm CLI >= 11.5.1; Node 22 still bundles npm 10.x.
+      # Pinned to 11.x, NOT @latest (see authkit release.yml for why npm 12 breaks changesets).
+      - run: npm install -g 'npm@^11.5.1'
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm --filter './packages/*' build
-
-      - name: Create Release Pull Request or Publish to npm
-        id: changesets
+      - name: Create release PR or publish
         uses: changesets/action@v1
         with:
-          publish: pnpm changeset publish
-          version: pnpm run version-packages
+          version: pnpm version-packages
+          publish: pnpm release
+          commit: 'chore: version packages'
+          title: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Deliberately empty: setup-node writes .npmrc with _authToken=${NODE_AUTH_TOKEN},
+          # and a real token there wins over OIDC -- npm uses the token and never exchanges
+          # the id-token for a credential. Empty, npm sees no auth and falls back to trusted
+          # publishing. The NPM_TOKEN secret still exists; put back `${{ secrets.NPM_TOKEN }}`
+          # here to revert to the token if trusted publishing isn't configured on npmjs.com yet.
+          NODE_AUTH_TOKEN: ''
