@@ -6,6 +6,8 @@ export { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 export { CommentService } from './services/comment_service.js';
 export { PresenceService, type PresenceMember } from './services/presence_service.js';
 export { LucidStorage } from './storage/lucid_storage.js';
+export { InMemoryCollaborationStorage } from './storage/in_memory_storage.js';
+export { FileSystemStorage } from './storage/file_system_storage.js';
 export {
   defineConfig,
   type CollaborationAppConfig,

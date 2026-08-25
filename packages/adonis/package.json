@@ -38,6 +38,11 @@
       "import": "./dist/src/storage/file_system_storage.js",
       "default": "./dist/src/storage/file_system_storage.js"
     },
+    "./storage/in_memory": {
+      "types": "./dist/src/storage/in_memory_storage.d.ts",
+      "import": "./dist/src/storage/in_memory_storage.js",
+      "default": "./dist/src/storage/in_memory_storage.js"
+    },
     "./storage/lucid": {
       "types": "./dist/src/storage/lucid_storage.d.ts",
       "import": "./dist/src/storage/lucid_storage.js",
