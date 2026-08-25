@@ -21,10 +21,16 @@ export interface LucidConnectionLike {
  * const manager = new CollaborationManager({ engine: 'yjs', storage, authorize })
  */
 export class LucidStorage implements CollaborationStorage {
-  private ready: Promise<void>;
+  private ready: Promise<void> | null = null;
 
-  constructor(private db: LucidConnectionLike, private connection: string = 'entretextos') {
-    this.ready = this.ensureSchema();
+  constructor(private db: LucidConnectionLike, private connection: string = 'entretextos') {}
+
+  /** Garante as tabelas sob demanda (lazy) — o boot não toca no banco. */
+  private ensure(): Promise<void> {
+    if (!this.ready) {
+      this.ready = this.ensureSchema();
+    }
+    return this.ready;
   }
 
   /** A conexão do lucid é um Knex (QueryClientContract estende o builder). */
@@ -71,12 +77,14 @@ export class LucidStorage implements CollaborationStorage {
   }
 
   async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
+    await this.ensure();
     const row = await this.knex().from('collab_documents').where('doc_name', docName).first();
     if (!row?.state) return null;
     return { state: new Uint8Array(row.state as Buffer) };
   }
 
   async saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void> {
+    await this.ensure();
     const existing = await this.knex()
       .from('collab_documents')
       .where('doc_name', docName)
@@ -98,6 +106,7 @@ export class LucidStorage implements CollaborationStorage {
   }
 
   async listVersions(docName: string): Promise<CollabVersion[]> {
+    await this.ensure();
     const rows = await this.knex()
       .from('collab_versions')
       .where('doc_name', docName)
@@ -112,6 +121,7 @@ export class LucidStorage implements CollaborationStorage {
   }
 
   async saveVersion(docName: string, version: CollabVersion, _snapshot: Uint8Array): Promise<void> {
+    await this.ensure();
     await this.knex()
       .from('collab_versions')
       .insert({
@@ -132,6 +142,7 @@ export class LucidStorage implements CollaborationStorage {
   }
 
   async listComments(docName: string, space?: string): Promise<CollabComment[]> {
+    await this.ensure();
     let query = this.knex().from('collab_comments').where('doc_name', docName);
     if (space) query = query.where('space', space);
     const rows = await query;
@@ -150,6 +161,7 @@ export class LucidStorage implements CollaborationStorage {
   }
 
   async saveComment(docName: string, comment: CollabComment): Promise<void> {
+    await this.ensure();
     const existing = await this.knex().from('collab_comments').where('id', comment.id).first();
     const payload = {
       doc_name: comment.documentName,
@@ -174,6 +186,7 @@ export class LucidStorage implements CollaborationStorage {
   }
 
   async deleteComment(docName: string, commentId: string): Promise<void> {
+    await this.ensure();
     await this.knex().from('collab_comments').where('id', commentId).delete();
     void docName;
   }
