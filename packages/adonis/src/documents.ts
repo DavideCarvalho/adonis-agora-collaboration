@@ -21,20 +21,23 @@ import type { CollabConnectionContext, CollabPermission, CollaborationEngine } f
  *   }),
  * }
  */
-export interface CollabDocumentDeclaration {
+export interface CollabDocumentDeclaration<P extends Record<string, string> = Record<string, string>> {
   /** Engine deste tipo de documento (default: o engine global). */
   engine?: CollaborationEngine;
   /**
-   * Autorização deste documento. `params` são os segmentos `:name` do
-   * padrão já extraídos do docName. Omita para usar o authorize global.
+   * Autorização deste documento. Recebe o docName resolvido e os segmentos
+   * `:name` do padrão já extraídos — tipados via `defineDocument<Params>()`.
+   * Omita para usar o authorize global.
    */
   authorize?: (
     ctx: CollabConnectionContext,
-    params: Record<string, string>,
+    info: { docName: string; params: P },
   ) => Promise<CollabPermission>;
 }
 
-export function defineDocument(declaration: CollabDocumentDeclaration): CollabDocumentDeclaration {
+export function defineDocument<P extends Record<string, string> = Record<string, string>>(
+  declaration: CollabDocumentDeclaration<P>,
+): CollabDocumentDeclaration<P> {
   return declaration;
 }
 

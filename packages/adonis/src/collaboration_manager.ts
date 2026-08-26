@@ -69,7 +69,8 @@ export class CollaborationManager {
     if (declared?.declaration.authorize) {
       return declared.declaration.authorize(ctx, { docName, params: declared.params as never });
     }
-    return this.config.authorize(ctx, docName);
+    if (this.config.authorize) return this.config.authorize(ctx, docName);
+    return { canRead: false, canWrite: false, canComment: false };
   }
 
   get engine(): string {

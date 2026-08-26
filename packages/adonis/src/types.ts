@@ -133,14 +133,19 @@ export interface CollaborationConfig {
    * authorize per document type (see {@link CollabDocumentDeclaration}).
    * Optional — plain `engine` + `authorize` remain the fallback.
    */
-  documents?: Record<string, import('./documents.js').CollabDocumentDeclaration>;
+  documents?: Record<string, import('./documents.js').CollabDocumentDeclaration<any>>;
   /** Omitted = in-memory (dev only). The config stub publishes a default. */
   storage?: CollaborationStorage;
   /**
    * Per-document authorization. Called at the handshake (onAuthenticate) and
    * on every relevant permission change — return false to drop the connection.
    */
-  authorize: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>;
+  /**
+   * Global per-document authorization. May be omitted when `documents`
+   * declares authorize for every type — unmatched docs then fall back to
+   * deny.
+   */
+  authorize?: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>;
   /** Redis for cross-instance presence (optional in single-instance dev). */
   redis?: { url: string };
   /** Edge sync via PartyKit (required when engine = 'partykit'). */

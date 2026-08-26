@@ -32,11 +32,7 @@ export default class CollaborationServiceProvider {
     this.config = config;
 
     this.app.container.singleton(CollaborationManager, () => {
-      if (!config?.authorize) {
-        throw new Error(
-          'Configure authorize() in config/collaboration.ts — the library never authorizes by default',
-        );
-      }
+
 
       const presenceStore =
         config.redisUrl && config.redisUrl.length > 0
@@ -46,7 +42,7 @@ export default class CollaborationServiceProvider {
       const managerConfig = {
         engine: config.engine ?? 'yjs',
         ...(config.engineFor ? { engineFor: config.engineFor } : {}),
-        authorize: config.authorize,
+        ...(config.authorize ? { authorize: config.authorize } : {}),
         path: config.path ?? '/collaboration',
         debounce: config.debounce ?? 2000,
         ...(config.storage ? { storage: config.storage } : {}),

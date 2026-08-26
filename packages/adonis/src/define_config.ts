@@ -13,7 +13,7 @@ export type CollaborationAppConfig = {
   path?: string;
   redisUrl?: string;
   debounce?: number;
-  authorize: CollaborationConfig['authorize'];
+  authorize?: CollaborationConfig['authorize'];
   /** Omitted = in-memory (dev only). Production passes a persistent storage. */
   storage?: CollaborationConfig['storage'];
   /** Required when engine = 'partykit' (edge sync). */
