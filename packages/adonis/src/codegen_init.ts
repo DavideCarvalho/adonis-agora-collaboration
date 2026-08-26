@@ -59,4 +59,6 @@ const initHook = hooks.init(
   },
 );
 
-export default initHook as (...args: unknown[]) => unknown;
+// biome-ignore lint/suspicious/noExplicitAny: any params make the handler assignable
+// to the rcFile hooks typing without referencing non-portable @poppinss types.
+export default initHook as (parent: any, hooksManager: any, indexGenerator: any) => void;

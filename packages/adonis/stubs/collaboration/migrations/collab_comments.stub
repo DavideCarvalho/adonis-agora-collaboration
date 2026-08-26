@@ -1,7 +1,7 @@
 {{{
   exports({ to: app.makePath('database', 'migrations', migration.fileName) })
 }}}
-import { BaseModel, BaseSchema } from '@adonisjs/lucid/schema'
+import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class extends BaseSchema {
   protected tableName = '{{ migration.tableName }}'
