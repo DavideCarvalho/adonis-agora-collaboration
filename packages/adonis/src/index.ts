@@ -16,7 +16,13 @@ export {
   type IssuedToken,
   type TokenIssuerConfig,
 } from './auth/token.js';
-export { LucidStorage } from './storage/lucid_storage.js';
+export { LucidStorage, lucidStorage } from './storage/lucid_storage.js';
+export {
+  PresenceService,
+  RedisPresenceStore,
+  type PresenceMember,
+  type PresenceStore,
+} from './services/presence_service.js';
 export { InMemoryCollaborationStorage } from './storage/in_memory_storage.js';
 export { FileSystemStorage } from './storage/file_system_storage.js';
 export {

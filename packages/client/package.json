@@ -19,10 +19,7 @@
       "default": "./dist/src/index.js"
     }
   },
-  "files": [
-    "dist/",
-    "README.md"
-  ],
+  "files": ["dist/", "README.md"],
   "sideEffects": false,
   "scripts": {
     "build": "pnpm run clean && tsc -p tsconfig.build.json",
@@ -65,13 +62,5 @@
   "engines": {
     "node": ">=20.6.0"
   },
-  "keywords": [
-    "adonisjs",
-    "crdt",
-    "yjs",
-    "collaboration",
-    "realtime",
-    "react-hooks",
-    "agora"
-  ]
+  "keywords": ["adonisjs", "crdt", "yjs", "collaboration", "realtime", "react-hooks", "agora"]
 }

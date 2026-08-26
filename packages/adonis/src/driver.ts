@@ -50,11 +50,15 @@ export interface CollaborationDriver {
 }
 
 /** Narrow dependencies for self-hosted engines (Yjs/Automerge). */
+import type { PresenceService } from './services/presence_service.js';
+
 export interface SelfHostedDriverOptions {
   storage?: CollaborationStorage;
   authorize: AuthorizeFn;
   path?: string;
   debounce?: number;
+  /** Alimenta presença server-side (cross-instance) no connect/disconnect. */
+  presence?: PresenceService;
 }
 
 /** Narrow dependencies for the edge engine (PartyKit). */

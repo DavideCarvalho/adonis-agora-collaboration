@@ -1,8 +1,10 @@
 import type { ApplicationService } from '@adonisjs/core/types';
+import { Redis } from 'ioredis';
 import { CollaborationManager } from '../src/collaboration_manager.js';
 import type { CollaborationAppConfig } from '../src/define_config.js';
 import { collaborationRoutes } from '../src/routes.js';
 import { setBootedApp } from '../src/services/booted_app.js';
+import { RedisPresenceStore } from '../src/services/presence_service.js';
 
 /**
  * Wires `@adonis-agora/collaboration` into the AdonisJS application:
@@ -36,6 +38,11 @@ export default class CollaborationServiceProvider {
         );
       }
 
+      const presenceStore =
+        config.redisUrl && config.redisUrl.length > 0
+          ? new RedisPresenceStore(new Redis(config.redisUrl))
+          : undefined;
+
       const managerConfig = {
         engine: config.engine ?? 'yjs',
         ...(config.engineFor ? { engineFor: config.engineFor } : {}),
@@ -47,7 +54,7 @@ export default class CollaborationServiceProvider {
         ...(config.partykit ? { partykit: config.partykit } : {}),
       };
 
-      return new CollaborationManager(managerConfig);
+      return new CollaborationManager(managerConfig, presenceStore);
     });
   }
 

@@ -1,4 +1,5 @@
 import { Hocuspocus, type onAuthenticatePayload } from '@hocuspocus/server';
+import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import { WebSocketServer } from 'ws';
 import * as Y from 'yjs';
@@ -23,6 +24,9 @@ import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
 
 /** Permissions per connection (userId:docName), filled in at authenticate. */
 
+/** userId por documento conectado — alimenta presence no disconnect. */
+const presenceByDoc = new Map<string, string>();
+
 export class YjsDriver implements CollaborationDriver {
   readonly engine = 'yjs';
 
@@ -46,6 +50,26 @@ export class YjsDriver implements CollaborationDriver {
         const permission = await options.authorize(ctx, documentName);
         if (!permission.canRead) {
           throw new Error('no access to this document');
+        }
+      },
+
+      async onConnect({ documentName, requestParameters }: onConnectPayload) {
+        const token = requestParameters.get('token');
+        const ctx = token ? parseLegacyToken(token) : null;
+        if (options.presence && ctx?.userId) {
+          presenceByDoc.set(documentName, ctx.userId);
+          await options.presence.join(documentName, {
+            userId: ctx.userId,
+            ...(ctx.user ? { name: ctx.user.name } : {}),
+          });
+        }
+      },
+
+      async onDisconnect({ documentName }: onDisconnectPayload) {
+        const userId = presenceByDoc.get(documentName);
+        if (options.presence && userId) {
+          presenceByDoc.delete(documentName);
+          await options.presence.leave(documentName, userId);
         }
       },
 

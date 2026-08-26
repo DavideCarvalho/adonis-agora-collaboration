@@ -4,6 +4,11 @@ import { PartyKitDriver } from './drivers/partykit/partykit_driver.js';
 import { resolveStorage } from './drivers/shared.js';
 import { YjsDriver } from './drivers/yjs/yjs_driver.js';
 import { CommentService } from './services/comment_service.js';
+import {
+  type PresenceMember,
+  PresenceService,
+  type PresenceStore,
+} from './services/presence_service.js';
 import type {
   CollabDiffSummary,
   CollabVersion,
@@ -22,10 +27,14 @@ export class CollaborationManager {
   private readonly drivers = new Map<CollaborationEngine, CollaborationDriver>();
   private server?: import('node:http').Server;
   comments: CommentService;
+  presence?: PresenceService;
 
-  constructor(config: CollaborationConfig) {
+  constructor(config: CollaborationConfig, presenceStore?: PresenceStore) {
     this.config = config;
     this.comments = new CommentService(resolveStorage(config.storage));
+    if (presenceStore) {
+      this.presence = new PresenceService(presenceStore);
+    }
     // Default engine is materialized eagerly so `engine` and boot-time attach
     // behave exactly as before.
     this.#driverFor(config.engine ?? 'yjs');
@@ -130,8 +139,14 @@ export class CollaborationManager {
     await this.config.storage.saveDocument(docName, state);
   }
 
+  /** Online members of a document (across all instances, when Redis set). */
+  async listPresence(docName: string): Promise<PresenceMember[]> {
+    return this.presence?.list(docName) ?? [];
+  }
+
   async close(): Promise<void> {
     await Promise.all([...this.drivers.values()].map((driver) => driver.close()));
+    await this.presence?.close();
   }
 }
 

@@ -23,4 +23,8 @@ Domain vocabulary for `adonis-collaboration`. Keep names exact across code, docs
 
 ## Decided NOT to do (do not re-suggest without new evidence)
 
-- Presence service removed: edge engines own presence in the worker; local Redis presence had no writers. Revisit only with a concrete multi-instance self-hosted requirement.
+## Presence
+Re-added server-side presence (cross-instance) via Redis:  + , fed by the Yjs driver on connect/disconnect. Client still gets richer presence via Yjs awareness.  is meaningful again.
+
+## Decided NOT to do
+- **Document namespace registry** ( declarativo): rejected for now — the built-in REST surface is already typed by Tuyau (controller + router), and single-engine apps don't need per-doc routing. Revisit only with a real multi-engine-per-document requirement.  stays as the lightweight escape hatch.
