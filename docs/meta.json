@@ -1,4 +1,20 @@
 {
   "title": "Collaboration",
-  "description": "CRDT collaboration for AdonisJS — Yjs/Automerge/edge engines, presence, version control, codegen and React hooks."
+  "pages": [
+    "index",
+    "getting-started",
+    "---Concepts---",
+    "concepts",
+    "---Engines---",
+    "engines",
+    "---Backend---",
+    "routes",
+    "storage",
+    "codegen",
+    "---Client---",
+    "client"
+  ],
+  "root": true,
+  "description": "Collaborative editing (CRDT) for AdonisJS — engines, presence, versions, comments, codegen and React hooks.",
+  "icon": "Users"
 }
