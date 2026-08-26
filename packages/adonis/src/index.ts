@@ -44,3 +44,7 @@ export type {
   CollabDiffSummary,
   PartyKitConfig,
 } from './types.js';
+
+// Root-level export so `node ace configure @adonis-agora/collaboration`
+// finds the hook without hitting the ./configure subpath.
+export { configure } from '../configure.js';
