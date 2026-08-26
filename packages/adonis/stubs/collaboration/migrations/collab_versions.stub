@@ -1,0 +1,26 @@
+{{{
+  exports({ to: app.makePath('database', 'migrations', migration.fileName) })
+}}}
+import { BaseModel, BaseSchema } from '@adonisjs/lucid/schema'
+
+export default class extends BaseSchema {
+  protected tableName = '{{ migration.tableName }}'
+
+  async up() {
+    this.schema.createTable(this.tableName, (table) => {
+      table.uuid('id').primary()
+      table.string('document_name').notNullable()
+      table.integer('seq').notNullable()
+      table.string('label').nullable()
+      table.string('created_by').nullable()
+      table.binary('snapshot').notNullable()
+      table.timestamp('created_at', { useTz: true }).notNullable()
+
+      table.index(['document_name', 'seq'])
+    })
+  }
+
+  async down() {
+    this.schema.dropTable(this.tableName)
+  }
+}

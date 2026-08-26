@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import type { CollabComment, CollabVersion, CollaborationStorage } from '../types.js';
 
 /**
- * Storage em disco pra desenvolvimento local da lib (um arquivo por doc +
- * um por versão). Em produção use o LucidStorage sobre Postgres.
+ * Disk storage for local development of the library (one file per doc +
+ * one per version). In production use LucidStorage on top of Postgres.
  */
 export class FileSystemStorage implements CollaborationStorage {
   private baseDir: string;

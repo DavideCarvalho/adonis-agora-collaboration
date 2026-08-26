@@ -1,0 +1,41 @@
+{{{
+  exports({ to: app.makePath('app', 'collaboration', 'documents', document.fileName) })
+}}}
+import type { CommentAnchor } from '@adonis-agora/collaboration'
+
+/**
+ * Collaborative document "{{ document.documentName }}".
+ *
+ * Single source of truth for this document's comment spaces and anchors —
+ * importable by the frontend (types-only).
+ */
+
+/** Anchor kinds accepted by this document. */
+export type {{ document.className }}Anchor =
+{{#each document.anchorKinds}}
+  | Extract<CommentAnchor, { kind: '{{ this }}' }>
+{{/each}}
+
+/** Document spaces (e.g. main text, canvas, media). */
+export type {{ document.className }}Space =
+{{#each document.spaceList}}
+  | '{{ this }}'
+{{/each}}
+
+/** Collaborative document metadata. */
+export interface {{ document.className }}CollabDocument {
+  /** Name used in the WS handshake and REST routes (?doc=...). */
+  readonly docName: string;
+  readonly engine: string;
+}
+
+export const {{ document.className }}Document: {{ document.className }}CollabDocument = {
+  docName: '{{ document.documentName }}',
+  engine: 'yjs',
+}
+
+/**
+ * Default export consumed by the registry generated at
+ * .adonisjs/collaboration/documents.ts (node ace codegen).
+ */
+export default {{ document.className }}Document

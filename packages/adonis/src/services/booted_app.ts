@@ -40,7 +40,7 @@ export function whenBootedApp(
     resolveBootedApp({
       get booted() {
         throw new Error(
-          '@adonis-agora/collaboration: services/main aguardando boot — instale o provider com `node ace configure @adonis-agora/collaboration`',
+          '@adonis-agora/collaboration: services/main waiting for boot — install the provider with `node ace configure @adonis-agora/collaboration`',
         );
       },
     } as unknown as ApplicationService);

@@ -33,6 +33,11 @@
       "import": "./dist/src/drivers/automerge/automerge_driver.js",
       "default": "./dist/src/drivers/automerge/automerge_driver.js"
     },
+    "./drivers/partykit": {
+      "types": "./dist/src/drivers/partykit/partykit_driver.d.ts",
+      "import": "./dist/src/drivers/partykit/partykit_driver.js",
+      "default": "./dist/src/drivers/partykit/partykit_driver.js"
+    },
     "./storage/file_system": {
       "types": "./dist/src/storage/file_system_storage.d.ts",
       "import": "./dist/src/storage/file_system_storage.js",
@@ -58,23 +63,30 @@
       "import": "./dist/providers/collaboration_provider.js",
       "default": "./dist/providers/collaboration_provider.js"
     },
+    "./commands": {
+      "types": "./dist/commands/main.d.ts",
+      "import": "./dist/commands/main.js",
+      "default": "./dist/commands/main.js"
+    },
+    "./codegen_init": {
+      "types": "./dist/src/codegen_init.d.ts",
+      "import": "./dist/src/codegen_init.js",
+      "default": "./dist/src/codegen_init.js"
+    },
     "./configure": {
       "types": "./dist/configure.d.ts",
       "import": "./dist/configure.js",
       "default": "./dist/configure.js"
     }
   },
-  "files": [
-    "dist/",
-    "README.md",
-    "CHANGELOG.md"
-  ],
+  "files": ["dist/", "README.md", "CHANGELOG.md"],
   "sideEffects": false,
   "scripts": {
-    "build": "pnpm run clean && tsc -p tsconfig.build.json && pnpm run copy:stubs",
+    "build": "pnpm run clean && tsc -p tsconfig.build.json && pnpm run build:commands && pnpm run copy:stubs",
     "check:dist": "node ../../scripts/assert-build-output.mjs dist src/index.js",
     "clean": "rm -rf dist",
-    "copy:stubs": "mkdir -p dist/stubs/config && cp stubs/main.ts dist/stubs/main.js && cp stubs/config/collaboration.stub dist/stubs/config/collaboration.stub",
+    "build:commands": "node ./scripts/build-commands.mjs",
+    "copy:stubs": "mkdir -p dist/stubs/config dist/stubs/partykit/worker dist/stubs/collaboration/migrations && cp stubs/main.ts dist/stubs/main.js && cp stubs/config/collaboration.stub dist/stubs/config/collaboration.stub && cp stubs/partykit/worker/*.stub dist/stubs/partykit/worker/ && cp stubs/collaboration/*.stub dist/stubs/collaboration/ && cp stubs/collaboration/migrations/*.stub dist/stubs/collaboration/migrations/",
     "prepack": "pnpm run check:dist",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
@@ -84,7 +96,6 @@
     "@automerge/automerge": "^3.4.1",
     "@hocuspocus/server": "^4.6.0",
     "@hocuspocus/transformer": "^4.6.0",
-    "ioredis": "^5.11.1",
     "ws": "^8.18.0",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.27"

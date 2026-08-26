@@ -1,43 +1,67 @@
 import type { CollaborationDriver } from './driver.js';
 import { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
+import { PartyKitDriver } from './drivers/partykit/partykit_driver.js';
+import { resolveStorage } from './drivers/shared.js';
 import { YjsDriver } from './drivers/yjs/yjs_driver.js';
 import { CommentService } from './services/comment_service.js';
-import { type PresenceMember, PresenceService } from './services/presence_service.js';
-import { InMemoryCollaborationStorage } from './storage/in_memory_storage.js';
-import type { CollabComment, CollabDiffSummary, CollabVersion, CollaborationConfig } from './types.js';
+import type { CollabDiffSummary, CollabVersion, CollaborationConfig } from './types.js';
 
 /**
- * Fachada da lib: escolhe o driver pela config e expõe a API unificada
- * (documento + versões + presença + comentários) pro app hospedeiro.
+ * Library facade: picks the driver for the configured engine and exposes the
+ * unified API (documents + versions + comments) to the host app.
+ *
+ * Seams:
+ *  - drivers connect only through the registry below;
+ *  - comments live exclusively here (`manager.comments`) — drivers never
+ *    touch them;
+ *  - presence is owned by each engine at runtime (edge worker awareness or
+ *    client-side), not by this process.
  */
 export class CollaborationManager {
   private driver: CollaborationDriver;
-  presence: PresenceService;
   comments: CommentService;
 
   constructor(private config: CollaborationConfig) {
-    this.driver =
-      config.engine === 'automerge' ? new AutomergeDriver(config) : new YjsDriver(config);
+    const engine = config.engine ?? 'yjs';
+    const storage = config.storage;
 
-    this.presence = new PresenceService(config.redis?.url);
-    this.comments = new CommentService(config.storage ?? new InMemoryCollaborationStorage());
+    if (engine === 'partykit') {
+      this.driver = new PartyKitDriver({
+        ...(storage ? { storage } : {}),
+        partykit: config.partykit!,
+      });
+    } else {
+      const shared = {
+        authorize: config.authorize,
+      };
+      const opts = {
+        ...shared,
+        ...(storage ? { storage } : {}),
+        ...(config.path !== undefined ? { path: config.path } : {}),
+        ...(config.debounce !== undefined ? { debounce: config.debounce } : {}),
+      };
+      this.driver = engine === 'automerge' ? new AutomergeDriver(opts) : new YjsDriver(opts);
+    }
+
+    // Single comments seam — one service, one storage instance.
+    this.comments = new CommentService(resolveStorage(storage));
   }
 
   get engine(): string {
     return this.driver.engine;
   }
 
-  /** Anexa o WebSocket do driver no server HTTP do Adonis. */
+  /** Attaches the driver's WebSocket to the Adonis HTTP server. No-op on edge. */
   async attach(server: import('node:http').Server): Promise<void> {
     await this.driver.attach(server);
   }
 
-  /** Estado binário atual (pra push externo — Google Drive, export…). */
+  /** Current binary state (for external push — Google Drive, export...). */
   getDocumentState(docName: string): Promise<Uint8Array> {
     return this.driver.getDocumentState(docName);
   }
 
-  /** Texto plano (LanguageTool, RAG, índices de comentários). */
+  /** Plain text (LanguageTool, RAG, comment indexes). */
   getDocumentText(docName: string): Promise<string> {
     return this.driver.getDocumentText(docName);
   }
@@ -62,16 +86,23 @@ export class CollaborationManager {
     return this.driver.diffVersions(docName, aId, bId);
   }
 
-  /** Membros online num documento (todas as instâncias). */
-  listPresence(docName: string): PresenceMember[] {
-    return this.presence.list(docName);
+  /**
+   * Persists an external snapshot (e.g. PartyKit worker post-debounce).
+   * Requires a configured storage backend.
+   */
+  async persistDocument(docName: string, state: Uint8Array): Promise<void> {
+    if (!this.config.storage) {
+      throw new Error(
+        'persistDocument requires a storage backend — configure storage in config/collaboration.ts',
+      );
+    }
+    await this.config.storage.saveDocument(docName, state);
   }
 
   async close(): Promise<void> {
     await this.driver.close();
-    await this.presence.close();
   }
 }
 
-export { YjsDriver, AutomergeDriver };
-export type { CollaborationDriver, CollaborationConfig, PresenceMember };
+export { YjsDriver, AutomergeDriver, PartyKitDriver };
+export type { CollaborationConfig, CollaborationDriver };

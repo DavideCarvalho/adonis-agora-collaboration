@@ -1,0 +1,14 @@
+{{{
+  exports({ to: app.makePath('partykit-worker', 'partykit.toml') })
+}}}
+# Config do worker PartyKit — docs: https://docs.partykit.io/reference/partykit-configuration/
+name = "{{ partykitWorkerName }}"
+main = "party.ts"
+compatibility_date = "2025-01-01"
+
+# Segredo do JWT compartilhado com o Adonis (config/collaboration.ts).
+[vars]
+ADONIS_BASE_URL = "{{ adonisBaseUrl }}"
+
+# COLLAB_JWT_SECRET goes as a secret, not a var:
+#   npx partykit secret put COLLAB_JWT_SECRET

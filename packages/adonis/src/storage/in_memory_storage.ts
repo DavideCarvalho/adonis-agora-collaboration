@@ -1,9 +1,9 @@
 import type { CollabComment, CollabVersion, CollaborationStorage } from '../types.js';
 
 /**
- * Storage em memória — fallback de desenvolvimento quando o app não configura
- * `storage` (nada sobrevive a um restart). Produção SEMPRE passa um storage
- * persistente (Postgres/S3).
+ * In-memory storage — development fallback when the app doesn't configure
+ * `storage` (nothing survives a restart). Production ALWAYS passes persistent
+ * storage (Postgres/S3).
  */
 export class InMemoryCollaborationStorage implements CollaborationStorage {
   private docs = new Map<string, Uint8Array>();
@@ -55,7 +55,7 @@ export class InMemoryCollaborationStorage implements CollaborationStorage {
     const existing = this.comments.get(docName) ?? [];
     this.comments.set(
       docName,
-      existing.filter((entry) => entry.id !== commentId)
+      existing.filter((entry) => entry.id !== commentId),
     );
   }
 }

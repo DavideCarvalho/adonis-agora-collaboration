@@ -1,0 +1,21 @@
+{{{
+  exports({ to: app.makePath('partykit-worker', 'package.json') })
+}}}
+{
+  "name": "collab-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "partykit dev",
+    "deploy": "partykit deploy"
+  },
+  "dependencies": {
+    "y-partykit": "^0.0.33",
+    "yjs": "^13.6.27"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "partykit": "^0.0.115",
+    "typescript": "^5.9.3"
+  }
+}

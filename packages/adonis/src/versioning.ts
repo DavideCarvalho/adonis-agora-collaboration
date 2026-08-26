@@ -1,12 +1,12 @@
 /**
- * Metadados de versões compartilhados entre drivers — mesma semântica de
- * histórico pro Automerge (nativo) e pro Yjs (snapshots).
+ * Version metadata shared across drivers — same history semantics for
+ * Automerge (native) and Yjs (snapshots).
  */
 
 import { randomUUID } from 'node:crypto';
 import type { CollabVersion } from './types.js';
 
-/** Próximo número sequencial a partir das versões existentes. */
+/** Next sequential number based on the existing versions. */
 export function seqVersions(existing: CollabVersion[]): number {
   return existing.reduce((max, version) => Math.max(max, version.seq), 0) + 1;
 }

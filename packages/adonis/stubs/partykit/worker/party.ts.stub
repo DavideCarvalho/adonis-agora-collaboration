@@ -1,0 +1,175 @@
+{{{
+  exports({ to: app.makePath('partykit-worker', 'party.ts') })
+}}}
+/**
+ * Worker PartyKit do @adonis-agora/collaboration (edge sync).
+ *
+ * Um Durable Object por room (= docName). Os browsers conectam AQUI, direto
+ * — the WebSocket traffic does not pass through the Adonis server. This
+ * worker speaks the binary y-protocols and exposes an HTTP endpoint
+ * (`onRequest`) that
+ * o PartyKitDriver no Adonis consome pra estado/texto/restore.
+ *
+ * Deploy: npx partykit deploy (config em partykit.toml)
+ */
+import { onConnect } from 'y-partykit';
+import type { PartyConnection, PartyConnectionContext, PartyRequest, PartyServer } from 'partykit/server';
+import * as Y from 'yjs';
+
+/** JWT payload issued by Adonis (GET /collaboration/token route). */
+interface CollabToken {
+  userId: string;
+  docName: string;
+  exp: number;
+}
+
+function verifyToken(token: string | null, secret: string): Promise<CollabToken | null> {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [header, body, signature] = parts as [string, string, string];
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const valid = await crypto.subtle.verify(
+    'HMAC',
+    key,
+    Buffer.from(signature, 'base64url'),
+    new TextEncoder().encode(`${header}.${body}`),
+  );
+  if (!valid) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(body, 'base64url').toString()) as CollabToken;
+    if (!parsed.userId || !parsed.docName || parsed.exp * 1000 < Date.now()) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export default class CollabParty implements PartyServer {
+  /** Doc vivo do room — populado pelo primeiro ciclo load/callback. */
+  private liveDoc?: Y.Doc;
+
+  constructor(public party: import('partykit/server').Party) {}
+
+  static async onBeforeConnect(request: PartyRequest, lobby: { context: PartyConnectionContext }) {
+    const secret = lobby.context.party.env.COLLAB_JWT_SECRET as string | undefined;
+    const token = new URL(request.url).searchParams.get('token');
+    const claims = await verifyToken(token, secret ?? '');
+    if (!claims) {
+      return new Response('invalid or expired token', { status: 401 });
+    }
+    // Forward claims to onConnect via synthetic headers.
+    request.headers.set('x-collab-user', claims.userId);
+    request.headers.set('x-collab-doc', claims.docName);
+  }
+
+  async onConnect(connection: PartyConnection, ctx: PartyConnectionContext) {
+    await onConnect(connection, this.party, {
+      // Debounced persistence into DO storage; large docs should use the
+      // history mode (10 MB cap) — tune for your workload.
+      persist: { mode: 'snapshot' },
+      load: async () => {
+        // Initial state: fetch the authoritative snapshot from Adonis
+        // (source of truth for versions). Falls back to empty.
+        try {
+          const response = await this.fetchFromAdonis(`/collaboration/state`);
+          if (!response.ok) return Y.encodeStateAsUpdate(new Y.Doc());
+          return new Uint8Array(await response.arrayBuffer());
+        } catch {
+          return Y.encodeStateAsUpdate(new Y.Doc());
+        }
+      },
+      callback: {
+        handler: async (doc: Y.Doc) => {
+          // Keep the reference so onRequest serves real state/text.
+          this.liveDoc = doc;
+          // Post-debounce persistence back to Adonis.
+          try {
+            await this.fetchFromAdonis('/collaboration/state', {
+              method: 'POST',
+              body: Y.encodeStateAsUpdate(doc),
+            });
+          } catch {
+            // Transient failure: local DO storage already ensured durability.
+          }
+        },
+        debounceWait: 2000,
+        debounceMaxWait: 10000,
+      },
+    });
+  }
+
+  /** HTTP API consumed by the PartyKitDriver (Adonis side). */
+  async onRequest(request: PartyRequest): Promise<Response> {
+    const secret = this.party.env.COLLAB_JWT_SECRET as string | undefined;
+    const url = new URL(request.url);
+    const claims =
+      (await verifyToken(url.searchParams.get('token'), secret ?? '')) ??
+      (await verifyToken(request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '', secret ?? ''));
+    if (!claims) {
+      return new Response('unauthenticated', { status: 401 });
+    }
+
+    // The room name is the docName (clients connect at /parties/main/<docName>).
+    const doc = this.liveDoc ?? new Y.Doc();
+
+    if (request.method === 'GET') {
+      const mode = request.headers.get('x-collab-return') ?? 'update';
+      if (mode === 'text') {
+        return new Response(this.extractText(doc), {
+          headers: { 'content-type': 'text/plain; charset=utf-8' },
+        });
+      }
+      return new Response(Y.encodeStateAsUpdate(doc), {
+        headers: { 'content-type': 'application/octet-stream' },
+      });
+    }
+
+    if (request.method === 'POST') {
+      // Restore: apply the update/snapshot posted by Adonis to the live doc.
+      const update = new Uint8Array(await request.arrayBuffer());
+      Y.applyUpdate(doc, update);
+      return new Response(null, { status: 204 });
+    }
+
+    return new Response('method not allowed', { status: 405 });
+  }
+
+  private extractText(doc: Y.Doc): string {
+    let text = '';
+    const fragment = doc.getXmlFragment('default');
+    for (const block of fragment.toArray()) {
+      text += `${block.toString()}\n\n`;
+    }
+    return text.trimEnd();
+  }
+
+  /**
+   * The room name identifies the document — same value used in the ?doc=
+   * query of REST routes and by the client hooks.
+   */
+  private get docName(): string {
+    return this.party.name;
+  }
+
+  private fetchFromAdonis(path: string, init?: { method: 'POST'; body: Uint8Array }): Promise<Response> {
+    const base = this.party.env.ADONIS_BASE_URL as string;
+    const url = `${base}${path}?doc=${encodeURIComponent(this.docName)}`;
+    const headers: Record<string, string> = {
+      // Shared secret configured via `partykit secret put COLLAB_WORKER_SECRET`
+      'x-collab-worker-secret': (this.party.env.COLLAB_WORKER_SECRET as string | undefined) ?? '',
+      ...(init?.body ? { 'content-type': 'application/octet-stream' } : {}),
+    };
+    return fetch(url, {
+      method: init?.method ?? 'GET',
+      headers,
+      body: init?.body ? (init.body as unknown as ArrayBufferView) : undefined,
+    });
+  }
+}
