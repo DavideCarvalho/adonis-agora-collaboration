@@ -3,6 +3,10 @@ import * as Y from 'yjs';
 import { getOrCreateSession, useCollaborationContext } from '../context.js';
 import type { CollabStatus } from '../types.js';
 
+export interface UseCollabDocOptions {
+  docName: string;
+}
+
 export interface UseCollabDocResult {
   /** Y.Doc compartilhado (estável enquanto o provider viver). */
   doc: Y.Doc;
@@ -17,7 +21,8 @@ export interface UseCollabDocResult {
  * const { doc, status } = useCollabDoc('researches/42/writing')
  * ```
  */
-export function useCollabDoc(docName: string): UseCollabDocResult {
+export function useCollabDoc(options: UseCollabDocOptions): UseCollabDocResult {
+  const { docName } = options;
   const context = useCollaborationContext();
   const session = getOrCreateSession(context, docName);
 

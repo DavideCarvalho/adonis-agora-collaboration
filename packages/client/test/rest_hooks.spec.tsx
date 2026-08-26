@@ -67,7 +67,9 @@ describe('useComments', () => {
 
   it('carrega comentários via REST', async () => {
     const { wrapper, fetchMock } = makeWrapper();
-    const { result } = renderHook(() => useComments('docs/9', 'text'), { wrapper });
+    const { result } = renderHook(() => useComments({ docName: 'docs/9', space: 'text' }), {
+      wrapper,
+    });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.comments).toHaveLength(1);
@@ -80,7 +82,7 @@ describe('useComments', () => {
 
   it('create chama POST e refresca a lista', async () => {
     const { wrapper, fetchMock } = makeWrapper();
-    const { result } = renderHook(() => useComments('docs/9'), { wrapper });
+    const { result } = renderHook(() => useComments({ docName: 'docs/9' }), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -109,7 +111,7 @@ describe('useComments', () => {
 
   it('resolve atualiza localmente sem recarregar tudo', async () => {
     const { wrapper } = makeWrapper();
-    const { result } = renderHook(() => useComments('docs/9'), { wrapper });
+    const { result } = renderHook(() => useComments({ docName: 'docs/9' }), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -131,7 +133,7 @@ describe('useVersions', () => {
 
   it('carrega versões e cria nova com label', async () => {
     const { wrapper } = makeWrapper();
-    const { result } = renderHook(() => useVersions('docs/9'), { wrapper });
+    const { result } = renderHook(() => useVersions({ docName: 'docs/9' }), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.versions).toHaveLength(1);

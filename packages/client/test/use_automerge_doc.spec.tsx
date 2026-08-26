@@ -67,7 +67,11 @@ describe('useAutomergeDoc', () => {
   it('merges the initial server payload and exposes the doc', async () => {
     const initial = A.from<Record<string, unknown>>({ content: 'hello' });
     const { result } = renderHook(
-      () => useAutomergeDoc('d/1', { WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket }),
+      () =>
+        useAutomergeDoc({
+          docName: 'd/1',
+          WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+        }),
       { wrapper: wrapper() },
     );
 
@@ -90,7 +94,11 @@ describe('useAutomergeDoc', () => {
   it('change() mutates locally and sends the saved doc after debounce', async () => {
     const initial = A.from<Record<string, unknown>>({ content: '' });
     const { result } = renderHook(
-      () => useAutomergeDoc('d/2', { WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket }),
+      () =>
+        useAutomergeDoc({
+          docName: 'd/2',
+          WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+        }),
       { wrapper: wrapper() },
     );
 
@@ -125,7 +133,11 @@ describe('useAutomergeDoc', () => {
     const baseSaved = A.save(base);
 
     const { result } = renderHook(
-      () => useAutomergeDoc('d/3', { WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket }),
+      () =>
+        useAutomergeDoc({
+          docName: 'd/3',
+          WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+        }),
       { wrapper: wrapper() },
     );
 

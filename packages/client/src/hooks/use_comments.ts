@@ -8,6 +8,12 @@ import {
 } from '../rest_client.js';
 import type { CollabComment } from '../types.js';
 
+export interface UseCommentsOptions {
+  docName: string;
+  /** Optional comment space (default: all). */
+  space?: string;
+}
+
 export interface UseCommentsResult {
   comments: CollabComment[];
   loading: boolean;
@@ -29,7 +35,8 @@ export interface UseCommentsResult {
  * const { comments, create, resolve } = useComments('researches/42/writing', 'text')
  * ```
  */
-export function useComments(docName: string, space?: string): UseCommentsResult {
+export function useComments(options: UseCommentsOptions): UseCommentsResult {
+  const { docName, space } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
 

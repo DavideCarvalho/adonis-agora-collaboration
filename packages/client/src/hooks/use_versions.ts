@@ -7,6 +7,10 @@ import {
 } from '../rest_client.js';
 import type { CollabVersion } from '../types.js';
 
+export interface UseVersionsOptions {
+  docName: string;
+}
+
 export interface UseVersionsResult {
   versions: CollabVersion[];
   loading: boolean;
@@ -23,7 +27,8 @@ export interface UseVersionsResult {
  * const { versions, create, restore } = useVersions('researches/42/writing')
  * ```
  */
-export function useVersions(docName: string): UseVersionsResult {
+export function useVersions(options: UseVersionsOptions): UseVersionsResult {
+  const { docName } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
   void getOrCreateSession(context, docName);

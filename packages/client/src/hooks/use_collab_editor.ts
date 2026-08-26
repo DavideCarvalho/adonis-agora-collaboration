@@ -40,7 +40,7 @@ export function useCollabEditor<S>(options: UseCollabEditorOptions<S>): UseColla
   const { docName, editorId, adapter } = options;
   const context = useCollaborationContext();
   const session = getOrCreateSession(context, docName);
-  const { peers, status } = useAwareness(docName);
+  const { peers, status } = useAwareness({ docName });
 
   // Reactivity: any Yjs update re-renders and re-reads the adapter state.
   const subscribe = useCallback(

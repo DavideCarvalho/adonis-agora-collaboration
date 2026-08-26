@@ -27,19 +27,20 @@ export interface UseAutomergeDocResult<T extends Record<string, unknown>> {
   change(cb: A.ChangeFn<T>): void;
 }
 
-interface Options {
+export interface UseAutomergeDocOptions {
+  docName: string;
+  /** WebSocket constructor override (tests / polyfills). */
   WebSocketImpl?: typeof WebSocket;
 }
 
 const SEND_DEBOUNCE_MS = 200;
 
 export function useAutomergeDoc<T extends Record<string, unknown> = Record<string, unknown>>(
-  docName: string,
-  options: Options = {},
+  options: UseAutomergeDocOptions,
 ): UseAutomergeDocResult<T> {
+  const { docName, WebSocketImpl } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
-  const { WebSocketImpl } = options;
   // Keeps the shared session lifecycle alive (token endpoint + provider).
   void getOrCreateSession(context, docName);
 

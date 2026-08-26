@@ -81,8 +81,8 @@ describe('useCollabDoc', () => {
       .mockResolvedValue(Response.json({ token: 't', wsUrl: '/collaboration', engine: 'yjs' }));
 
     function Probe() {
-      useCollabDoc('docs/4');
-      awarenessResult = useAwareness('docs/4');
+      useCollabDoc({ docName: 'docs/4' });
+      awarenessResult = useAwareness({ docName: 'docs/4' });
       return null;
     }
 
@@ -115,7 +115,7 @@ function renderHookProbe(docNames: string[], props: Omit<ProviderProps, 'childre
   const results: DocResult[] = [];
 
   function Probe({ index, docName }: { index: number; docName: string }) {
-    results[index] = useCollabDoc(docName);
+    results[index] = useCollabDoc({ docName });
     return null;
   }
 

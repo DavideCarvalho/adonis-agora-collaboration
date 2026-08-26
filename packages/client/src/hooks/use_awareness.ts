@@ -3,6 +3,10 @@ import type * as AwarenessProtocol from 'y-protocols/awareness.js';
 import { getOrCreateSession, useCollaborationContext } from '../context.js';
 import type { CollabPeer, CollabStatus } from '../types.js';
 
+export interface UseAwarenessOptions {
+  docName: string;
+}
+
 export interface UseAwarenessResult {
   /** Peers conectados (sem o usuário local). */
   peers: CollabPeer[];
@@ -30,7 +34,8 @@ function snapshotPeers(awareness: AwarenessProtocol.Awareness): CollabPeer[] {
  * Presença via awareness: quem está online no documento agora.
  * Atualiza em mudança de awareness (entrar/sair/atualizar cursor).
  */
-export function useAwareness(docName: string): UseAwarenessResult {
+export function useAwareness(options: UseAwarenessOptions): UseAwarenessResult {
+  const { docName } = options;
   const context = useCollaborationContext();
   const session = getOrCreateSession(context, docName);
   const [peers, setPeers] = useState<CollabPeer[]>([]);
