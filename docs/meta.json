@@ -1,4 +1,4 @@
 {
   "title": "Collaboration",
-  "description": "Colaboração CRDT para AdonisJS — engines Yjs/Automerge/edge, presença, version control, codegen e hooks React."
+  "description": "CRDT collaboration for AdonisJS — Yjs/Automerge/edge engines, presence, version control, codegen and React hooks."
 }
