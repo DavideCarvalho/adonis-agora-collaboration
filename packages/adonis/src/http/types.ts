@@ -48,6 +48,8 @@ export class CollabUnauthorizedError extends Error {
  * Structural: accepts the real manager and test fakes alike.
  */
 export interface CollabManagerLike {
+  /** Per-document engine resolution (used by the token endpoint). */
+  engineFor?(docName: string): Promise<string>;
   getDocumentState(docName: string): Promise<Uint8Array>;
   createVersion(docName: string, createdBy: string | null, label: string | null): Promise<unknown>;
   listVersions(docName: string): Promise<unknown[]>;

@@ -122,6 +122,12 @@ export interface CollaborationStorage {
 /** Manager configuration. */
 export interface CollaborationConfig {
   engine: CollaborationEngine;
+  /**
+   * Optional per-document engine resolution. When provided, documents are
+   * routed to the driver of their resolved engine; `engine` stays the
+   * fallback for docs the resolver does not special-case.
+   */
+  engineFor?: (docName: string) => CollaborationEngine | Promise<CollaborationEngine>;
   /** Omitted = in-memory (dev only). The config stub publishes a default. */
   storage?: CollaborationStorage;
   /**

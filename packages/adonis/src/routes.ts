@@ -130,8 +130,10 @@ async function handleToken(
   }
 
   try {
+    const manager = await runtime.manager();
+    const engine = manager.engineFor ? await manager.engineFor(docName) : runtime.engine;
     return await issueToken(
-      { engine: runtime.engine, path: runtime.path, partykit: runtime.partykit },
+      { engine, path: runtime.path, partykit: runtime.partykit },
       user,
       docName,
       runtime.authorize,

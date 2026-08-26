@@ -1,69 +1,99 @@
-import type { CollaborationDriver } from './driver.js';
+import type { CollaborationDriver, SelfHostedDriverOptions } from './driver.js';
 import { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 import { PartyKitDriver } from './drivers/partykit/partykit_driver.js';
 import { resolveStorage } from './drivers/shared.js';
 import { YjsDriver } from './drivers/yjs/yjs_driver.js';
 import { CommentService } from './services/comment_service.js';
-import type { CollabDiffSummary, CollabVersion, CollaborationConfig } from './types.js';
+import type {
+  CollabDiffSummary,
+  CollabVersion,
+  CollaborationConfig,
+  CollaborationEngine,
+} from './types.js';
 
 /**
- * Library facade: picks the driver for the configured engine and exposes the
- * unified API (documents + versions + comments) to the host app.
- *
- * Seams:
- *  - drivers connect only through the registry below;
- *  - comments live exclusively here (`manager.comments`) — drivers never
- *    touch them;
- *  - presence is owned by each engine at runtime (edge worker awareness or
- *    client-side), not by this process.
+ * Library facade. Each document resolves to an engine (per-doc via
+ * `config.engineFor`, default `config.engine`) and a driver instance per
+ * engine is built lazily on first use. Self-hosted drivers attach their
+ * WebSocket to the HTTP server the first time a document uses them.
  */
 export class CollaborationManager {
-  private driver: CollaborationDriver;
+  private readonly config: CollaborationConfig;
+  private readonly drivers = new Map<CollaborationEngine, CollaborationDriver>();
+  private server?: import('node:http').Server;
   comments: CommentService;
 
-  constructor(private config: CollaborationConfig) {
-    const engine = config.engine ?? 'yjs';
-    const storage = config.storage;
+  constructor(config: CollaborationConfig) {
+    this.config = config;
+    this.comments = new CommentService(resolveStorage(config.storage));
+    // Default engine is materialized eagerly so `engine` and boot-time attach
+    // behave exactly as before.
+    this.#driverFor(config.engine ?? 'yjs');
+  }
 
-    if (engine === 'partykit') {
-      this.driver = new PartyKitDriver({
-        ...(storage ? { storage } : {}),
-        partykit: config.partykit!,
-      });
-    } else {
-      const shared = {
-        authorize: config.authorize,
-      };
-      const opts = {
-        ...shared,
-        ...(storage ? { storage } : {}),
-        ...(config.path !== undefined ? { path: config.path } : {}),
-        ...(config.debounce !== undefined ? { debounce: config.debounce } : {}),
-      };
-      this.driver = engine === 'automerge' ? new AutomergeDriver(opts) : new YjsDriver(opts);
-    }
-
-    // Single comments seam — one service, one storage instance.
-    this.comments = new CommentService(resolveStorage(storage));
+  /** Engine a document belongs to (per-doc resolver, else default). */
+  async engineFor(docName: string): Promise<CollaborationEngine> {
+    if (this.config.engineFor) return this.config.engineFor(docName);
+    return this.config.engine ?? 'yjs';
   }
 
   get engine(): string {
-    return this.driver.engine;
+    return this.config.engine ?? 'yjs';
   }
 
-  /** Attaches the driver's WebSocket to the Adonis HTTP server. No-op on edge. */
+  #buildDriver(engine: CollaborationEngine): CollaborationDriver {
+    const storage = this.config.storage;
+    if (engine === 'partykit' || engine === 'partyserver') {
+      return new PartyKitDriver({
+        ...(storage ? { storage } : {}),
+        partykit: this.config.partykit!,
+      });
+    }
+    const shared: SelfHostedDriverOptions = {
+      authorize: this.config.authorize,
+      ...(storage ? { storage } : {}),
+      ...(this.config.path !== undefined ? { path: this.config.path } : {}),
+      ...(this.config.debounce !== undefined ? { debounce: this.config.debounce } : {}),
+    };
+    return engine === 'automerge' ? new AutomergeDriver(shared) : new YjsDriver(shared);
+  }
+
+  async #driverFor(docName: string): Promise<CollaborationDriver> {
+    const engine = await this.engineFor(docName);
+    return this.#driverByEngine(engine);
+  }
+
+  async #driverByEngine(engine: CollaborationEngine): Promise<CollaborationDriver> {
+    let driver = this.drivers.get(engine);
+    if (!driver) {
+      driver = this.#buildDriver(engine);
+      this.drivers.set(engine, driver);
+      // Late-joined self-hosted drivers still mount their WS on the running
+      // server; the upgrade handler is simply registered now.
+      if (this.server && (engine === 'yjs' || engine === 'automerge')) {
+        await driver.attach(this.server);
+      }
+    }
+    return driver;
+  }
+
+  /** Attaches the WebSocket(s) to the Adonis HTTP server. No-op on edge. */
   async attach(server: import('node:http').Server): Promise<void> {
-    await this.driver.attach(server);
+    this.server = server;
+    // Only self-hosted engines expose a WS to mount at boot.
+    for (const engine of ['yjs', 'automerge'] as const) {
+      if (this.drivers.has(engine)) {
+        await this.drivers.get(engine)!.attach(server);
+      }
+    }
   }
 
-  /** Current binary state (for external push — Google Drive, export...). */
   getDocumentState(docName: string): Promise<Uint8Array> {
-    return this.driver.getDocumentState(docName);
+    return this.#driverFor(docName).then((driver) => driver.getDocumentState(docName));
   }
 
-  /** Plain text (LanguageTool, RAG, comment indexes). */
   getDocumentText(docName: string): Promise<string> {
-    return this.driver.getDocumentText(docName);
+    return this.#driverFor(docName).then((driver) => driver.getDocumentText(docName));
   }
 
   createVersion(
@@ -71,25 +101,26 @@ export class CollaborationManager {
     createdBy: string | null,
     label?: string | null,
   ): Promise<CollabVersion> {
-    return this.driver.createVersion(docName, createdBy, label ?? null);
+    return this.#driverFor(docName).then((driver) =>
+      driver.createVersion(docName, createdBy, label ?? null),
+    );
   }
 
   listVersions(docName: string): Promise<CollabVersion[]> {
-    return this.driver.listVersions(docName);
+    return this.#driverFor(docName).then((driver) => driver.listVersions(docName));
   }
 
   restoreVersion(docName: string, versionId: string, restoredBy: string | null): Promise<void> {
-    return this.driver.restoreVersion(docName, versionId, restoredBy);
+    return this.#driverFor(docName).then((driver) =>
+      driver.restoreVersion(docName, versionId, restoredBy),
+    );
   }
 
   diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
-    return this.driver.diffVersions(docName, aId, bId);
+    return this.#driverFor(docName).then((driver) => driver.diffVersions(docName, aId, bId));
   }
 
-  /**
-   * Persists an external snapshot (e.g. PartyKit worker post-debounce).
-   * Requires a configured storage backend.
-   */
+  /** Persists an external snapshot (e.g. PartyKit worker post-debounce). */
   async persistDocument(docName: string, state: Uint8Array): Promise<void> {
     if (!this.config.storage) {
       throw new Error(
@@ -100,7 +131,7 @@ export class CollaborationManager {
   }
 
   async close(): Promise<void> {
-    await this.driver.close();
+    await Promise.all([...this.drivers.values()].map((driver) => driver.close()));
   }
 }
 

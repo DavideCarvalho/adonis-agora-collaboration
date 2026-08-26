@@ -38,6 +38,7 @@ export default class CollaborationServiceProvider {
 
       const managerConfig = {
         engine: config.engine ?? 'yjs',
+        ...(config.engineFor ? { engineFor: config.engineFor } : {}),
         authorize: config.authorize,
         path: config.path ?? '/collaboration',
         debounce: config.debounce ?? 2000,
