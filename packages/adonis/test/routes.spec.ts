@@ -12,20 +12,24 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
-    async getDocumentState(docName) {
+    async getDocumentState({ docName }: { docName: string }) {
       calls.push(`state:${docName}`);
       return new Uint8Array([1, 2, 3]);
     },
-    async createVersion(docName, createdBy, label) {
+    async createVersion({
+      docName,
+      createdBy,
+      label,
+    }: { docName: string; createdBy: string | null; label: string | null }) {
       calls.push(`version:${docName}:${createdBy}:${label}`);
       return { id: 'v1', seq: 1 };
     },
-    async listVersions(docName) {
+    async listVersions({ docName }: { docName: string }) {
       calls.push(`versions:${docName}`);
       return [];
     },
     async restoreVersion() {},
-    async persistDocument(docName, state) {
+    async persistDocument({ docName, state }: { docName: string; state: Uint8Array }) {
       calls.push(`persist:${docName}:${state.byteLength}`);
     },
     comments: {

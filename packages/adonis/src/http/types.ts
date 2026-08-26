@@ -49,12 +49,20 @@ export class CollabUnauthorizedError extends Error {
  */
 export interface CollabManagerLike {
   /** Per-document engine resolution (used by the token endpoint). */
-  engineFor?(docName: string): Promise<string>;
-  getDocumentState(docName: string): Promise<Uint8Array>;
-  createVersion(docName: string, createdBy: string | null, label: string | null): Promise<unknown>;
-  listVersions(docName: string): Promise<unknown[]>;
-  restoreVersion(docName: string, versionId: string, restoredBy: string | null): Promise<void>;
-  persistDocument?(docName: string, state: Uint8Array): Promise<void>;
+  engineFor?(options: { docName: string }): Promise<string>;
+  getDocumentState(options: { docName: string }): Promise<Uint8Array>;
+  createVersion(options: {
+    docName: string;
+    createdBy: string | null;
+    label?: string | null;
+  }): Promise<unknown>;
+  listVersions(options: { docName: string }): Promise<unknown[]>;
+  restoreVersion(options: {
+    docName: string;
+    versionId: string;
+    restoredBy: string | null;
+  }): Promise<void>;
+  persistDocument?(options: { docName: string; state: Uint8Array }): Promise<void>;
   comments: {
     list(docName: string, space?: string): Promise<unknown[]>;
     create(docName: string, comment: Record<string, unknown>): Promise<unknown>;

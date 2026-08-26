@@ -43,7 +43,7 @@ export class CollaborationManager {
   }
 
   /** Engine a document belongs to (per-doc resolver, else default). */
-  async engineFor(docName: string): Promise<CollaborationEngine> {
+  async engineFor({ docName }: { docName: string }): Promise<CollaborationEngine> {
     if (this.config.engineFor) return this.config.engineFor(docName);
     const declared = this.#documentFor(docName);
     if (declared?.declaration.engine) return declared.declaration.engine;
@@ -51,9 +51,7 @@ export class CollaborationManager {
   }
 
   /** Documento declarado que casa com o docName (pattern match). */
-  #documentFor(
-    docName: string,
-  ): {
+  #documentFor(docName: string): {
     declaration: import('./documents.js').CollabDocumentDeclaration;
     params: Record<string, string>;
   } | null {
@@ -96,7 +94,7 @@ export class CollaborationManager {
   }
 
   async #driverFor(docName: string): Promise<CollaborationDriver> {
-    const engine = await this.engineFor(docName);
+    const engine = await this.engineFor({ docName });
     return this.#driverByEngine(engine);
   }
 
@@ -125,40 +123,60 @@ export class CollaborationManager {
     }
   }
 
-  getDocumentState(docName: string): Promise<Uint8Array> {
+  getDocumentState({ docName }: { docName: string }): Promise<Uint8Array> {
     return this.#driverFor(docName).then((driver) => driver.getDocumentState(docName));
   }
 
-  getDocumentText(docName: string): Promise<string> {
+  getDocumentText({ docName }: { docName: string }): Promise<string> {
     return this.#driverFor(docName).then((driver) => driver.getDocumentText(docName));
   }
 
-  createVersion(
-    docName: string,
-    createdBy: string | null,
-    label?: string | null,
-  ): Promise<CollabVersion> {
+  createVersion({
+    docName,
+    createdBy,
+    label = null,
+  }: {
+    docName: string;
+    createdBy: string | null;
+    label?: string | null;
+  }): Promise<CollabVersion> {
     return this.#driverFor(docName).then((driver) =>
-      driver.createVersion(docName, createdBy, label ?? null),
+      driver.createVersion(docName, createdBy, label),
     );
   }
 
-  listVersions(docName: string): Promise<CollabVersion[]> {
+  listVersions({ docName }: { docName: string }): Promise<CollabVersion[]> {
     return this.#driverFor(docName).then((driver) => driver.listVersions(docName));
   }
 
-  restoreVersion(docName: string, versionId: string, restoredBy: string | null): Promise<void> {
+  restoreVersion({
+    docName,
+    versionId,
+    restoredBy,
+  }: {
+    docName: string;
+    versionId: string;
+    restoredBy: string | null;
+  }): Promise<void> {
     return this.#driverFor(docName).then((driver) =>
       driver.restoreVersion(docName, versionId, restoredBy),
     );
   }
 
-  diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
+  diffVersions({
+    docName,
+    aId,
+    bId,
+  }: {
+    docName: string;
+    aId: string;
+    bId: string;
+  }): Promise<CollabDiffSummary> {
     return this.#driverFor(docName).then((driver) => driver.diffVersions(docName, aId, bId));
   }
 
   /** Persists an external snapshot (e.g. PartyKit worker post-debounce). */
-  async persistDocument(docName: string, state: Uint8Array): Promise<void> {
+  async persistDocument({ docName, state }: { docName: string; state: Uint8Array }): Promise<void> {
     if (!this.config.storage) {
       throw new Error(
         'persistDocument requires a storage backend — configure storage in config/collaboration.ts',
@@ -168,7 +186,7 @@ export class CollaborationManager {
   }
 
   /** Online members of a document (across all instances, when Redis set). */
-  async listPresence(docName: string): Promise<PresenceMember[]> {
+  async listPresence({ docName }: { docName: string }): Promise<PresenceMember[]> {
     return this.presence?.list(docName) ?? [];
   }
 

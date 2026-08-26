@@ -131,7 +131,7 @@ async function handleToken(
 
   try {
     const manager = await runtime.manager();
-    const engine = manager.engineFor ? await manager.engineFor(docName) : runtime.engine;
+    const engine = manager.engineFor ? await manager.engineFor({ docName }) : runtime.engine;
     return await issueToken(
       { engine, path: runtime.path, partykit: runtime.partykit },
       user,
@@ -189,19 +189,27 @@ async function handleDeleteComment(ctx: CollabHttpContext, runtime: Runtime): Pr
 async function handleListVersions(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
   const doc = String(ctx.request.qs().doc ?? '');
   const manager = await runtime.manager();
-  return manager.listVersions(doc);
+  return manager.listVersions({ docName: doc });
 }
 
 async function handleCreateVersion(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
   const body = ctx.request.body<{ docName: string; label?: string; userId?: string }>();
   const manager = await runtime.manager();
-  return manager.createVersion(body.docName, body.userId ?? null, body.label ?? null);
+  return manager.createVersion({
+    docName: body.docName,
+    createdBy: body.userId ?? null,
+    label: body.label ?? null,
+  });
 }
 
 async function handleRestoreVersion(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
   const body = ctx.request.body<{ docName: string; versionId: string }>();
   const manager = await runtime.manager();
-  await manager.restoreVersion(body.docName, body.versionId, null);
+  await manager.restoreVersion({
+    docName: body.docName,
+    versionId: body.versionId,
+    restoredBy: null,
+  });
   return ctx.response.noContent();
 }
 
@@ -211,7 +219,7 @@ async function handleGetState(ctx: CollabHttpContext, runtime: Runtime): Promise
     return ctx.response.status(400).json({ error: 'query param "doc" is required' });
   }
   const manager = await runtime.manager();
-  const state = await manager.getDocumentState(doc);
+  const state = await manager.getDocumentState({ docName: doc });
   ctx.response.header('content-type', 'application/octet-stream');
   return ctx.response.send(Buffer.from(state));
 }
@@ -233,7 +241,7 @@ async function handleSaveState(ctx: CollabHttpContext, runtime: Runtime): Promis
     });
   }
   const raw = ctx.request.raw();
-  await manager.persistDocument(doc, new Uint8Array(raw ?? new ArrayBuffer(0)));
+  await manager.persistDocument({ docName: doc, state: new Uint8Array(raw ?? new ArrayBuffer(0)) });
   return ctx.response.noContent();
 }
 

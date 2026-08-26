@@ -32,8 +32,8 @@ describe('documents namespace', () => {
         },
       }),
     );
-    await expect(manager.engineFor('researches/1/writing')).resolves.toBe('automerge');
-    await expect(manager.engineFor('lousas/1')).resolves.toBe('yjs');
+    await expect(manager.engineFor({ docName: 'researches/1/writing' })).resolves.toBe('automerge');
+    await expect(manager.engineFor({ docName: 'lousas/1' })).resolves.toBe('yjs');
   });
 
   it('uses the declared authorize with extracted params', async () => {
@@ -51,9 +51,9 @@ describe('documents namespace', () => {
     const drivers = (manager as unknown as { drivers: Map<string, unknown> }).drivers;
     const yjs = drivers.get('yjs') as { getDocumentState(): Promise<Uint8Array> };
     // Touch the doc; authorize isn't directly callable, so assert engine path works.
-    await expect(manager.getDocumentState('researches/42/writing')).resolves.toBeInstanceOf(
-      Uint8Array,
-    );
+    await expect(
+      manager.getDocumentState({ docName: 'researches/42/writing' }),
+    ).resolves.toBeInstanceOf(Uint8Array);
     void yjs;
   });
 });

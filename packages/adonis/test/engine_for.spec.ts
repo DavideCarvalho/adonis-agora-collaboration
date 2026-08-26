@@ -15,13 +15,13 @@ describe('engineFor', () => {
     const manager = new CollaborationManager(
       config({ engineFor: (doc) => (doc.startsWith('lousas/') ? 'automerge' : 'yjs') }),
     );
-    await expect(manager.engineFor('lousas/1')).resolves.toBe('automerge');
-    await expect(manager.engineFor('researches/1')).resolves.toBe('yjs');
+    await expect(manager.engineFor({ docName: 'lousas/1' })).resolves.toBe('automerge');
+    await expect(manager.engineFor({ docName: 'researches/1' })).resolves.toBe('yjs');
   });
 
   it('defaults to config.engine without a resolver', async () => {
     const manager = new CollaborationManager(config());
-    await expect(manager.engineFor('anything')).resolves.toBe('yjs');
+    await expect(manager.engineFor({ docName: 'anything' })).resolves.toBe('yjs');
   });
 
   it('materializes the driver of the resolved engine lazily', async () => {
@@ -32,7 +32,7 @@ describe('engineFor', () => {
 
     // Default engine eager; automerge only after a lousas doc is touched.
     expect(drivers.has('automerge')).toBe(false);
-    await manager.getDocumentState('lousas/1');
+    await manager.getDocumentState({ docName: 'lousas/1' });
     expect(drivers.has('automerge')).toBe(true);
     expect(drivers.has('yjs')).toBe(true);
   });
