@@ -12,7 +12,7 @@ describe('matchDocumentPattern', () => {
   });
 
   it('rejects mismatches', () => {
-    expect(matchDocumentPattern('researches/:id/writing', 'lousas/1')).toBeNull();
+    expect(matchDocumentPattern('researches/:id/writing', 'whiteboards/1')).toBeNull();
     expect(matchDocumentPattern('researches/:id/writing', 'researches/42/other')).toBeNull();
   });
 });
@@ -33,13 +33,13 @@ describe('documents namespace', () => {
       }),
     );
     await expect(manager.engineFor({ docName: 'researches/1/writing' })).resolves.toBe('automerge');
-    await expect(manager.engineFor({ docName: 'lousas/1' })).resolves.toBe('yjs');
+    await expect(manager.engineFor({ docName: 'whiteboards/1' })).resolves.toBe('yjs');
   });
 
-  it('uses the declared authorize with extracted params', async () => {
-    const authorize = defineDocument({
-      authorize: async (ctx, { id }) =>
-        id === '42'
+  it('passes the resolved docName and typed params to the declared authorize', async () => {
+    const authorize = defineDocument<{ id: string }>({
+      authorize: async (_ctx, { docName, params }) =>
+        params.id === '42' && docName === 'researches/42/writing'
           ? { canRead: true, canWrite: true, canComment: true }
           : { canRead: false, canWrite: false, canComment: false },
     });
@@ -48,12 +48,8 @@ describe('documents namespace', () => {
         documents: { 'researches/:id/writing': authorize },
       }),
     );
-    const drivers = (manager as unknown as { drivers: Map<string, unknown> }).drivers;
-    const yjs = drivers.get('yjs') as { getDocumentState(): Promise<Uint8Array> };
-    // Touch the doc; authorize isn't directly callable, so assert engine path works.
     await expect(
       manager.getDocumentState({ docName: 'researches/42/writing' }),
     ).resolves.toBeInstanceOf(Uint8Array);
-    void yjs;
   });
 });

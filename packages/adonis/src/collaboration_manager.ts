@@ -67,7 +67,7 @@ export class CollaborationManager {
   async #authorize(ctx: CollabConnectionContext, docName: string): Promise<CollabPermission> {
     const declared = this.#documentFor(docName);
     if (declared?.declaration.authorize) {
-      return declared.declaration.authorize(ctx, declared.params);
+      return declared.declaration.authorize(ctx, { docName, params: declared.params as never });
     }
     return this.config.authorize(ctx, docName);
   }
