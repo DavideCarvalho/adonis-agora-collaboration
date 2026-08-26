@@ -210,8 +210,13 @@ export class LucidStorage implements CollaborationStorage {
  * // config/collaboration.ts
  * storage: lucidStorage({ connection: 'entretextos' })
  */
-export async function lucidStorage(options: { connection?: string } = {}): Promise<LucidStorage> {
-  // Dynamic: só puxa o facade quando a factory é chamada (app usa lucid).
-  const db = (await import('@adonisjs/lucid/services/db')).default as LucidConnectionLike;
-  return new LucidStorage(db, options.connection);
+/**
+ * Síncrono de propósito: chamado no topo do config (sem await). Resolve o
+ * facade do Lucid via import estático — o app precisa de @adonisjs/lucid
+ * instalado, que é o caso quando usa lucidStorage.
+ */
+import dbFacade from '@adonisjs/lucid/services/db';
+
+export function lucidStorage(options: { connection?: string } = {}): LucidStorage {
+  return new LucidStorage(dbFacade as unknown as LucidConnectionLike, options.connection);
 }
