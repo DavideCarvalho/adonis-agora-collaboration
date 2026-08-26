@@ -9,6 +9,7 @@ import type { CollaborationConfig, PartyKitConfig } from './types.js';
 export type CollaborationAppConfig = {
   engine?: CollaborationConfig['engine'];
   engineFor?: CollaborationConfig['engineFor'];
+  documents?: CollaborationConfig['documents'];
   path?: string;
   redisUrl?: string;
   debounce?: number;

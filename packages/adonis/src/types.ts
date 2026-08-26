@@ -128,6 +128,12 @@ export interface CollaborationConfig {
    * fallback for docs the resolver does not special-case.
    */
   engineFor?: (docName: string) => CollaborationEngine | Promise<CollaborationEngine>;
+  /**
+   * Declarative documents: structured patterns that resolve engine and
+   * authorize per document type (see {@link CollabDocumentDeclaration}).
+   * Optional — plain `engine` + `authorize` remain the fallback.
+   */
+  documents?: Record<string, import('./documents.js').CollabDocumentDeclaration>;
   /** Omitted = in-memory (dev only). The config stub publishes a default. */
   storage?: CollaborationStorage;
   /**

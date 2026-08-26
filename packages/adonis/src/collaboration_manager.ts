@@ -1,3 +1,4 @@
+import { matchDocumentPattern } from './documents.js';
 import type { CollaborationDriver, SelfHostedDriverOptions } from './driver.js';
 import { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 import { PartyKitDriver } from './drivers/partykit/partykit_driver.js';
@@ -9,6 +10,7 @@ import {
   PresenceService,
   type PresenceStore,
 } from './services/presence_service.js';
+import type { CollabConnectionContext, CollabPermission } from './types.js';
 import type {
   CollabDiffSummary,
   CollabVersion,
@@ -43,7 +45,33 @@ export class CollaborationManager {
   /** Engine a document belongs to (per-doc resolver, else default). */
   async engineFor(docName: string): Promise<CollaborationEngine> {
     if (this.config.engineFor) return this.config.engineFor(docName);
+    const declared = this.#documentFor(docName);
+    if (declared?.declaration.engine) return declared.declaration.engine;
     return this.config.engine ?? 'yjs';
+  }
+
+  /** Documento declarado que casa com o docName (pattern match). */
+  #documentFor(
+    docName: string,
+  ): {
+    declaration: import('./documents.js').CollabDocumentDeclaration;
+    params: Record<string, string>;
+  } | null {
+    if (!this.config.documents) return null;
+    for (const [pattern, declaration] of Object.entries(this.config.documents)) {
+      const params = matchDocumentPattern(pattern, docName);
+      if (params) return { declaration, params };
+    }
+    return null;
+  }
+
+  /** Autorização resolvida: documento declarado, senão authorize global. */
+  async #authorize(ctx: CollabConnectionContext, docName: string): Promise<CollabPermission> {
+    const declared = this.#documentFor(docName);
+    if (declared?.declaration.authorize) {
+      return declared.declaration.authorize(ctx, declared.params);
+    }
+    return this.config.authorize(ctx, docName);
   }
 
   get engine(): string {
@@ -59,7 +87,7 @@ export class CollaborationManager {
       });
     }
     const shared: SelfHostedDriverOptions = {
-      authorize: this.config.authorize,
+      authorize: (ctx, docName) => this.#authorize(ctx, docName),
       ...(storage ? { storage } : {}),
       ...(this.config.path !== undefined ? { path: this.config.path } : {}),
       ...(this.config.debounce !== undefined ? { debounce: this.config.debounce } : {}),

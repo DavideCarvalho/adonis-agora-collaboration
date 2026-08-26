@@ -54,3 +54,5 @@ export type {
 // Root-level export so `node ace configure @adonis-agora/collaboration`
 // finds the hook without hitting the ./configure subpath.
 export { configure } from '../configure.js';
+export { defineDocument, matchDocumentPattern } from './documents.js';
+export type { CollabDocumentDeclaration } from './documents.js';
