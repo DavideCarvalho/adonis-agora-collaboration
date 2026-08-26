@@ -12,7 +12,9 @@
     "storage",
     "codegen",
     "---Client---",
-    "client"
+    "client",
+    "---Advanced---",
+    "advanced"
   ],
   "root": true,
   "description": "Collaborative editing (CRDT) for AdonisJS — engines, presence, versions, comments, codegen and React hooks.",
