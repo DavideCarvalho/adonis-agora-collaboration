@@ -8,7 +8,7 @@ import { defineConfig } from '@adonis-agora/collaboration'
  *
  * The engine picks the CRDT backend: 'yjs' (Hocuspocus sync server, default)
  * or 'automerge' (native history). Documents are identified by name — e.g.
- * `researches/<id>/writing` — and resolved by your `authorize` callback.
+ * researches/<id>/writing — and resolved by your authorize callback.
  */
 export default defineConfig({
   engine: 'yjs',
