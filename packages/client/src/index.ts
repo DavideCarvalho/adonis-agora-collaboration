@@ -37,3 +37,16 @@ export type {
 } from './types.js';
 export { useAutomergeDoc } from './hooks/use_automerge_doc.js';
 export type { UseAutomergeDocResult } from './hooks/use_automerge_doc.js';
+export {
+  createExcalidrawAdapter,
+  createTldrawAdapter,
+  createTextAdapter,
+} from './editors/index.js';
+export type {
+  CollabEditorAdapter,
+  CollabEditorView,
+  ExcalidrawScene,
+  TldrawScene,
+} from './editors/index.js';
+export { useCollabEditor } from './hooks/use_collab_editor.js';
+export type { UseCollabEditorResult } from './hooks/use_collab_editor.js';
