@@ -16,13 +16,19 @@ export class CollabRestError extends Error {
   }
 }
 
+/** Resolve a base URL: explicit, or the current origin when same-app. */
+export function resolveBaseUrl(config: Pick<CollaborationClientConfig, 'baseUrl'>): string {
+  if (config.baseUrl) return config.baseUrl.replace(/\/$/, '');
+  const loc = (globalThis as { location?: { origin?: string } }).location;
+  return loc?.origin ?? '';
+}
+
 function buildUrl(
   config: CollaborationClientConfig,
   path: string,
   params?: Record<string, string | undefined>,
 ): string {
-  const base = config.baseUrl.replace(/\/$/, '');
-  const url = new URL(`${base}${path}`);
+  const url = new URL(`${resolveBaseUrl(config)}${path}`);
   for (const [key, value] of Object.entries(params ?? {})) {
     if (value !== undefined) url.searchParams.set(key, value);
   }

@@ -1,7 +1,7 @@
 import * as A from '@automerge/automerge';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOrCreateSession, useCollaborationContext } from '../context.js';
-import { CollabRestError, fetchToken } from '../rest_client.js';
+import { fetchToken, resolveBaseUrl } from '../rest_client.js';
 import type { CollabStatus } from '../types.js';
 
 /**
@@ -67,7 +67,7 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
           return;
         }
 
-        const base = config.baseUrl.replace(/\/$/, '');
+        const base = resolveBaseUrl(config);
         const wsUrl = info.wsUrl.startsWith('ws')
           ? `${info.wsUrl}?doc=${encodeURIComponent(docName)}&token=${encodeURIComponent(info.token)}`
           : `${base.replace(/^http/, 'ws')}${info.wsUrl}?doc=${encodeURIComponent(docName)}&token=${encodeURIComponent(info.token)}`;

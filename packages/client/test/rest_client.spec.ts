@@ -6,6 +6,7 @@ import {
   fetchToken,
   listComments,
 } from '../src/rest_client.js';
+import { resolveBaseUrl } from '../src/rest_client.js';
 import type { CollaborationClientConfig } from '../src/types.js';
 
 const config: CollaborationClientConfig = { baseUrl: 'https://api.app' };
@@ -75,6 +76,25 @@ describe('rest_client', () => {
       docName: 'doc',
       label: 'antes da revisão',
       userId: 'u1',
+    });
+  });
+});
+
+describe('resolveBaseUrl (same-origin default)', () => {
+  it('uses explicit baseUrl when provided', () => {
+    expect(resolveBaseUrl({ baseUrl: 'https://api.app/' })).toBe('https://api.app');
+  });
+
+  it('falls back to the current origin when omitted', () => {
+    const original = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      value: { origin: 'https://app.example' },
+      configurable: true,
+    });
+    expect(resolveBaseUrl({})).toBe('https://app.example');
+    Object.defineProperty(globalThis, 'location', {
+      value: original,
+      configurable: true,
     });
   });
 });
