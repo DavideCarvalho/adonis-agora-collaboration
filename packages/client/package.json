@@ -1,0 +1,66 @@
+{
+  "name": "@adonis-agora/collaboration-client",
+  "version": "0.1.0",
+  "description": "Client-side React hooks for @adonis-agora/collaboration — collaborative docs, presence, comments and versions. Part of the Agora ecosystem.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DavideCarvalho/adonis-agora-collaboration.git",
+    "directory": "packages/client"
+  },
+  "author": "Davi Carvalho <davi@goflip.ai>",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": ["dist/", "README.md"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "pnpm run clean && tsc -p tsconfig.build.json",
+    "check:dist": "node ../../scripts/assert-build-output.mjs dist src/index.js",
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run check:dist",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@automerge/automerge": "^3.4.1",
+    "@hocuspocus/provider": "^4.6.0",
+    "y-partykit": "^0.0.33",
+    "y-partyserver": "^2.2.0",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.27"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@swc/core": "1.15.47",
+    "@testing-library/react": "16.3.0",
+    "@types/node": "22.20.1",
+    "@types/react": "18.3.27",
+    "@types/react-dom": "18.3.7",
+    "jsdom": "26.1.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "5.9.3",
+    "unplugin-swc": "1.5.11",
+    "vitest": "3.2.7"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "keywords": ["adonisjs", "crdt", "yjs", "collaboration", "realtime", "react-hooks", "agora"]
+}

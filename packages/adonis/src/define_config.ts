@@ -1,8 +1,10 @@
-import type { CollaborationConfig } from './types.js';
+import type { ResolveUserFn } from './http/types.js';
+import type { CollaborationConfig, PartyKitConfig } from './types.js';
 
 /**
- * Shape do `config/collaboration.ts` publicado pelo stub — versão "app-friendly"
- * do {@link CollaborationConfig} (redisUrl como string, storage opcional).
+ * Shape of the `config/collaboration.ts` published by the stub — the
+ * "app-friendly" version of {@link CollaborationConfig} (redisUrl as a
+ * string, optional storage).
  */
 export type CollaborationAppConfig = {
   engine?: CollaborationConfig['engine'];
@@ -10,13 +12,30 @@ export type CollaborationAppConfig = {
   redisUrl?: string;
   debounce?: number;
   authorize: CollaborationConfig['authorize'];
-  /** Omitido = in-memory (só dev). Produção passa um storage persistente. */
+  /** Omitted = in-memory (dev only). Production passes a persistent storage. */
   storage?: CollaborationConfig['storage'];
+  /** Required when engine = 'partykit' (edge sync). */
+  partykit?: PartyKitConfig;
+  /**
+   * Built-in REST endpoints. Registered automatically by the provider
+   * unless `enabled: false` — then call `collaborationRoutes(router)`
+   * inside `start/routes.ts` and apply your own middleware.
+   */
+  routes?: {
+    /** Default: true. */
+    enabled?: boolean;
+    /** Default: '/collaboration'. */
+    prefix?: string;
+    /** Middleware applied to the whole route group (manual mode too). */
+    middleware?: unknown[];
+    /** Resolves the authenticated user for the token endpoint. */
+    resolveUser?: ResolveUserFn;
+  };
 };
 
 /**
- * Config helper (type-safe) usado no `config/collaboration.ts` do app —
- * mesmo padrão do `defineConfig` do @adonisjs/*.
+ * Type-safe config helper used in the app's `config/collaboration.ts` —
+ * same pattern as @adonisjs/*'s `defineConfig`.
  */
 export function defineConfig(config: CollaborationAppConfig): CollaborationAppConfig {
   return config;

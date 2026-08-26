@@ -2,82 +2,63 @@ import { Hocuspocus, type onAuthenticatePayload } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import { WebSocketServer } from 'ws';
 import * as Y from 'yjs';
-import type { CollaborationDriver } from '../../driver.js';
-import { CommentService } from '../../services/comment_service.js';
-import { InMemoryCollaborationStorage } from '../../storage/in_memory_storage.js';
-import type {
-  CollabComment,
-  CollabDiffSummary,
-  CollabPermission,
-  CollabVersion,
-  CollaborationConfig,
-} from '../../types.js';
+import { parseLegacyToken } from '../../auth/token.js';
+import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
+import type { CollabDiffSummary, CollabVersion, CollaborationStorage } from '../../types.js';
 import { createVersionMetadata, seqVersions } from '../../versioning.js';
+import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
 
 /**
- * Driver Yjs: Hocuspocus como engine de sync (protocolo y-protocols sobre
- * WebSocket), com version control implementado em cima de updates binários
- * completos — o que o Automerge tem nativo (history) a gente provê aqui:
+ * Yjs driver: Hocuspocus as the sync engine (y-protocols protocol over
+ * WebSocket), with version control implemented on top of complete binary
+ * updates — what Automerge has natively (history) we provide here:
  *
- *  - `createVersion`: guarda o update binário completo + metadados;
- *  - `restoreVersion`: aplica o conteúdo da versão no doc vivo via transação
- *    — clientes conectados recebem em tempo real pelo protocolo de sync;
- *  - `diffVersions`: materializa as duas versões e compara por linha.
- *  - Comentários ancorados: delegam pro CommentService (anchor genérica).
+ *  - `createVersion`: stores the complete binary update + metadata;
+ *  - `restoreVersion`: applies the version's content to the live doc via a
+ *    transaction — connected clients receive it in real time through the sync
+ *    protocol;
+ *  - `diffVersions`: materializes both versions and compares them by line.
+ *  - Anchored comments: delegate to the CommentService (generic anchor).
  */
 
-/** Permissões por conexão (userId:docName), preenchidas no authenticate. */
-const permissions = new Map<string, CollabPermission>();
+/** Permissions per connection (userId:docName), filled in at authenticate. */
 
 export class YjsDriver implements CollaborationDriver {
   readonly engine = 'yjs';
 
   private hocuspocus: Hocuspocus;
   private wss?: WebSocketServer;
-  private config: CollaborationConfig;
-  private commentsService: CommentService;
-  #memoryStorage?: InMemoryCollaborationStorage;
+  private readonly options: SelfHostedDriverOptions;
+  private readonly storage: CollaborationStorage;
 
-  /** Storage configurado ou in-memory (dev). */
-  #storage() {
-    if (this.config.storage) {
-      return this.config.storage;
-    }
-    this.#memoryStorage ??= new InMemoryCollaborationStorage();
-    return this.#memoryStorage;
-  }
+  constructor(options: SelfHostedDriverOptions) {
+    this.options = options;
+    this.storage = resolveStorage(options.storage);
 
-  constructor(config: CollaborationConfig) {
-    this.config = config;
-    this.commentsService = new CommentService(config.storage ?? new InMemoryCollaborationStorage());
-
-    // Capturados fora do callback: o `this` dentro dos hooks do Hocuspocus
-    // não é a instância do driver.
-    const storage = () => this.#storage();
+    // Captured outside the callback: `this` inside Hocuspocus hooks is not
+    // the driver instance.
+    const storage = this.storage;
 
     this.hocuspocus = new Hocuspocus({
       async onAuthenticate({ documentName, token }: onAuthenticatePayload) {
-        const ctx = JSON.parse(Buffer.from(token, 'base64').toString()) as {
-          userId: string;
-          user?: { name?: string; avatarUrl?: string | null };
-        };
-        const permission = await config.authorize(ctx, documentName);
+        const ctx = parseLegacyToken(token);
+        if (!ctx) throw new Error('invalid token');
+        const permission = await options.authorize(ctx, documentName);
         if (!permission.canRead) {
-          throw new Error('Sem acesso a este documento');
+          throw new Error('no access to this document');
         }
-        permissions.set(`${ctx.userId}:${documentName}`, permission);
       },
 
       async onStoreDocument({ documentName, document }) {
-        await storage().saveDocument(documentName, Y.encodeStateAsUpdate(document));
+        await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
       },
 
-      debounce: config.debounce ?? 2000,
+      debounce: options.debounce ?? 2000,
     });
   }
 
   private liveDoc(name: string): Y.Doc | undefined {
-    // Document do Hocuspocus estende Y.Doc diretamente.
+    // The Hocuspocus document extends Y.Doc directly.
     return this.hocuspocus.documents.get(name);
   }
 
@@ -93,12 +74,12 @@ export class YjsDriver implements CollaborationDriver {
     const existing = this.liveDoc(name);
     if (existing) return existing;
 
-    const stored = await this.#storage().loadDocument(name);
+    const stored = await this.storage.loadDocument(name);
     return this.hydrate(stored?.state ?? new Uint8Array());
   }
 
   async attach(server: import('node:http').Server): Promise<void> {
-    const path = this.config.path ?? '/collaboration';
+    const path = this.options.path ?? '/collaboration';
     const wss = new WebSocketServer({ noServer: true });
     this.wss = wss;
 
@@ -107,8 +88,8 @@ export class YjsDriver implements CollaborationDriver {
       if (parsed.pathname !== path) return;
 
       wss.handleUpgrade(request, socket as import('node:net').Socket, head, (ws) => {
-        // O Hocuspocus espera um Request da Fetch API; convertemos o
-        // IncomingMessage do node pra um Request mínimo com a URL real.
+        // Hocuspocus expects a Fetch API Request; we convert the node
+        // IncomingMessage into a minimal Request with the real URL.
         const fetchRequest = new Request(parsed, {
           headers: request.headers as unknown as Record<string, string>,
         });
@@ -122,7 +103,7 @@ export class YjsDriver implements CollaborationDriver {
     if (live) {
       return Y.encodeStateAsUpdate(live);
     }
-    const stored = await this.#storage().loadDocument(docName);
+    const stored = await this.storage.loadDocument(docName);
     return stored?.state ?? new Uint8Array();
   }
 
@@ -134,7 +115,7 @@ export class YjsDriver implements CollaborationDriver {
       const defaultDoc = (json as { default?: Record<string, unknown> }).default ?? json;
       return tiptapJsonToText(defaultDoc);
     } catch {
-      // Doc vazio ou fora do layout Tiptap.
+      // Empty doc or not in the Tiptap layout.
       return '';
     }
   }
@@ -145,15 +126,15 @@ export class YjsDriver implements CollaborationDriver {
     label: string | null,
   ): Promise<CollabVersion> {
     const doc = await this.ensureDoc(docName);
-    const existing = await this.#storage().listVersions(docName);
+    const existing = await this.storage.listVersions(docName);
     const version = createVersionMetadata(createdBy, label, seqVersions(existing));
 
-    await this.#storage().saveVersion(docName, version, Y.encodeStateAsUpdate(doc));
+    await this.storage.saveVersion(docName, version, Y.encodeStateAsUpdate(doc));
     return version;
   }
 
   async listVersions(docName: string): Promise<CollabVersion[]> {
-    return this.#storage().listVersions(docName);
+    return this.storage.listVersions(docName);
   }
 
   async restoreVersion(
@@ -166,14 +147,14 @@ export class YjsDriver implements CollaborationDriver {
     const state = await this.versionState(docName, versionId);
     const restoredDoc = this.hydrate(state);
 
-    // Aplica o conteúdo restaurado no doc vivo — clientes conectados recebem
-    // a mudança em tempo real via protocolo de sync do Hocuspocus.
+    // Applies the restored content to the live doc — connected clients receive
+    // the change in real time via the Hocuspocus sync protocol.
     const live = await this.ensureDoc(docName);
     live.transact(() => {
       applyRestoredContent(live, restoredDoc);
     });
 
-    await this.#storage().saveDocument(docName, Y.encodeStateAsUpdate(live));
+    await this.storage.saveDocument(docName, Y.encodeStateAsUpdate(live));
   }
 
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
@@ -185,52 +166,28 @@ export class YjsDriver implements CollaborationDriver {
     const textA = tiptapJsonToText(safeTiptapFromYdoc(this.hydrate(aState)));
     const textB = tiptapJsonToText(safeTiptapFromYdoc(this.hydrate(bState)));
 
-    return simpleLineDiff(textA, textB);
+    return lineDiff(textA, textB);
   }
 
   private async versionState(docName: string, versionId: string): Promise<Uint8Array> {
-    const persisted = await this.#storage().loadVersionSnapshot(docName, versionId);
-    if (!persisted) throw new Error(`Versão ${versionId} não encontrada`);
+    const persisted = await this.storage.loadVersionSnapshot(docName, versionId);
+    if (!persisted) throw new Error(`Version ${versionId} not found`);
     return persisted;
   }
 
-  /* ───────────────────────── comentários ancorados ───────────────────────── */
-
-  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
-    return this.commentsService.list(docName, space);
-  }
-
-  async createComment(
-    docName: string,
-    comment: Omit<CollabComment, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt'>,
-  ): Promise<CollabComment> {
-    return this.commentsService.create(docName, comment);
-  }
-
-  async resolveComment(
-    docName: string,
-    commentId: string,
-    resolved: boolean,
-  ): Promise<CollabComment | null> {
-    return this.commentsService.resolve(docName, commentId, resolved);
-  }
-
-  async deleteComment(docName: string, commentId: string): Promise<boolean> {
-    return this.commentsService.remove(docName, commentId);
-  }
-
   async close(): Promise<void> {
-    // Persiste docs pendentes e fecha conexões (a classe Hocuspocus não tem
-    // destroy — o Server embutido é que tem).
+    // Persists pending docs and closes connections (the Hocuspocus class has
+    // no destroy — the embedded Server does).
     this.hocuspocus.flushPendingStores();
     this.hocuspocus.closeConnections();
+    if (!this.wss) return;
     return new Promise((resolve) => {
       this.wss?.close(() => resolve());
     });
   }
 }
 
-/* ───────────────────────── helpers locais ───────────────────────── */
+/* ───────────────────────── local helpers ───────────────────────── */
 
 function safeTiptapFromYdoc(doc: Y.Doc): Record<string, unknown> {
   try {
@@ -240,33 +197,7 @@ function safeTiptapFromYdoc(doc: Y.Doc): Record<string, unknown> {
   }
 }
 
-/** Converte o JSON Tiptap em texto plano (\n\n entre blocos). */
-export function tiptapJsonToText(node: Record<string, unknown> | null): string {
-  if (!node || !Array.isArray(node.content)) return '';
-
-  let text = '';
-  const walk = (current: Record<string, unknown>) => {
-    if (current.type === 'text' && typeof current.text === 'string') {
-      text += current.text;
-      return;
-    }
-    if (Array.isArray(current.content)) {
-      for (const child of current.content as Array<Record<string, unknown>>) {
-        walk(child);
-      }
-    }
-    if (
-      typeof current.type === 'string' &&
-      ['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem'].includes(current.type)
-    ) {
-      text += '\n\n';
-    }
-  };
-  walk(node);
-  return text.trimEnd();
-}
-
-/** Diff por linha simples o suficiente pra resumo (+adicionadas / -removidas). */
+/** Per-line diff, simple enough for the summary (+added / -removed). */
 function simpleLineDiff(a: string, b: string): CollabDiffSummary {
   const linesA = new Set(a.split('\n'));
   const linesB = new Set(b.split('\n'));
@@ -283,9 +214,9 @@ function simpleLineDiff(a: string, b: string): CollabDiffSummary {
 }
 
 /**
- * Substitui o conteúdo do doc vivo aplicando o update completo do doc
- * restaurado (merge CRDT é idempotente; o delete anterior remove o estado
- * divergente e o update traz o conteúdo antigo de volta).
+ * Replaces the live doc's content by applying the restored doc's full update
+ * (CRDT merge is idempotent; the preceding delete removes the divergent state
+ * and the update brings the old content back).
  */
 function applyRestoredContent(live: Y.Doc, restored: Y.Doc): void {
   const liveFragment = live.getXmlFragment('default');

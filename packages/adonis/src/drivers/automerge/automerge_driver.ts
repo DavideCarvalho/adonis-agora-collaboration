@@ -1,35 +1,29 @@
 import * as A from '@automerge/automerge';
 import { next as ANext } from '@automerge/automerge';
 import { WebSocketServer } from 'ws';
-import type { CollaborationDriver } from '../../driver.js';
-import { CommentService } from '../../services/comment_service.js';
-import { InMemoryCollaborationStorage } from '../../storage/in_memory_storage.js';
-import type {
-  CollabComment,
-  CollabDiffSummary,
-  CollabVersion,
-  CollaborationConfig,
-  CollaborationStorage,
-} from '../../types.js';
+import { parseLegacyToken } from '../../auth/token.js';
+import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
+import type { CollabDiffSummary, CollabVersion, CollaborationStorage } from '../../types.js';
 import { createVersionMetadata, seqVersions } from '../../versioning.js';
+import { lineDiff, resolveStorage } from '../shared.js';
 
 /**
- * Driver Automerge.
+ * Automerge driver.
  *
- * O Automerge tem version control NATIVO: cada mudança gera um hash e o
- * histórico completo fica dentro do próprio doc (`Automerge.getHistory`).
- * `createVersion` aqui é só um marcador (label + hash heads) — o conteúdo
- * entre versões já está no doc. `restoreVersion` volta o doc pros heads da
- * versão via change compensoatório (não destrutivo).
+ * Automerge has NATIVE version control: every change generates a hash and
+ * the full history lives inside the doc itself (`Automerge.getHistory`).
+ * `createVersion` here is just a marker (label + hash heads) — the content
+ * between versions is already in the doc. `restoreVersion` brings the doc
+ * back to the version's heads via a compensating change (non-destructive).
  *
- * Transporte: os clientes falam o protocolo binário do Automerge
- * (@automerge/automerge-repo-network-websocket no client). No server usamos
- * o DocHandle em memória + broadcast simples por sala; para escala horizontal,
- * updates são retransmitidos via Redis pub/sub (mesma filosofia do transmit).
+ * Transport: clients speak Automerge's binary protocol
+ * (@automerge/automerge-repo-network-websocket on the client). On the server
+ * we use an in-memory DocHandle + simple per-room broadcast; for horizontal
+ * scaling, updates are re-broadcast via Redis pub/sub (same philosophy as transmit).
  */
 
 interface Room {
-  // biome-ignore lint/suspicious/noExplicitAny: tipagem do automerge é instável entre minors
+  // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
   text: any;
   clients: Set<import('ws').WebSocket>;
 }
@@ -39,27 +33,20 @@ export class AutomergeDriver implements CollaborationDriver {
 
   private rooms = new Map<string, Room>();
   private wss?: WebSocketServer;
-  private commentsService: CommentService;
+  private readonly options: SelfHostedDriverOptions;
+  private readonly storage: CollaborationStorage;
+  private persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  constructor(private config: CollaborationConfig) {
-    this.commentsService = new CommentService(config.storage ?? new InMemoryCollaborationStorage());
+  constructor(options: SelfHostedDriverOptions) {
+    this.options = options;
+    this.storage = resolveStorage(options.storage);
   }
-
-  /** Storage configurado ou in-memory (dev). */
-  #storage(): CollaborationStorage {
-    if (this.config.storage) {
-      return this.config.storage;
-    }
-    this.#memoryStorage ??= new InMemoryCollaborationStorage();
-    return this.#memoryStorage;
-  }
-  #memoryStorage?: InMemoryCollaborationStorage;
 
   private async loadRoom(docName: string): Promise<Room> {
     let room = this.rooms.get(docName);
     if (room) return room;
 
-    const stored = await this.#storage().loadDocument(docName);
+    const stored = await this.storage.loadDocument(docName);
     const doc = stored
       ? A.load<Record<string, unknown>>(stored.state)
       : A.from({ content: '' } as Record<string, unknown>);
@@ -78,7 +65,7 @@ export class AutomergeDriver implements CollaborationDriver {
   }
 
   async attach(server: import('node:http').Server): Promise<void> {
-    const path = this.config.path ?? '/collaboration';
+    const path = this.options.path ?? '/collaboration';
     const wss = new WebSocketServer({ noServer: true });
     this.wss = wss;
 
@@ -89,14 +76,14 @@ export class AutomergeDriver implements CollaborationDriver {
       wss.handleUpgrade(request, socket as import('node:net').Socket, head, async (ws) => {
         const docName = decodeURIComponent(url.searchParams.get('doc') ?? '');
         if (!docName) {
-          ws.close(4000, 'doc obrigatório');
+          ws.close(4000, 'doc required');
           return;
         }
 
-        // Autenticação: token base64 na query (?token=...&doc=...).
+        // Authentication: base64 token in the query (?token=...&doc=...).
         const token = url.searchParams.get('token');
         if (!token) {
-          ws.close(4001, 'não autenticado');
+          ws.close(4001, 'not authenticated');
           return;
         }
 
@@ -104,16 +91,16 @@ export class AutomergeDriver implements CollaborationDriver {
           const ctx = JSON.parse(Buffer.from(token, 'base64').toString()) as {
             userId: string;
           };
-          const permission = await this.config.authorize(ctx, docName);
+          const permission = await this.options.authorize(ctx, docName);
           if (!permission.canRead) {
-            ws.close(4003, 'sem acesso');
+            ws.close(4003, 'no access');
             return;
           }
 
           const room = await this.loadRoom(docName);
           room.clients.add(ws);
 
-          // Envia o estado completo pro cliente novo.
+          // Sends the full state to the new client.
           ws.send(A.save(room.text));
 
           ws.on('message', (data) => {
@@ -124,32 +111,30 @@ export class AutomergeDriver implements CollaborationDriver {
             room.clients.delete(ws);
           });
         } catch {
-          ws.close(4001, 'autenticação falhou');
+          ws.close(4001, 'authentication failed');
         }
       });
     });
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: tipagem do automerge é instável entre minors
+  // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
   private async handleClientMessage(docName: string, data: Uint8Array, sender: any): Promise<void> {
     const room = await this.loadRoom(docName);
 
     try {
-      // Cliente manda um doc binário incremental; merge no doc do server.
+      // Client sends an incremental binary doc; merge into the server doc.
       const incoming = A.load<Record<string, unknown>>(data);
       const merged = A.merge(room.text, incoming);
       room.text = merged;
 
       this.broadcast(room, data, sender);
 
-      // Persistência com debounce simples por sala.
+      // Persistence with simple per-room debounce.
       await this.persistDebounced(docName, room);
     } catch {
-      // Payload inválido: ignora (cliente mal comportado não derruba a sala).
+      // Invalid payload: ignore (a badly-behaved client doesn't take down the room).
     }
   }
-
-  private persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   private persistDebounced(docName: string, room: Room): Promise<void> {
     return new Promise((resolve) => {
@@ -159,10 +144,8 @@ export class AutomergeDriver implements CollaborationDriver {
       this.persistTimers.set(
         docName,
         setTimeout(() => {
-          void this.#storage()
-            .saveDocument(docName, A.save(room.text))
-            .finally(() => resolve());
-        }, this.config.debounce ?? 2000),
+          void this.storage.saveDocument(docName, A.save(room.text)).finally(() => resolve());
+        }, this.options.debounce ?? 2000),
       );
     });
   }
@@ -178,7 +161,7 @@ export class AutomergeDriver implements CollaborationDriver {
     return content ? content.toString() : '';
   }
 
-  /** Versões = marcadores sobre o history nativo (heads hash). */
+  /** Versions = markers over the native history (heads hash). */
   async createVersion(
     docName: string,
     createdBy: string | null,
@@ -186,21 +169,21 @@ export class AutomergeDriver implements CollaborationDriver {
   ): Promise<CollabVersion> {
     const room = await this.loadRoom(docName);
     const heads = ANext.getHeads(room.text);
-    const existing = await this.#storage().listVersions(docName);
+    const existing = await this.storage.listVersions(docName);
 
     const version: CollabVersion = {
       ...createVersionMetadata(createdBy, label, seqVersions(existing)),
       id: heads.join(','),
     };
 
-    // Snapshot = save binário do doc até esses heads (o Automerge comprime
-    // bem; guardar o doc inteiro como "snapshot" mantém restore O(1)).
-    await this.#storage().saveVersion(docName, version, A.save(room.text));
+    // Snapshot = binary save of the doc up to those heads (Automerge compresses
+    // well; storing the whole doc as the "snapshot" keeps restore O(1)).
+    await this.storage.saveVersion(docName, version, A.save(room.text));
     return version;
   }
 
   async listVersions(docName: string): Promise<CollabVersion[]> {
-    return this.#storage().listVersions(docName);
+    return this.storage.listVersions(docName);
   }
 
   async restoreVersion(
@@ -208,14 +191,14 @@ export class AutomergeDriver implements CollaborationDriver {
     versionId: string,
     _restoredBy: string | null,
   ): Promise<void> {
-    const bytes = await this.#storage().loadVersionSnapshot(docName, versionId);
-    if (!bytes) throw new Error(`Versão ${versionId} não encontrada`);
+    const bytes = await this.storage.loadVersionSnapshot(docName, versionId);
+    if (!bytes) throw new Error(`Version ${versionId} not found`);
 
     const snapshotDoc = A.load<Record<string, unknown>>(bytes);
     const room = await this.loadRoom(docName);
     const merged = A.merge(room.text, snapshotDoc);
-    // Automerge merge converge pro estado mais recente; pra "restaurar",
-    // sobrescrevemos o campo de conteúdo com o valor da versão.
+    // Automerge merge converges to the most recent state; to "restore",
+    // we overwrite the content field with the value from the version.
     const restoredContent = (snapshotDoc as unknown as { content?: { toString(): string } })
       .content;
     const finalDoc = A.change(merged, (doc) => {
@@ -224,47 +207,22 @@ export class AutomergeDriver implements CollaborationDriver {
 
     room.text = finalDoc;
     this.broadcast(room, A.save(finalDoc));
-    await this.#storage().saveDocument(docName, A.save(finalDoc));
+    await this.storage.saveDocument(docName, A.save(finalDoc));
   }
 
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
     const [aBytes, bBytes] = await Promise.all([
-      this.#storage().loadVersionSnapshot(docName, aId),
-      this.#storage().loadVersionSnapshot(docName, bId),
+      this.storage.loadVersionSnapshot(docName, aId),
+      this.storage.loadVersionSnapshot(docName, bId),
     ]);
-    if (!aBytes || !bBytes) throw new Error('Versão não encontrada');
+    if (!aBytes || !bBytes) throw new Error('Version not found');
 
     const textOf = (bytes: Uint8Array) => {
       const doc = A.load<{ content?: { toString(): string } }>(bytes);
       return doc.content?.toString() ?? '';
     };
 
-    return diffByLine(textOf(aBytes), textOf(bBytes));
-  }
-
-  /* ───────────────────────── comentários ancorados ───────────────────────── */
-
-  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
-    return this.commentsService.list(docName, space);
-  }
-
-  async createComment(
-    docName: string,
-    comment: Omit<CollabComment, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt'>,
-  ): Promise<CollabComment> {
-    return this.commentsService.create(docName, comment);
-  }
-
-  async resolveComment(
-    docName: string,
-    commentId: string,
-    resolved: boolean,
-  ): Promise<CollabComment | null> {
-    return this.commentsService.resolve(docName, commentId, resolved);
-  }
-
-  async deleteComment(docName: string, commentId: string): Promise<boolean> {
-    return this.commentsService.remove(docName, commentId);
+    return lineDiff(textOf(aBytes), textOf(bBytes));
   }
 
   async close(): Promise<void> {
@@ -273,14 +231,4 @@ export class AutomergeDriver implements CollaborationDriver {
       this.wss?.close(() => resolve());
     });
   }
-}
-
-function diffByLine(a: string, b: string): CollabDiffSummary {
-  const linesA = new Set(a.split('\n'));
-  const linesB = new Set(b.split('\n'));
-  let added = 0;
-  for (const line of linesB) if (!linesA.has(line)) added++;
-  let removed = 0;
-  for (const line of linesA) if (!linesB.has(line)) removed++;
-  return { added, removed };
 }

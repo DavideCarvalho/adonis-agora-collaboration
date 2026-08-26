@@ -22,6 +22,10 @@
     {
       "include": ["**/test/**", "**/*.spec.ts", "**/*.test.ts"],
       "linter": { "rules": { "suspicious": { "noExplicitAny": "off" } } }
+    },
+    {
+      "include": ["**/test/helpers/**"],
+      "linter": { "rules": { "suspicious": { "noExportsInTest": "off" } } }
     }
   ]
 }

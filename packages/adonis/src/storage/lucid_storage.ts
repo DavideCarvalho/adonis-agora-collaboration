@@ -2,19 +2,20 @@ import type { Knex } from 'knex';
 import type { CollabComment, CollabVersion, CollaborationStorage } from '../types.js';
 
 /**
- * Contrato estrutural mínimo da conexão lucid — evita o dual-package do
- * @adonisjs/lucid (app e lib podem resolver cópias com TS diferentes).
+ * Minimal structural contract for the lucid connection — avoids the
+ * dual-package issue of @adonisjs/lucid (app and library may resolve copies
+ * with different TS versions).
  */
 export interface LucidConnectionLike {
   connection(name?: string): unknown;
 }
 
 /**
- * Storage Lucid oficial — persiste docs (estado binário), versões e
- * comentários ancorados em tabelas do banco do app.
+ * Official Lucid storage — persists docs (binary state), versions and
+ * anchored comments in tables of the app's database.
  *
- * As tabelas são criadas no primeiro uso (IF NOT EXISTS), então o app não
- * precisa de migration própria pra usar a lib em dev.
+ * Tables are created on first use (IF NOT EXISTS), so the app doesn't need
+ * its own migration to use the library in dev.
  *
  * @example
  * const storage = new LucidStorage(db)
@@ -23,9 +24,12 @@ export interface LucidConnectionLike {
 export class LucidStorage implements CollaborationStorage {
   private ready: Promise<void> | null = null;
 
-  constructor(private db: LucidConnectionLike, private connection: string = 'entretextos') {}
+  constructor(
+    private db: LucidConnectionLike,
+    private connection = 'entretextos',
+  ) {}
 
-  /** Garante as tabelas sob demanda (lazy) — o boot não toca no banco. */
+  /** Ensures the tables lazily on demand — boot doesn't touch the database. */
   private ensure(): Promise<void> {
     if (!this.ready) {
       this.ready = this.ensureSchema();
@@ -33,7 +37,7 @@ export class LucidStorage implements CollaborationStorage {
     return this.ready;
   }
 
-  /** A conexão do lucid é um Knex (QueryClientContract estende o builder). */
+  /** The lucid connection is a Knex instance (QueryClientContract extends the builder). */
   private knex(): Knex {
     return this.db.connection(this.connection) as unknown as Knex;
   }
@@ -83,12 +87,13 @@ export class LucidStorage implements CollaborationStorage {
     return { state: new Uint8Array(row.state as Buffer) };
   }
 
-  async saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void> {
+  async saveDocument(
+    docName: string,
+    state: Uint8Array,
+    meta?: Record<string, unknown>,
+  ): Promise<void> {
     await this.ensure();
-    const existing = await this.knex()
-      .from('collab_documents')
-      .where('doc_name', docName)
-      .first();
+    const existing = await this.knex().from('collab_documents').where('doc_name', docName).first();
     const payload = {
       state: Buffer.from(state),
       meta: meta ?? null,
@@ -97,11 +102,13 @@ export class LucidStorage implements CollaborationStorage {
     if (existing) {
       await this.knex().from('collab_documents').where('doc_name', docName).update(payload);
     } else {
-      await this.knex().from('collab_documents').insert({
-        doc_name: docName,
-        ...payload,
-        created_at: new Date(),
-      });
+      await this.knex()
+        .from('collab_documents')
+        .insert({
+          doc_name: docName,
+          ...payload,
+          created_at: new Date(),
+        });
     }
   }
 
@@ -176,11 +183,13 @@ export class LucidStorage implements CollaborationStorage {
     if (existing) {
       await this.knex().from('collab_comments').where('id', comment.id).update(payload);
     } else {
-      await this.knex().from('collab_comments').insert({
-        id: comment.id,
-        ...payload,
-        created_at: new Date(comment.createdAt),
-      });
+      await this.knex()
+        .from('collab_comments')
+        .insert({
+          id: comment.id,
+          ...payload,
+          created_at: new Date(comment.createdAt),
+        });
     }
     void docName;
   }

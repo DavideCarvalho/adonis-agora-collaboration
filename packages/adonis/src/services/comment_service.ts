@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { CollabComment, CollaborationStorage } from '../types.js';
 
 /**
- * Serviço de comentários ancorados — genérico por tipo de conteúdo.
+ * Anchored comments service — generic over content type.
  *
- * A lib é dona do lifecycle (criar, resolver/reabrir, remover) e da âncora
- * (CommentAnchor). Quem interpreta a âncora é o resolver do app — a lib não
- * sabe o que é um canvas tldraw nem offsets de texto; só persiste e ordena.
+ * The library owns the lifecycle (create, resolve/reopen, remove) and the
+ * anchor (CommentAnchor). Interpreting the anchor is up to the app's resolver —
+ * the library knows nothing about tldraw canvases or text offsets; it only
+ * persists and sorts.
  */
 export class CommentService {
   constructor(private storage: CollaborationStorage) {}
@@ -33,7 +34,11 @@ export class CommentService {
     return created;
   }
 
-  async resolve(docName: string, commentId: string, resolved: boolean): Promise<CollabComment | null> {
+  async resolve(
+    docName: string,
+    commentId: string,
+    resolved: boolean,
+  ): Promise<CollabComment | null> {
     const comments = await this.storage.listComments(docName);
     const target = comments.find((comment) => comment.id === commentId);
     if (!target) return null;

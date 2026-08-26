@@ -10,7 +10,7 @@ import { whenBootedApp } from './booted_app.js';
  * import collaboration from '@adonis-agora/collaboration/services/main'
  *
  * const text = await collaboration.getDocumentText('researches/<id>/writing')
- * const version = await collaboration.createVersion(docName, userId, 'antes da revisão')
+ * const version = await collaboration.createVersion(docName, userId, 'before review')
  * ```
  */
 let manager: CollaborationManager;
@@ -26,7 +26,7 @@ export default {
   get current(): CollaborationManager {
     if (!manager) {
       throw new Error(
-        'CollaborationManager ainda não inicializou — aguarde o boot do app ou instale o provider',
+        'CollaborationManager has not been initialized yet — wait for the app boot or install the provider',
       );
     }
     return manager;
