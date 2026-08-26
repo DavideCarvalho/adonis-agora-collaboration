@@ -50,3 +50,5 @@ export type {
 } from './editors/index.js';
 export { useCollabEditor } from './hooks/use_collab_editor.js';
 export type { UseCollabEditorResult } from './hooks/use_collab_editor.js';
+export { YjsCollabDoc, AutomergeCollabDoc } from './docs/index.js';
+export type { CollabDoc, RichTextDoc, AutomergeDocHost } from './docs/index.js';

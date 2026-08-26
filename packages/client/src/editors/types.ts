@@ -1,9 +1,10 @@
-import type * as Y from 'yjs';
+import type { CollabDoc } from '../docs/types.js';
 
 /**
  * Editor adapters decouple a frontend surface (Excalidraw, tldraw, text)
  * from the CRDT document. Each adapter knows how to read/write its scene
- * inside a Y.Doc, so hooks stay engine-aware via the transport seam.
+ * against a {@link CollabDoc}, so hooks stay engine-aware: the same adapter
+ * works on Yjs or Automerge.
  */
 export interface CollabEditorView<S> {
   /** Current serializable scene state. */
@@ -15,6 +16,6 @@ export interface CollabEditorView<S> {
 export interface CollabEditorAdapter<S> {
   /** Empty scene for a fresh document. */
   empty(): S;
-  /** Binds the adapter to a document key inside the Y.Doc. */
-  create(doc: Y.Doc, editorId: string): CollabEditorView<S>;
+  /** Binds the adapter to a document key inside the doc. */
+  create(doc: CollabDoc, editorId: string): CollabEditorView<S>;
 }

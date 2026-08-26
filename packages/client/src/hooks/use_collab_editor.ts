@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import type * as Y from 'yjs';
 import { getOrCreateSession, useCollaborationContext } from '../context.js';
+import { YjsCollabDoc } from '../docs/index.js';
+import type { CollabDoc } from '../docs/types.js';
 import type { CollabEditorAdapter } from '../editors/types.js';
 import type { CollabPeer, CollabStatus } from '../types.js';
 import { useAwareness } from './use_awareness.js';
@@ -9,6 +11,12 @@ export interface UseCollabEditorOptions<S> {
   docName: string;
   editorId: string;
   adapter: CollabEditorAdapter<S>;
+  /**
+   * Doc colaborativo (impl de engine). Omita para Yjs (a doc da sessão);
+   * passe `new AutomergeCollabDoc(host)` para engine automerge — os mesmos
+   * adapters funcionam com qualquer impl.
+   */
+  doc?: CollabDoc;
 }
 
 export interface UseCollabEditorResult<S> {
@@ -37,26 +45,23 @@ export interface UseCollabEditorResult<S> {
  * ```
  */
 export function useCollabEditor<S>(options: UseCollabEditorOptions<S>): UseCollabEditorResult<S> {
-  const { docName, editorId, adapter } = options;
+  const { docName, editorId, adapter, doc } = options;
   const context = useCollaborationContext();
   const session = getOrCreateSession(context, docName);
+  const collabDoc = doc ?? new YjsCollabDoc(session.doc);
   const { peers, status } = useAwareness({ docName });
 
   // Reactivity: any Yjs update re-renders and re-reads the adapter state.
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
-      const handler = () => onStoreChange();
-      session.doc.on('update', handler);
-      return () => {
-        session.doc.off('update', handler);
-      };
+      return collabDoc.onUpdate(onStoreChange);
     },
-    [session],
+    [collabDoc],
   );
 
   // Adapter view + stable snapshot: scenes are freshly built objects, so we
   // cache by serialized equality to keep useSyncExternalStore from looping.
-  const view = useMemo(() => adapter.create(session.doc, editorId), [adapter, session, editorId]);
+  const view = useMemo(() => adapter.create(collabDoc, editorId), [adapter, collabDoc, editorId]);
   const cacheRef = useRef<{ key: string; value: S } | undefined>(undefined);
   const getSnapshot = useCallback((): S => {
     const next = view.state;

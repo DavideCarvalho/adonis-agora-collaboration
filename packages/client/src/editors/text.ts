@@ -1,21 +1,27 @@
-import type * as Y from 'yjs';
+import type { CollabDoc, RichTextDoc } from '../docs/types.js';
 import type { CollabEditorAdapter } from './types.js';
 
-/** Plain-text mirror over `doc.getText(editorId)` (monaco/textarea surfaces). */
+/**
+ * Espelho de texto puro sobre `doc.read(editorId)` (monaco/textarea). Para
+ * texto rico use a doc Yjs e o binding Tiptap diretamente.
+ */
 export function createTextAdapter(): CollabEditorAdapter<string> {
   return {
     empty: () => '',
-    create: (doc, editorId) => {
-      const text = doc.getText(editorId);
+    create: (doc: CollabDoc, editorId: string) => {
+      const rich = doc as RichTextDoc;
+      const get = (): string => {
+        const v = doc.read<string>(editorId);
+        if (v !== undefined) return v;
+        const ytext = rich.getText?.(editorId) as { toString(): string } | undefined;
+        return ytext ? ytext.toString() : '';
+      };
       return {
         get state(): string {
-          return text.toString();
+          return get();
         },
         update(next) {
-          doc.transact(() => {
-            text.delete(0, text.length);
-            text.insert(0, next);
-          });
+          doc.write(editorId, next);
         },
       };
     },

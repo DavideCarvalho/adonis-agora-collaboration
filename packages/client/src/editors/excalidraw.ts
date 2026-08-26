@@ -1,10 +1,10 @@
-import type * as Y from 'yjs';
+import type { CollabDoc } from '../docs/types.js';
 import type { CollabEditorAdapter } from './types.js';
 
 /**
- * Excalidraw scene mirror: the element array is JSON-serialized under
- * `doc.getMap(editorId).get('elements')`. Standard self-hosted pattern
- * (Excalidraw's own `collab` protocol is proprietary and not used here).
+ * Espelho da cena Excalidraw: guarda `{ elements, appState }` na chave do
+ * editor. Padrão self-hosted (o protocolo `collab` do Excalidraw é
+ * proprietário e não é usado aqui).
  */
 export interface ExcalidrawScene<S = unknown> {
   elements: S[];
@@ -12,29 +12,17 @@ export interface ExcalidrawScene<S = unknown> {
 }
 
 export function createExcalidrawAdapter<S = unknown>(): CollabEditorAdapter<ExcalidrawScene<S>> {
-  const ELEMENTS = 'elements';
-  const APP_STATE = 'appState';
-
   return {
     empty: () => ({ elements: [] }),
-    create: (doc, editorId) => {
-      const map = doc.getMap<unknown>(editorId);
-
-      const read = (): ExcalidrawScene<S> => {
-        const elements = (map.get(ELEMENTS) as S[] | undefined) ?? [];
-        const appState = map.get(APP_STATE) as Record<string, unknown> | undefined;
-        return appState ? { elements, appState } : { elements };
-      };
-
+    create: (doc: CollabDoc, editorId: string) => {
+      const read = (): ExcalidrawScene<S> =>
+        doc.read<ExcalidrawScene<S>>(editorId) ?? { elements: [] };
       return {
         get state(): ExcalidrawScene<S> {
           return read();
         },
         update(next) {
-          doc.transact(() => {
-            map.set(ELEMENTS, next.elements);
-            if (next.appState) map.set(APP_STATE, next.appState);
-          });
+          doc.write(editorId, next);
         },
       };
     },

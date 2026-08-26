@@ -3,6 +3,7 @@ import { createElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { CollaborationProvider } from '../src/context.js';
+import { YjsCollabDoc } from '../src/docs/index.js';
 import {
   createExcalidrawAdapter,
   createTextAdapter,
@@ -34,12 +35,12 @@ describe('editor adapters', () => {
   it('excalidraw adapter round-trips a scene through the Y.Doc', () => {
     const doc = new Y.Doc();
     const adapter = createExcalidrawAdapter<unknown>();
-    const view = adapter.create(doc, 'lousa');
+    const view = adapter.create(new YjsCollabDoc(doc), 'lousa');
 
     expect(view.state.elements).toEqual([]);
     view.update({ elements: [{ id: 'a' }], appState: { zoom: 1 } });
 
-    const other = adapter.create(doc, 'lousa');
+    const other = adapter.create(new YjsCollabDoc(doc), 'lousa');
     expect(other.state.elements).toEqual([{ id: 'a' }]);
     expect(other.state.appState?.zoom).toBe(1);
   });
@@ -47,13 +48,13 @@ describe('editor adapters', () => {
   it('tldraw and text adapters mirror their keys', () => {
     const doc = new Y.Doc();
     const tldraw = createTldrawAdapter<{ records: unknown[] }>();
-    tldraw.create(doc, 'board').update({ snapshot: { records: [1, 2] } });
-    expect(tldraw.create(doc, 'board').state.snapshot.records).toHaveLength(2);
+    tldraw.create(new YjsCollabDoc(doc), 'board').update({ snapshot: { records: [1, 2] } });
+    expect(tldraw.create(new YjsCollabDoc(doc), 'board').state.snapshot.records).toHaveLength(2);
 
     const text = createTextAdapter();
-    const txt = text.create(doc, 'notes');
+    const txt = text.create(new YjsCollabDoc(doc), 'notes');
     txt.update('hello');
-    expect(text.create(doc, 'notes').state).toBe('hello');
+    expect(text.create(new YjsCollabDoc(doc), 'notes').state).toBe('hello');
   });
 });
 

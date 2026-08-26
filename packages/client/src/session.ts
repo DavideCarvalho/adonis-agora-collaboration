@@ -33,6 +33,7 @@ export class DocSession {
   #destroyed = false;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   #attempt = 0;
+  #engine: string | undefined;
 
   constructor(docName: string, config: CollaborationClientConfig) {
     this.docName = docName;
@@ -46,6 +47,11 @@ export class DocSession {
 
   get error(): Error | null {
     return this.#error;
+  }
+
+  /** Engine informado pelo server no token (yjs | automerge | ...). */
+  get engine(): string | undefined {
+    return this.#engine;
   }
 
   getStatus(): CollabStatus {
@@ -71,6 +77,7 @@ export class DocSession {
   async #start(): Promise<void> {
     try {
       const info = await fetchToken(this.#config, this.docName);
+      this.#engine = info.engine;
       if (this.#destroyed) return;
 
       if (info.engine === 'automerge') {
