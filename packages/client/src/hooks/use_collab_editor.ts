@@ -5,6 +5,12 @@ import type { CollabEditorAdapter } from '../editors/types.js';
 import type { CollabPeer, CollabStatus } from '../types.js';
 import { useAwareness } from './use_awareness.js';
 
+export interface UseCollabEditorOptions<S> {
+  docName: string;
+  editorId: string;
+  adapter: CollabEditorAdapter<S>;
+}
+
 export interface UseCollabEditorResult<S> {
   /** Current scene state (editor-agnostic shape from the adapter). */
   state: S;
@@ -23,16 +29,15 @@ export interface UseCollabEditorResult<S> {
  * its scene (Excalidraw/tldraw/text) into the doc.
  *
  * ```tsx
- * const { state, update, status, peers } = useCollabEditor(
- *   'lousas/1', 'excalidraw', createExcalidrawAdapter(),
- * )
+ * const { state, update, status, peers } = useCollabEditor({
+ *   docName: 'lousas/1',
+ *   editorId: 'excalidraw',
+ *   adapter: createExcalidrawAdapter(),
+ * })
  * ```
  */
-export function useCollabEditor<S>(
-  docName: string,
-  editorId: string,
-  adapter: CollabEditorAdapter<S>,
-): UseCollabEditorResult<S> {
+export function useCollabEditor<S>(options: UseCollabEditorOptions<S>): UseCollabEditorResult<S> {
+  const { docName, editorId, adapter } = options;
   const context = useCollaborationContext();
   const session = getOrCreateSession(context, docName);
   const { peers, status } = useAwareness(docName);

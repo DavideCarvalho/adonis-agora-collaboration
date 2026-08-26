@@ -65,7 +65,11 @@ describe('useCollabEditor', () => {
     let result: ReturnType<typeof useCollabEditor<{ elements: unknown[] }>> | undefined;
 
     function Probe() {
-      result = useCollabEditor('lousas/1', 'excalidraw', createExcalidrawAdapter<unknown>());
+      result = useCollabEditor({
+        docName: 'lousas/1',
+        editorId: 'excalidraw',
+        adapter: createExcalidrawAdapter<unknown>(),
+      });
       return null;
     }
 
