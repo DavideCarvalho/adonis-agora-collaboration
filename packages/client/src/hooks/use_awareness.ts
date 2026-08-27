@@ -11,6 +11,16 @@ export interface UseAwarenessResult {
   /** Peers conectados (sem o usuário local). */
   peers: CollabPeer[];
   status: CollabStatus;
+  /**
+   * The document's raw awareness channel, or null before the transport
+   * connects (and on engines that have none).
+   *
+   * `peers` covers rendering an avatar stack; this is for editor extensions
+   * that drive their own remote carets from awareness — Tiptap's
+   * CollaborationCursor takes a `provider` and reads `provider.awareness`,
+   * so it needs the object rather than a snapshot.
+   */
+  awareness: AwarenessProtocol.Awareness | null;
 }
 
 function snapshotPeers(awareness: AwarenessProtocol.Awareness): CollabPeer[] {
@@ -40,10 +50,16 @@ export function useAwareness(options: UseAwarenessOptions): UseAwarenessResult {
   const session = getOrCreateSession(context, docName);
   const [peers, setPeers] = useState<CollabPeer[]>([]);
   const [status, setStatus] = useState<CollabStatus>(session.getStatus());
+  const [awareness, setAwareness] = useState<AwarenessProtocol.Awareness | null>(
+    session.transport?.awareness ?? null,
+  );
 
   useEffect(() => {
     const update = () => {
       setStatus(session.getStatus());
+      // The transport is rebuilt on every reconnect, so the awareness object
+      // is not stable — re-read it rather than capturing it once.
+      setAwareness(session.transport?.awareness ?? null);
       if (session.transport?.awareness) {
         setPeers(snapshotPeers(session.transport.awareness));
       }
@@ -61,5 +77,5 @@ export function useAwareness(options: UseAwarenessOptions): UseAwarenessResult {
     };
   }, [session]);
 
-  return { peers, status };
+  return { peers, status, awareness };
 }

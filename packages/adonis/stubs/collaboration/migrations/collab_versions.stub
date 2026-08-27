@@ -8,15 +8,17 @@ export default class extends BaseSchema {
 
   async up() {
     this.schema.createTable(this.tableName, (table) => {
-      table.uuid('id').primary()
-      table.string('document_name').notNullable()
-      table.integer('seq').notNullable()
-      table.string('label').nullable()
+      table.string('doc_name').notNullable()
+      table.string('id').notNullable()
       table.string('created_by').nullable()
-      table.binary('snapshot').notNullable()
-      table.timestamp('created_at', { useTz: true }).notNullable()
+      table.string('label').nullable()
+      table.integer('seq').notNullable()
+      // The document's bytes at the moment the version was created.
+      table.binary('snapshot').nullable()
+      table.timestamp('created_at', { useTz: true })
 
-      table.index(['document_name', 'seq'])
+      table.primary(['doc_name', 'id'])
+      table.index(['doc_name', 'seq'])
     })
   }
 

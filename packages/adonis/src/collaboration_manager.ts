@@ -63,8 +63,15 @@ export class CollaborationManager {
     return null;
   }
 
-  /** Autorização resolvida: documento declarado, senão authorize global. */
-  async #authorize(ctx: CollabConnectionContext, docName: string): Promise<CollabPermission> {
+  /**
+   * Resolved authorization for a document: the declared document's own
+   * `authorize` when one matches, else the global `authorize`, else deny.
+   *
+   * Public because the permission seam has to hold on both paths — the
+   * WebSocket handshake AND the REST token endpoint issue credentials, and
+   * both must resolve the rule the same way.
+   */
+  async authorize(ctx: CollabConnectionContext, docName: string): Promise<CollabPermission> {
     const declared = this.#documentFor(docName);
     if (declared?.declaration.authorize) {
       return declared.declaration.authorize(ctx, { docName, params: declared.params as never });
@@ -86,7 +93,7 @@ export class CollaborationManager {
       });
     }
     const shared: SelfHostedDriverOptions = {
-      authorize: (ctx, docName) => this.#authorize(ctx, docName),
+      authorize: (ctx, docName) => this.authorize(ctx, docName),
       ...(storage ? { storage } : {}),
       ...(this.config.path !== undefined ? { path: this.config.path } : {}),
       ...(this.config.debounce !== undefined ? { debounce: this.config.debounce } : {}),

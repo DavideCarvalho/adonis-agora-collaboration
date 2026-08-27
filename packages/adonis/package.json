@@ -79,11 +79,7 @@
       "default": "./dist/configure.js"
     }
   },
-  "files": [
-    "dist/",
-    "README.md",
-    "CHANGELOG.md"
-  ],
+  "files": ["dist/", "README.md", "CHANGELOG.md"],
   "sideEffects": false,
   "scripts": {
     "build": "pnpm run clean && tsc -p tsconfig.build.json && pnpm run build:commands && pnpm run copy:stubs",
