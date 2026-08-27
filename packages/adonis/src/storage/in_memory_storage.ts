@@ -1,4 +1,10 @@
-import type { CollabComment, CollabVersion, CollaborationStorage } from '../types.js';
+import type {
+  CollabComment,
+  CollabVersion,
+  CollaborationStorage,
+  PruneVersionsOptions,
+} from '../types.js';
+import { assertPruneKeep, versionsToPrune } from './shared.js';
 
 /**
  * In-memory storage — development fallback when the app doesn't configure
@@ -33,6 +39,29 @@ export class InMemoryCollaborationStorage implements CollaborationStorage {
   async loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null> {
     const entry = (this.versions.get(docName) ?? []).find((v) => v.version.id === versionId);
     return entry?.snapshot ?? null;
+  }
+
+  async pruneVersions({ keep, docName, dryRun }: PruneVersionsOptions): Promise<number> {
+    assertPruneKeep(keep);
+    const names = docName ? [docName] : [...this.versions.keys()];
+    let removed = 0;
+    for (const name of names) {
+      const entries = this.versions.get(name) ?? [];
+      const doomed = new Set(
+        versionsToPrune(
+          entries.map((entry) => entry.version),
+          keep,
+        ).map((version) => version.id),
+      );
+      if (doomed.size === 0) continue;
+      removed += doomed.size;
+      if (dryRun) continue;
+      this.versions.set(
+        name,
+        entries.filter((entry) => !doomed.has(entry.version.id)),
+      );
+    }
+    return removed;
   }
 
   async listComments(docName: string, space?: string): Promise<CollabComment[]> {

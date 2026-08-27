@@ -1,6 +1,12 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { CollabComment, CollabVersion, CollaborationStorage } from '../types.js';
+import type {
+  CollabComment,
+  CollabVersion,
+  CollaborationStorage,
+  PruneVersionsOptions,
+} from '../types.js';
+import { assertPruneKeep, versionsToPrune } from './shared.js';
 
 /**
  * Disk storage for local development of the library (one file per doc +
@@ -65,6 +71,49 @@ export class FileSystemStorage implements CollaborationStorage {
     } catch {
       return null;
     }
+  }
+
+  /** Document names on disk — one `<name>.bin` at the root per document. */
+  private async documentNames(): Promise<string[]> {
+    const entries = await readdir(this.baseDir, { withFileTypes: true }).catch(() => []);
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.bin'))
+      .map((entry) => decodeURIComponent(entry.name.slice(0, -'.bin'.length)));
+  }
+
+  async pruneVersions({ keep, docName, dryRun }: PruneVersionsOptions): Promise<number> {
+    assertPruneKeep(keep);
+    await this.ensure();
+    const versionsDir = join(this.baseDir, 'versions');
+    const files = await readdir(versionsDir).catch(() => []);
+
+    // Version files carry no seq on disk, so recency is mtime and the owning
+    // document is the longest name whose prefix matches — otherwise a doc
+    // named 'a' would claim the versions of 'a_b'.
+    const owners = (docName ? [docName] : await this.documentNames())
+      .map((name) => ({ name, prefix: `${encodeURIComponent(name)}_` }))
+      .sort((a, b) => b.prefix.length - a.prefix.length);
+
+    const perDocument = new Map<string, Array<{ file: string; seq: number }>>();
+    for (const file of files) {
+      const owner = owners.find((candidate) => file.startsWith(candidate.prefix));
+      if (!owner) continue;
+      const { mtimeMs } = await stat(join(versionsDir, file));
+      const group = perDocument.get(owner.name) ?? [];
+      group.push({ file, seq: mtimeMs });
+      perDocument.set(owner.name, group);
+    }
+
+    let removed = 0;
+    for (const group of perDocument.values()) {
+      const doomed = versionsToPrune(group, keep);
+      removed += doomed.length;
+      if (dryRun) continue;
+      for (const entry of doomed) {
+        await unlink(join(versionsDir, entry.file));
+      }
+    }
+    return removed;
   }
 
   async listComments(docName: string, space?: string): Promise<CollabComment[]> {

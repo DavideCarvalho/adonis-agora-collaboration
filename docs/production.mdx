@@ -107,16 +107,22 @@ Two numbers to watch:
   versioned hourly is ~5 MB a day, per document.
 
 If versions are going to be frequent, prune them on a schedule. There is no retention policy in the
-library, and `collab_versions` is an ordinary table:
+library — the interval is yours to choose:
+
+```bash
+node ace collaboration:prune --keep=20
+```
+
+`--keep` counts **per document**, so a manuscript versioned every minute never evicts the history of
+one versioned twice a year. `--doc=<name>` narrows the run to a single document, and `--dry-run`
+reports how many versions would go without deleting any of them.
+
+Scheduling it from code — a job, a scheduler task — is the same call:
 
 ```ts
-// Keep the 20 most recent versions per document
-await db.rawQuery(`
-  DELETE FROM collab_versions v
-  WHERE v.seq <= (
-    SELECT MAX(seq) - 20 FROM collab_versions WHERE doc_name = v.doc_name
-  )
-`)
+import collaboration from '@adonis-agora/collaboration/services/main'
+
+const removed = await collaboration.current.pruneVersions({ keep: 20 })
 ```
 
 ## Backups

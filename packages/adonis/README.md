@@ -85,6 +85,7 @@ The transport is chosen automatically from the engine reported by `GET /collabor
 ### Commands
 
 - `collaboration:init` — scaffolds the documents directory, base migrations (when a database is configured) and the PartyKit worker (`--engine=partykit`)
+- `collaboration:prune --keep=20 [--doc=<name>] [--dry-run]` — deletes all but the N most recent versions of each document (same call as `collaboration.pruneVersions({ keep })`)
 - `make:collab-document <name>` — generates shared document types in `app/collaboration/documents/` (spaces + allowed anchor kinds), importable by the frontend
 
 Commands are registered automatically by `configure`; manual setups need `commands: ['@adonis-agora/collaboration/commands']` in `adonisrc.ts`.

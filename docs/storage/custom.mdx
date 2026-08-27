@@ -1,6 +1,6 @@
 ---
 title: Custom storage
-description: Implement CollaborationStorage yourself — the nine methods, the contracts that are easy to get subtly wrong, and a worked S3-backed example.
+description: Implement CollaborationStorage yourself — the ten methods, the contracts that are easy to get subtly wrong, and a worked S3-backed example.
 icon: Wrench
 ---
 
@@ -24,9 +24,9 @@ Reasons this comes up: documents large enough that object storage beats a `bytea
 encryption at rest with your own keys; a different ORM; a tenant-per-database layout; or a
 read-through cache in front of the real store.
 
-## The four contracts to get right
+## The five contracts to get right
 
-The interface is easy to implement and easy to implement *subtly* wrong. These four are the ones
+The interface is easy to implement and easy to implement *subtly* wrong. These five are the ones
 that fail quietly rather than loudly:
 
 1. **`loadDocument` returns `null` for an unknown document, not an error.** A document that has never
@@ -38,6 +38,11 @@ that fail quietly rather than loudly:
 3. **`saveComment` is an upsert.** Resolving and reopening call it with an existing `id`.
 4. **`listComments` filters by space when given one**, and returns every space when not. Sorting is
    handled above you.
+5. **`pruneVersions` keeps `keep` versions *per document*.** Keeping the N newest rows across the
+   whole store lets one busy document delete another one's history. Validate `keep` (a negative or
+   fractional value is a mistake, `0` is a legitimate "delete them all"), honour `dryRun` by
+   counting without deleting, and return the number removed — that count is what the ace command
+   prints.
 
 <Callout title="No transactions, deliberately">
 The interface has no transaction boundary because the operations do not need one: a document save is
@@ -52,6 +57,7 @@ import type {
   CollabComment,
   CollabVersion,
   CollaborationStorage,
+  PruneVersionsOptions,
 } from '@adonis-agora/collaboration'
 import db from '@adonisjs/lucid/services/db'
 
@@ -104,6 +110,42 @@ export class S3CollabStorage implements CollaborationStorage {
     return s3.getBytes(this.options.bucket, this.#versionKey(docName, versionId))
   }
 
+  async pruneVersions({ keep, docName, dryRun }: PruneVersionsOptions) {
+    if (!Number.isInteger(keep) || keep < 0) {
+      throw new Error(`pruneVersions: keep must be a non-negative integer, got ${keep}`)
+    }
+
+    const query = db.from('collab_versions').select('doc_name', 'id', 'seq')
+    if (docName) query.where('doc_name', docName)
+
+    // Per document, and only then "everything past the newest `keep`".
+    const perDocument = new Map<string, { id: string; seq: number }[]>()
+    for (const row of await query) {
+      const group = perDocument.get(row.doc_name) ?? []
+      group.push({ id: row.id, seq: row.seq })
+      perDocument.set(row.doc_name, group)
+    }
+
+    let removed = 0
+    for (const [name, versions] of perDocument) {
+      const doomed = versions.sort((a, b) => b.seq - a.seq).slice(keep)
+      removed += doomed.length
+      if (dryRun || doomed.length === 0) continue
+      for (const version of doomed) {
+        await s3.delete(this.options.bucket, this.#versionKey(name, version.id))
+      }
+      await db
+        .from('collab_versions')
+        .where('doc_name', name)
+        .whereIn(
+          'id',
+          doomed.map((version) => version.id),
+        )
+        .delete()
+    }
+    return removed
+  }
+
   async listComments(docName: string, space?: string): Promise<CollabComment[]> {
     const query = db.from('collab_comments').where('doc_name', docName)
     if (space) query.andWhere('space', space)
@@ -130,7 +172,7 @@ order gives you a version that lists fine and fails to restore.
 
 ## Testing it
 
-Nine methods with no framework coupling means the fastest test is the interface itself — write the
+Ten methods with no framework coupling means the fastest test is the interface itself — write the
 bytes, read them back, and prove the version snapshot is the *version's*:
 
 ```ts

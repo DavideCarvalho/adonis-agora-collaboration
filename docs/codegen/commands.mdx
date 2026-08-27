@@ -1,6 +1,6 @@
 ---
 title: Commands
-description: collaboration:init and make:collab-document — what each one writes, every flag, and the generated document-types file explained line by line.
+description: collaboration:init, collaboration:prune and make:collab-document — what each one writes, every flag, and the generated document-types file explained line by line.
 icon: SquareTerminal
 ---
 
@@ -37,6 +37,29 @@ The command warns rather than failing when `config.partykit.roomHost` is unset �
 generated and the driver will throw at runtime until you fill it in. Scaffold first, configure
 second, deploy third.
 </Callout>
+
+## `collaboration:prune`
+
+Applies a retention policy to the version history: keeps the most recent versions of each document
+and deletes the rest. Nothing runs it for you — put it in cron, a scheduler task, or a deploy hook.
+
+```sh
+node ace collaboration:prune --keep=20
+node ace collaboration:prune --keep=5 --doc=researches/42/writing
+node ace collaboration:prune --keep=20 --dry-run
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--keep` | `20` | versions kept **per document** — not across the whole table |
+| `--doc` | every document | narrows the run to one document name |
+| `--dry-run` | off | reports the count it would delete and deletes nothing |
+
+It prints how many versions were removed. A `--keep` that is not a non-negative integer fails the
+command instead of deleting everything, and `--keep=0` is a real value: it deletes every version.
+
+The same call from code is `collaboration.current.pruneVersions({ keep: 20 })`, which returns the
+number removed.
 
 ## `make:collab-document`
 

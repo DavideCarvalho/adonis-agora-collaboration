@@ -110,5 +110,7 @@ Versions live in `collab_versions` (metadata) with their snapshot bytes, through
 itself. They are ordinary rows: queryable, joinable, backup-able, and readable without waking the
 document up.
 
-Deleting a version is not part of the manager API. If a retention policy matters to you, prune
-`collab_versions` directly and treat the storage interface as the contract you are honouring.
+Deleting a single version is not part of the manager API — retention is. `pruneVersions({ keep })`
+keeps the N most recent versions of each document and returns how many it removed; the ace command
+`collaboration:prune --keep=20` is the same call from a cron entry. See
+[Production](/docs/collaboration/production#storage-and-how-it-grows).

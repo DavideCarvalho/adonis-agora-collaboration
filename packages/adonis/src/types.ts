@@ -103,6 +103,19 @@ export interface CollabDiffSummary {
   removed: number;
 }
 
+/** Options of {@link CollaborationStorage.pruneVersions}. */
+export interface PruneVersionsOptions {
+  /**
+   * How many versions to keep **per document**. A busy document never evicts
+   * another document's history. `0` deletes every version.
+   */
+  keep: number;
+  /** Narrows the prune to a single document. Omitted prunes every document. */
+  docName?: string;
+  /** Count what would be removed without deleting anything. */
+  dryRun?: boolean;
+}
+
 /**
  * Persistence of documents + versions + comments. The host app implements
  * this (database, S3...) and the library only knows the interface.
@@ -113,6 +126,11 @@ export interface CollaborationStorage {
   listVersions(docName: string): Promise<CollabVersion[]>;
   saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>;
   loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>;
+  /**
+   * Delete all but the `keep` most recent versions, per document. Returns how
+   * many versions were removed (or would be, with `dryRun`).
+   */
+  pruneVersions(options: PruneVersionsOptions): Promise<number>;
   /** Comments of a document (by space). */
   listComments(docName: string, space?: string): Promise<CollabComment[]>;
   saveComment(docName: string, comment: CollabComment): Promise<void>;

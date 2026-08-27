@@ -65,14 +65,11 @@ const docs = await db
   .from('collab_comments')
   .where('user_id', user.id)
   .distinct('doc_name')
-
-// Version count per document, for a housekeeping report
-const counts = await db
-  .from('collab_versions')
-  .select('doc_name')
-  .count('* as versions')
-  .groupBy('doc_name')
 ```
+
+Housekeeping on the version history has its own API — `collaboration:prune --dry-run` reports what a
+retention run would delete, and `pruneVersions({ keep })` does it from code. Do not write the DELETE
+yourself.
 
 Reading `collab_documents.state` is the one exception. Those bytes are a **CRDT encoding**, not
 your content — decoding them by hand means reimplementing Yjs. Ask the manager instead, which also
