@@ -1,1 +1,5 @@
-{ "title": "Advanced", "icon": "Wrench", "pages": ["controllers"] }
+{
+  "title": "Advanced",
+  "icon": "Wrench",
+  "pages": ["index", "controllers", "tiptap-integration"]
+}

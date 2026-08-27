@@ -1,0 +1,182 @@
+---
+title: Testing
+description: Prove the parts that actually break — that authorize denies, that a version snapshot is the version's, and that the client reconnects — using in-memory storage, fake transports and no server.
+icon: FlaskConical
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Real-time code has an unusual test profile: the sync engine is somebody else's well-tested library,
+and the bugs are almost always in the seams around it. Three things are worth your test budget, and
+none of them need a WebSocket.
+
+## 1. That `authorize` denies
+
+This is the one that matters most, because [the library fails closed](/docs/collaboration/concepts/authorization)
+and a rule that accidentally allows is invisible until it is a support ticket.
+
+The manager resolves the same way the handshake and the token endpoint do, so testing it directly
+tests both paths:
+
+```ts title="tests/unit/collaboration_authorization.spec.ts"
+import { CollaborationManager, defineDocument } from '@adonis-agora/collaboration'
+
+const manager = new CollaborationManager({
+  engine: 'yjs',
+  documents: {
+    'researches/:id/writing': defineDocument<{ id: string }>({
+      authorize: async (ctx, { params }) => {
+        const research = await Research.find(params.id)
+        const mine = research?.ownerId === ctx.userId
+        return { canRead: mine, canWrite: mine, canComment: mine }
+      },
+    }),
+  },
+})
+
+test('the owner may read', async ({ assert }) => {
+  const permission = await manager.authorize({ userId: owner.id }, `researches/${research.id}/writing`)
+  assert.isTrue(permission.canRead)
+})
+
+test('a stranger may not', async ({ assert }) => {
+  const permission = await manager.authorize({ userId: other.id }, `researches/${research.id}/writing`)
+  assert.isFalse(permission.canRead)
+})
+
+test('an undeclared document is denied, not allowed', async ({ assert }) => {
+  const permission = await manager.authorize({ userId: owner.id }, 'secrets/1')
+  assert.deepEqual(permission, { canRead: false, canWrite: false, canComment: false })
+})
+```
+
+That third test is the one people skip and the one that catches a mistyped pattern.
+
+<Callout title="Assert the denial, not just the grant">
+A rule that returns `{ canRead: true }` unconditionally passes every "the owner may read" test ever
+written. The negative cases are the test.
+</Callout>
+
+## 2. That storage honours its contract
+
+If you [wrote your own storage](/docs/collaboration/storage/custom), the contract that fails
+silently is `loadVersionSnapshot`: returning the *current* document instead of the version's bytes
+makes `restoreVersion` a no-op and `diffVersions` always report zero, with no error anywhere.
+
+```ts title="tests/unit/collab_storage.spec.ts"
+test('a version snapshot is the version, not the present', async ({ assert }) => {
+  const storage = new MyStorage()
+
+  await storage.saveDocument('doc/1', new Uint8Array([1, 2, 3]))
+  await storage.saveVersion(
+    'doc/1',
+    { id: 'v1', seq: 1, label: null, createdBy: null, createdAt: new Date().toISOString() },
+    new Uint8Array([1, 2, 3]),
+  )
+
+  // the document moves on…
+  await storage.saveDocument('doc/1', new Uint8Array([9, 9, 9]))
+
+  // …and the snapshot must not
+  assert.deepEqual(await storage.loadVersionSnapshot('doc/1', 'v1'), new Uint8Array([1, 2, 3]))
+})
+
+test('saveComment upserts rather than inserting twice', async ({ assert }) => {
+  await storage.saveComment('doc/1', comment)
+  await storage.saveComment('doc/1', { ...comment, resolvedAt: new Date().toISOString() })
+
+  const comments = await storage.listComments('doc/1')
+  assert.lengthOf(comments, 1)
+  assert.isNotNull(comments[0].resolvedAt)
+})
+```
+
+`InMemoryCollaborationStorage` is exported and implements the contract correctly, so it doubles as
+the reference to compare against — and as the storage for any test that needs *a* backend without
+caring which.
+
+```ts
+import { InMemoryCollaborationStorage } from '@adonis-agora/collaboration'
+
+const manager = new CollaborationManager({
+  engine: 'yjs',
+  storage: new InMemoryCollaborationStorage(),
+  authorize: async () => ({ canRead: true, canWrite: true, canComment: true }),
+})
+```
+
+## 3. That the client behaves without a server
+
+The provider takes two injection points — `fetchImpl` for REST and `createTransport` for the
+socket — so component tests never open a connection:
+
+```tsx title="tests/components/writing_editor.spec.tsx"
+import { CollaborationProvider } from '@adonis-agora/collaboration-client'
+import * as Y from 'yjs'
+
+class FakeTransport {
+  status: 'connecting' | 'connected' | 'disconnected' = 'connected'
+  awareness = null
+  #listeners = new Set<() => void>()
+
+  constructor(readonly doc: Y.Doc) {}
+
+  getStatus() { return this.status }
+  subscribe(listener: () => void) { this.#listeners.add(listener); return () => this.#listeners.delete(listener) }
+  destroy() {}
+
+  /** Drive the states the UI has to handle. */
+  emit(status: typeof this.status) {
+    this.status = status
+    for (const listener of this.#listeners) listener()
+  }
+}
+
+function renderEditor() {
+  const fetchImpl = async () =>
+    new Response(JSON.stringify({ token: 't', wsUrl: '/collaboration', engine: 'yjs' }))
+
+  return render(
+    <CollaborationProvider
+      baseUrl="http://test"
+      fetchImpl={fetchImpl as typeof fetch}
+      createTransport={(_info, doc) => new FakeTransport(doc)}
+    >
+      <WritingEditor researchId="42" />
+    </CollaborationProvider>,
+  )
+}
+```
+
+With that in place you can assert the things that are genuinely easy to get wrong: the editor is
+read-only while `connecting`, an error renders a message instead of a blank page, and a
+`disconnected` transition shows the reconnecting state rather than silently freezing.
+
+REST-backed hooks need only `fetchImpl`:
+
+```tsx
+test('renders the comment sidebar', async () => {
+  const fetchImpl = async () => new Response(JSON.stringify([anchoredComment]))
+  // …assert the sidebar renders it
+})
+```
+
+## What not to test
+
+- **That Yjs converges.** It is a well-tested library with a formal argument behind it. Two
+  in-process `Y.Doc`s merging is a test of Yjs, not of your app.
+- **The transports.** They are thin adapters over Hocuspocus and PartyKit clients.
+- **That the built-in routes route.** They are covered by the package's own suite. Test *your*
+  controllers, if you wrote any.
+
+## Integration, when it is worth it
+
+A single end-to-end test — open two clients, type in one, assert the other sees it — is worth having
+as a smoke test and expensive as a habit. Run it against a real server with in-memory storage, keep
+it to one, and put the rest of your budget into the three sections above.
+
+<Callout title="A test that passes before the fix measures nothing">
+Especially for the negative cases here: break the rule on purpose and confirm the test goes red
+before you trust it. A permission test that passes against a wide-open `authorize` is not a
+permission test.
+</Callout>

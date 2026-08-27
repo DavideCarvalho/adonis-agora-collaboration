@@ -1,0 +1,151 @@
+---
+title: Custom storage
+description: Implement CollaborationStorage yourself — the nine methods, the contracts that are easy to get subtly wrong, and a worked S3-backed example.
+icon: Wrench
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`CollaborationStorage` is a plain interface with no base class, no decorator and no registration
+step. Implement it, pass the instance as `storage`, and every driver uses it.
+
+```ts title="config/collaboration.ts"
+import { defineConfig } from '@adonis-agora/collaboration'
+import { S3CollabStorage } from '#services/collaboration/s3_storage'
+
+export default defineConfig({
+  engine: 'yjs',
+  storage: new S3CollabStorage({ bucket: env.get('COLLAB_BUCKET') }),
+  // ...
+})
+```
+
+Reasons this comes up: documents large enough that object storage beats a `bytea` column;
+encryption at rest with your own keys; a different ORM; a tenant-per-database layout; or a
+read-through cache in front of the real store.
+
+## The four contracts to get right
+
+The interface is easy to implement and easy to implement *subtly* wrong. These four are the ones
+that fail quietly rather than loudly:
+
+1. **`loadDocument` returns `null` for an unknown document, not an error.** A document that has never
+   been opened is normal — it is how every document starts.
+2. **`saveVersion` must keep the bytes it is given.** They are the document *at that moment*.
+   `loadVersionSnapshot(docName, versionId)` has to return those exact bytes for that id. Returning
+   the current document instead makes `restoreVersion` a no-op and `diffVersions` always report
+   zero — with no error anywhere.
+3. **`saveComment` is an upsert.** Resolving and reopening call it with an existing `id`.
+4. **`listComments` filters by space when given one**, and returns every space when not. Sorting is
+   handled above you.
+
+<Callout title="No transactions, deliberately">
+The interface has no transaction boundary because the operations do not need one: a document save is
+a single row, and a version is written after the bytes it snapshots already exist. Keep your
+implementation's methods independently safe to retry.
+</Callout>
+
+## A worked example
+
+```ts title="app/services/collaboration/s3_storage.ts"
+import type {
+  CollabComment,
+  CollabVersion,
+  CollaborationStorage,
+} from '@adonis-agora/collaboration'
+import db from '@adonisjs/lucid/services/db'
+
+/**
+ * Document bytes and version snapshots live in S3; the metadata that has to be
+ * queryable — the version list, the comments — stays in Postgres.
+ */
+export class S3CollabStorage implements CollaborationStorage {
+  constructor(private readonly options: { bucket: string }) {}
+
+  #docKey = (docName: string) => `documents/${encodeURIComponent(docName)}`
+  #versionKey = (docName: string, id: string) =>
+    `versions/${encodeURIComponent(docName)}/${id}`
+
+  async loadDocument(docName: string) {
+    const bytes = await s3.getBytes(this.options.bucket, this.#docKey(docName))
+    return bytes ? { state: bytes } : null
+  }
+
+  async saveDocument(docName: string, state: Uint8Array) {
+    await s3.putBytes(this.options.bucket, this.#docKey(docName), state)
+  }
+
+  async listVersions(docName: string): Promise<CollabVersion[]> {
+    const rows = await db.from('collab_versions').where('doc_name', docName).orderBy('seq', 'asc')
+    return rows.map((row) => ({
+      id: row.id,
+      seq: row.seq,
+      label: row.label,
+      createdBy: row.created_by,
+      createdAt: row.created_at.toISOString(),
+    }))
+  }
+
+  async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array) {
+    // The bytes first: a metadata row pointing at a missing object is worse
+    // than an object nothing points at yet.
+    await s3.putBytes(this.options.bucket, this.#versionKey(docName, version.id), snapshot)
+    await db.table('collab_versions').insert({
+      doc_name: docName,
+      id: version.id,
+      seq: version.seq,
+      label: version.label,
+      created_by: version.createdBy,
+      created_at: new Date(version.createdAt),
+    })
+  }
+
+  async loadVersionSnapshot(docName: string, versionId: string) {
+    return s3.getBytes(this.options.bucket, this.#versionKey(docName, versionId))
+  }
+
+  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
+    const query = db.from('collab_comments').where('doc_name', docName)
+    if (space) query.andWhere('space', space)
+    return (await query).map(toComment)
+  }
+
+  async saveComment(_docName: string, comment: CollabComment) {
+    await db
+      .table('collab_comments')
+      .insert(toRow(comment))
+      .onConflict('id')
+      .merge(['body', 'resolved_at', 'updated_at'])
+  }
+
+  async deleteComment(_docName: string, commentId: string) {
+    await db.from('collab_comments').where('id', commentId).delete()
+  }
+}
+```
+
+Note the ordering in `saveVersion`: the snapshot is written before the row that references it. If
+the process dies in between, you have an orphaned object — cheap to garbage-collect. The other
+order gives you a version that lists fine and fails to restore.
+
+## Testing it
+
+Nine methods with no framework coupling means the fastest test is the interface itself — write the
+bytes, read them back, and prove the version snapshot is the *version's*:
+
+```ts
+const storage = new S3CollabStorage({ bucket: 'test' })
+
+await storage.saveDocument('doc/1', new Uint8Array([1, 2, 3]))
+const version = { id: 'v1', seq: 1, label: null, createdBy: null, createdAt: new Date().toISOString() }
+await storage.saveVersion('doc/1', version, new Uint8Array([1, 2, 3]))
+
+// the document moves on…
+await storage.saveDocument('doc/1', new Uint8Array([9, 9, 9]))
+
+// …and the snapshot must not
+expect(await storage.loadVersionSnapshot('doc/1', 'v1')).toEqual(new Uint8Array([1, 2, 3]))
+```
+
+That last assertion is the one that catches the mistake this page warned about. See
+[Testing](/docs/collaboration/testing).

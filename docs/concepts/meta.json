@@ -1,1 +1,5 @@
-{"title": "Concepts", "icon": "BookOpen", "pages": ["crdt", "documents", "versions", "comments", "presence"]}
+{
+  "title": "Concepts",
+  "icon": "Lightbulb",
+  "pages": ["index", "crdt", "documents", "authorization", "versions", "comments", "presence"]
+}

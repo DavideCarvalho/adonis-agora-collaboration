@@ -1,21 +1,122 @@
 ---
 title: Comments
-description: Anchored comments per space — text ranges, canvas objects and timestamps — persisted in your storage.
+description: Comments anchored to a place inside a document — the three anchor kinds, what a space is for, the create/resolve/remove lifecycle, and why comments are relational data rather than CRDT state.
 icon: MessageSquare
 ---
 
-# Comments
+import { Callout } from 'fumadocs-ui/components/callout';
 
-Comments are **anchored** to a place in the document, not free-floating. An anchor is one of:
+A comment on a collaborative document is not a row with a `document_id`. It is attached to a
+**place**: this sentence, that shape, this moment in the recording. The library persists the
+anchor, owns the lifecycle, and stays completely ignorant of what the anchor means — that part is
+yours, because only your editor knows what "character 240" refers to.
 
-| Kind | Anchor |
-|---|---|
-| `text-range` | `{ start, end, selectedText }` |
-| `canvas-object` | `{ shapeId, relativeX, relativeY }` |
-| `timestamp` | `{ at, end? }` |
-
-Each comment belongs to a document **space** (e.g. `text`, `canvas`). The library persists the anchor and lifecycle (created/resolved/removed); your app decides what an anchor means. Comments are **REST**, not CRDT state — they live in your storage.
+## The three anchor kinds
 
 ```ts
-const { comments, create, resolve, remove } = useComments({ docName, space: 'text' })
+type CommentAnchor =
+  | { kind: 'text-range';    start: number; end: number; selectedText: string }
+  | { kind: 'canvas-object'; shapeId: string; relativeX: number; relativeY: number }
+  | { kind: 'timestamp';     at: number; end?: number }
 ```
+
+| Kind | Anchors to | Typical surface |
+| --- | --- | --- |
+| `text-range` | a character range, plus the text that was selected | Tiptap, ProseMirror, CodeMirror |
+| `canvas-object` | a shape id and a position relative to it | Excalidraw, tldraw |
+| `timestamp` | a point (or a span) in milliseconds | audio, video, transcripts |
+
+`selectedText` on a text range is not redundant with `start`/`end` — it is what lets you render a
+comment whose range has drifted. Offsets in a document several people are editing do move; the
+quoted text is how the UI shows "this comment was about *this*" even when the numbers no longer
+land where they did. Treat the offsets as a hint and the quote as the truth.
+
+## Spaces
+
+Every comment belongs to a **space** — a plain string naming which surface of the document it
+annotates. A page with a canvas and a transcript below it has two comment threads that should never
+appear in the same sidebar:
+
+```ts
+await manager.comments.create(docName, {
+  space: 'canvas',
+  anchor: { kind: 'canvas-object', shapeId: 'shape:x1', relativeX: 0.5, relativeY: 0.2 },
+  body: 'this arrow points the wrong way',
+  userId: user.id,
+  authorName: user.name,
+})
+```
+
+Listing is scoped the same way — `list(docName)` returns everything, `list(docName, 'text')` returns
+one surface. Spaces are free-form: the library never validates them, and
+[`make:collab-document`](/docs/collaboration/codegen/commands) generates the ones you declare as
+types so your own code stays honest about the set.
+
+## The lifecycle
+
+Three operations, and a comment that is never really destroyed until you say so:
+
+```ts
+const comment = await manager.comments.create(docName, { space, anchor, body, userId, authorName })
+// → { id, resolvedAt: null, createdAt, updatedAt: null, ... }
+
+await manager.comments.resolve(docName, comment.id, true)   // resolvedAt = now
+await manager.comments.resolve(docName, comment.id, false)  // reopened — resolvedAt = null
+await manager.comments.remove(docName, comment.id)          // → true, or false if it was gone
+```
+
+Resolving is a **toggle**, not a one-way door: passing `false` reopens the thread. The route behind
+it defaults to `true`, so `PATCH /collaboration/comments/:id` with an empty body resolves.
+
+`remove` returns a boolean rather than throwing on a missing id, so a double-click on delete is not
+an error path.
+
+Listing is sorted by `createdAt`, oldest first — the order a thread reads in.
+
+From the client:
+
+```tsx
+const { comments, loading, create, resolve, remove, refresh } = useComments({ docName, space: 'text' })
+
+await create({
+  space: 'text',
+  anchor: { kind: 'text-range', start: 120, end: 160, selectedText: 'the sentence' },
+  body: 'rephrase this',
+  userId: currentUser.id,
+})
+```
+
+## Why comments are not in the CRDT
+
+It is tempting to put a comment list in a `Y.Array` and get real-time threads for free. The library
+deliberately does not, and the reasons compound:
+
+- **They need permission checks a merge cannot express.** "Only the author may delete" is a rule,
+  and rules live where you can enforce them. A CRDT applies every operation it receives.
+- **They need to be queried.** *Unresolved comments across every document in this workspace*, *how
+  many threads did this reviewer open* — those are joins, and a CRDT is not a table.
+- **They must outlive the session.** A document nobody has open still has comments, and reading them
+  should not mean materializing the document.
+- **They keep working when sync is down.** `useComments` is REST-backed and shares the document's
+  session only to stay aligned with its lifecycle — the WebSocket can be reconnecting and the
+  comment sidebar still loads.
+
+The trade is that comments are **not live**: a new comment from someone else appears when you
+`refresh()`, not the instant they post it. If you want them live, the idiomatic move is to trigger a
+`refresh()` off a signal you already have — a poll, an SSE stream, or a flag flipped in the shared
+document.
+
+<Callout title="The author is the authenticated user">
+The built-in routes resolve the caller and check `canComment` before writing, and they attribute the
+comment to **whoever the request authenticated as** — a `userId` in the request body is ignored, so
+nobody can comment as someone else. See
+[Authorization](/docs/collaboration/concepts/authorization).
+</Callout>
+
+## Where they persist
+
+Comments are rows in `collab_comments`, written through the same
+[storage interface](/docs/collaboration/storage) as documents and versions. Drivers never touch
+them: comments live at `manager.comments` regardless of which engine the document uses, which is
+why switching a document from Yjs to Automerge — or moving it to the edge — leaves its threads
+exactly where they were.

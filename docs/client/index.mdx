@@ -1,14 +1,100 @@
 ---
 title: Client hooks
-description: React hooks from @adonis-agora/collaboration-client — document sessions, presence, comments, versions and editor-agnostic adapters.
+description: The React package — the provider and its config, the six hooks and which one to reach for, why the client never hard-codes an engine, and how sessions are shared.
 icon: Braces
 ---
 
-# Client hooks
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cards, Card } from 'fumadocs-ui/components/card';
 
-`@adonis-agora/collaboration-client` is engine-agnostic: the server tells it which engine a document uses, and it picks the right transport.
+`@adonis-agora/collaboration-client` is the React half. It is **engine-agnostic on purpose**: it
+asks the server which engine a document uses and picks the matching transport, so a component that
+edits `researches/42/writing` does not change when that document moves from the embedded Yjs server
+to a worker at the edge.
 
-## Deep dives
+```sh
+pnpm add @adonis-agora/collaboration-client
+```
 
-- [Sessions](/docs/collaboration/client/sessions)
-- [Editors](/docs/collaboration/client/editors)
+## The provider
+
+Everything runs under one provider, mounted once near the root:
+
+```tsx
+import { CollaborationProvider } from '@adonis-agora/collaboration-client'
+
+<CollaborationProvider baseUrl={window.location.origin}>
+  <App />
+</CollaborationProvider>
+```
+
+| Prop | Purpose |
+| --- | --- |
+| `baseUrl` | your Adonis origin. Falls back to `location.origin`, so a same-origin app can pass it and forget it |
+| `getHeaders` | called **per request** — return the auth headers your API needs. A function, so a rotating token is picked up without a remount |
+| `createTransport` | override the transport factory — tests, or an engine of your own |
+| `fetchImpl` | override `fetch` — tests and SSR |
+
+The provider's real job is holding the **session map**: one `DocSession` per document name, each
+owning a `Y.Doc`, a transport and a reconnect loop. Sessions are created on demand and **survive
+individual components unmounting** — navigating away from an editor and back does not tear down and
+rebuild the connection. See [Sessions](/docs/collaboration/client/sessions).
+
+<Callout title="Mount it above the router, not inside a page">
+A provider that remounts on navigation destroys every session it owns, which turns a route change
+into a full reconnect. Put it in the layout.
+</Callout>
+
+## The hooks
+
+| Hook | Returns | Backed by |
+| --- | --- | --- |
+| `useCollabDoc` | the shared `Y.Doc` plus `status` and `error` | WebSocket |
+| `useAutomergeDoc` | the Automerge document plus `change(fn)` | WebSocket |
+| `useCollabEditor` | an editor-agnostic `{ state, update }` view, plus peers | WebSocket |
+| `useAwareness` | `peers` — everyone else in the room | WebSocket |
+| `useComments` | `comments`, `create`, `resolve`, `remove`, `refresh` | REST |
+| `useVersions` | `versions`, `create`, `restore`, `refresh` | REST |
+
+Two things follow from that last column. The REST-backed hooks **keep working while the socket is
+down** — a reconnecting editor still shows its comment sidebar — and they are **not live**: new
+comments appear on `refresh()`, not the instant someone else posts one.
+
+## Picking a document hook
+
+```text
+Is the server's engine for this document 'automerge'?
+├── yes → useAutomergeDoc
+└── no  → is there an editor adapter for your surface?
+          ├── yes (Excalidraw, tldraw, plain text) → useCollabEditor
+          └── no  (Tiptap, CodeMirror, custom)     → useCollabDoc, bind the Y.Doc yourself
+```
+
+`useCollabDoc` gives you the raw `Y.Doc` and gets out of the way — the right choice for Tiptap,
+where the editor's own extension does the binding. `useCollabEditor` is a level up: an adapter maps
+a whole scene in and out of one document key, so the component only ever sees
+`{ state, update }`. See [Editors](/docs/collaboration/client/editors).
+
+<Callout type="warn" title="useCollabDoc throws on an Automerge document">
+An Automerge document cannot back a `Y.Doc`, so there is no honest way to return one. Pointing
+`useCollabDoc` at a document the server resolves to `automerge` fails with a clear error rather than
+handing back an empty document that never syncs. See
+[Automerge](/docs/collaboration/engines/automerge).
+</Callout>
+
+## Below the hooks
+
+Every hook is built on exported pieces you can use directly when a hook does not fit — a
+non-React frontend, a script, a test:
+
+- `DocSession` — the token fetch, transport and reconnect loop for one document.
+- `fetchToken`, `listComments`, `createComment`, `resolveComment`, `deleteComment`,
+  `listVersions`, `createVersion`, `restoreVersion` — the REST client, plus `CollabRestError`.
+- `HocuspocusCollabTransport`, `PartyKitCollabTransport`, `PartyServerCollabTransport` and
+  `defaultTransportFactory` — the transports and the factory that chooses between them.
+
+<Cards>
+  <Card title="Sessions" href="/docs/collaboration/client/sessions" description="useCollabDoc, the session lifecycle, status, reconnect with backoff, and awareness." />
+  <Card title="Comments & versions" href="/docs/collaboration/client/comments-and-versions" description="The REST-backed hooks — optimistic updates, refreshing, and error handling." />
+  <Card title="Editors" href="/docs/collaboration/client/editors" description="useCollabEditor and the Excalidraw, tldraw and text adapters — plus writing your own." />
+</Cards>

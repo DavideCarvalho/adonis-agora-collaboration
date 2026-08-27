@@ -1,13 +1,24 @@
 ---
 title: Advanced
-description: Full control — build your own controllers, routes and middleware instead of the built-in REST surface.
+description: The two escape hatches — replacing the built-in REST surface with your own controllers, and binding a rich-text editor directly to the shared document.
 icon: Wrench
 ---
 
-# Advanced
+import { Cards, Card } from 'fumadocs-ui/components/card';
 
-The defaults cover the common path. Sometimes you want **total control** — your own controllers, route shapes and guards.
+The defaults cover the common path: the provider mounts ten routes, the hooks consume them, and you
+write `authorize`. Two situations reach past that.
 
-## Deep dives
+**You need the HTTP surface to be yours** — a versioned API, response shapes a frontend already
+depends on, guards that differ per route, or an authorization check on the comment endpoints that
+the built-ins do not make. The library keeps owning the hard parts (sync, storage, versions,
+comments) and hands you the controllers.
 
-- [Custom controllers](/docs/collaboration/advanced/controllers)
+**You are binding an editor with its own CRDT integration** — Tiptap, ProseMirror, CodeMirror.
+Those do not go through an adapter; they bind to the shared document directly, and the wiring has a
+few details worth getting right the first time.
+
+<Cards>
+  <Card title="Custom controllers" href="/docs/collaboration/advanced/controllers" description="Disable auto-registration and build the REST surface yourself, keeping the library's token semantics." />
+  <Card title="Tiptap collaboration" href="/docs/collaboration/advanced/tiptap-integration" description="Turn a single-user Tiptap editor into a shared one — the Y.Doc, cursors, and the undo trap." />
+</Cards>

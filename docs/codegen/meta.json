@@ -1,1 +1,5 @@
-{ "title": "Codegen", "icon": "WandSparkles", "pages": ["commands", "documents-registry"] }
+{
+  "title": "Codegen",
+  "icon": "WandSparkles",
+  "pages": ["index", "commands", "documents-registry"]
+}

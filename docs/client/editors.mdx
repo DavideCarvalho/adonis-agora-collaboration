@@ -1,14 +1,20 @@
 ---
 title: Editors
-description: Editor-agnostic views — the same adapter works on Yjs or Automerge.
+description: useCollabEditor and the adapter seam — how a scene maps into a document key, the three built-in adapters, writing your own, and when to drop down to the raw Y.Doc instead.
 icon: PenTool
 ---
 
-# Editors
+import { Callout } from 'fumadocs-ui/components/callout';
 
-`useCollabEditor` couples an editor adapter to a document; the server's engine decides the transport underneath.
+Some editors do not have a CRDT binding. Excalidraw and tldraw both hand you a **whole scene** —
+serialize it, restore it, done — and the natural way to share one is to mirror that scene into a
+key of the collaborative document.
+
+`useCollabEditor` is that pattern, packaged:
 
 ```tsx
+import { createExcalidrawAdapter, useCollabEditor } from '@adonis-agora/collaboration-client'
+
 const { state, update, status, peers } = useCollabEditor({
   docName: 'whiteboards/1',
   editorId: 'excalidraw',
@@ -16,8 +22,117 @@ const { state, update, status, peers } = useCollabEditor({
 })
 ```
 
-| Adapter | Surface |
-|---|---|
-| `createExcalidrawAdapter()` | Scene (`elements`, `appState`) |
-| `createTldrawAdapter()` | tldraw snapshot (`records` + schema) |
-| `createTextAdapter()` | Plain text |
+Four things come back, and none of them mention a CRDT: the current scene, a way to write the next
+one, the connection status, and who else is here.
+
+## What `editorId` is
+
+The **key inside the document** the scene lives under. That is what lets one document hold several
+surfaces — a canvas and a plain-text panel side by side, sharing a name, a version history and a
+comment store:
+
+```tsx
+const canvas = useCollabEditor({ docName, editorId: 'canvas', adapter: createTldrawAdapter() })
+const notes  = useCollabEditor({ docName, editorId: 'notes',  adapter: createTextAdapter() })
+```
+
+Two components, two keys, one document, one socket.
+
+## The built-in adapters
+
+| Adapter | Scene shape | Editor |
+| --- | --- | --- |
+| `createExcalidrawAdapter()` | `{ elements, appState? }` | Excalidraw |
+| `createTldrawAdapter()` | `{ snapshot }` — records plus schema | tldraw |
+| `createTextAdapter()` | `string` | a textarea, Monaco, anything plain |
+
+The tldraw adapter stores what `createTLStore({ snapshot })` needs to rehydrate, so any peer can
+rebuild the board from the document alone. The text adapter falls back to reading a `Y.Text` at the
+same key when no plain value is there, so it interoperates with a document another editor wrote.
+
+```tsx
+function Whiteboard({ id }: { id: string }) {
+  const { state, update, status } = useCollabEditor({
+    docName: `whiteboards/${id}`,
+    editorId: 'excalidraw',
+    adapter: createExcalidrawAdapter(),
+  })
+
+  return (
+    <Excalidraw
+      initialData={{ elements: state.elements, appState: state.appState }}
+      viewModeEnabled={status !== 'connected'}
+      onChange={(elements, appState) => update({ elements: [...elements], appState })}
+    />
+  )
+}
+```
+
+<Callout type="warn" title="This is whole-scene replacement, not fine-grained merging">
+`update(next)` writes the entire scene into the key. Two people dragging different shapes at the
+same instant produce two whole-scene writes, and the later one wins — the CRDT converges, but on the
+scene as a unit rather than per shape.
+
+For a canvas that is usually fine: edits are visible, people work in different regions, and the
+[peer cursors](/docs/collaboration/concepts/presence) keep them out of each other's way. For a
+surface where per-item concurrency genuinely matters, model the items as their own keys and write
+an adapter that does — or bind the editor to Yjs types directly with
+[`useCollabDoc`](/docs/collaboration/client/sessions).
+</Callout>
+
+## Writing an adapter
+
+The interface is two methods:
+
+```ts
+interface CollabEditorAdapter<S> {
+  empty(): S
+  create(doc: CollabDoc, editorId: string): { state: S; update(next: S): void }
+}
+```
+
+`CollabDoc` is the seam that keeps adapters engine-independent — `read`, `write`, `onUpdate`, and
+nothing else:
+
+```ts title="app/components/collab/kanban_adapter.ts"
+import type { CollabEditorAdapter, CollabDoc } from '@adonis-agora/collaboration-client'
+
+export interface KanbanBoard {
+  columns: { id: string; title: string; cardIds: string[] }[]
+  cards: Record<string, { id: string; title: string }>
+}
+
+export function createKanbanAdapter(): CollabEditorAdapter<KanbanBoard> {
+  const empty = (): KanbanBoard => ({ columns: [], cards: {} })
+
+  return {
+    empty,
+    create: (doc: CollabDoc, editorId: string) => ({
+      get state() {
+        return doc.read<KanbanBoard>(editorId) ?? empty()
+      },
+      update(next) {
+        doc.write(editorId, next)
+      },
+    }),
+  }
+}
+```
+
+Two rules. `state` must be a **getter**, not a captured value — the hook re-reads it on every
+document update, and a snapshot taken at `create` time would never change. And `empty()` must return
+a valid scene, because it is what a brand-new document looks like.
+
+The hook caches the snapshot by serialized equality, so returning a freshly built object from
+`state` on every read does not cause a render loop. Keep the scene JSON-serializable and that stays
+true.
+
+## Adapter or raw document?
+
+**Use an adapter** when the editor hands you a whole scene and takes one back — Excalidraw, tldraw,
+a form, a board. The component ends up with no CRDT in it at all.
+
+**Use [`useCollabDoc`](/docs/collaboration/client/sessions)** when the editor has its own CRDT
+binding — Tiptap, ProseMirror, CodeMirror. Those bind to Yjs types directly and give you
+character-level merging and live cursors, which no scene-replacement adapter can match. See
+[Tiptap collaboration](/docs/collaboration/advanced/tiptap-integration).

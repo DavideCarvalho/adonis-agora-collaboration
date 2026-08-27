@@ -1,17 +1,113 @@
 ---
 title: Automerge
-description: A JSON-like CRDT document with native change-graph history.
+description: A JSON-like CRDT document with a native change graph — the wire protocol, the dedicated useAutomergeDoc hook, why it cannot back a Y.Doc, and the single-instance constraint.
 icon: Database
 ---
 
-# Automerge
+import { Callout } from 'fumadocs-ui/components/callout';
 
-The server keeps one `A.Doc` per room and broadcasts saved binaries; clients merge via the Automerge CRDT. **History is native** — every change produces a hash, so versions are markers over the real graph rather than full snapshots.
+Automerge models a document as **JSON you mutate inside a callback**. Every mutation produces a
+change with a hash, and the accumulated changes *are* the history — no snapshot mechanism bolted on
+top. That native graph is the reason to choose it.
 
-```ts
-// client
-const { doc, status, error, change } = useAutomergeDoc({ docName: 'fichas/1' })
-change((d) => { d.content = 'edited' })
+```ts title="config/collaboration.ts"
+documents: {
+  'forms/:id': defineDocument<{ id: string }>({
+    engine: 'automerge',
+    async authorize(ctx, { params }) { /* ... */ },
+  }),
+}
 ```
 
-**Choose Automerge when** the document is structured data (nested JSON you reason about). Automerge cannot back a `Y.Doc` — so no Tiptap, no awareness-based canvas. See the note in [Engines overview](/docs/collaboration/engines): a whiteboard is usually better served by Yjs.
+## The wire protocol
+
+Deliberately simple, and worth knowing because it explains the trade-offs:
+
+1. the client opens `ws://…?doc=<name>&token=<token>`;
+2. the server sends the **whole saved document** as a binary on connect;
+3. after a local change the client sends its whole saved document back, debounced;
+4. the server merges it into the room's document and re-broadcasts to the other peers.
+
+Full-document exchange rather than incremental deltas. Automerge compresses well, so this is fine
+for the structured documents it is meant for and unsuited to a 500-page manuscript.
+
+## The client hook
+
+Automerge documents get **their own hook**, not `useCollabDoc`:
+
+```tsx
+import { useAutomergeDoc } from '@adonis-agora/collaboration-client'
+
+interface Ficha extends Record<string, unknown> {
+  content: string
+  tags: string[]
+}
+
+function FichaEditor({ id }: { id: string }) {
+  const { doc, status, error, change } = useAutomergeDoc<Ficha>({ docName: `fichas/${id}` })
+
+  if (!doc) return <p>Loading…</p>
+
+  return (
+    <textarea
+      value={doc.content}
+      disabled={status !== 'connected'}
+      onChange={(event) => change((draft) => { draft.content = event.target.value })}
+    />
+  )
+}
+```
+
+`change(fn)` mutates a draft, applies it locally so the UI updates immediately, and schedules the
+debounced send. `doc` is `null` until the first server payload lands — render a loading state rather
+than reaching into it.
+
+<Callout type="warn" title="useCollabDoc throws on an Automerge document">
+`useCollabDoc` returns a `Y.Doc`, and an Automerge document is a fundamentally different structure —
+there is no honest way to hand one back as the other. Pointing `useCollabDoc` at a document the
+server resolves to `automerge` fails with a clear error instead of silently returning an empty
+document. Two hooks, chosen by engine — this is the one seam the library deliberately does not
+unify.
+</Callout>
+
+Both hooks live under the same `CollaborationProvider`, so a page with a Yjs body and an Automerge
+sidebar is fine — each hook opens the document it names.
+
+## What you give up
+
+- **No rich-text editor.** Tiptap, ProseMirror and CodeMirror all bind to Yjs types. Automerge has
+  no equivalent binding here.
+- **No awareness.** There is no cursor channel in this protocol, so `useAwareness` has nothing to
+  read for an Automerge document. Server-side [presence](/docs/collaboration/concepts/presence) still
+  works, since it is fed by the connection lifecycle rather than the protocol.
+- **No multi-instance broadcast.** Rooms live in one process's memory and fan out to the sockets that
+  process holds. Two Node instances mean two divergent copies. Automerge documents need a single
+  instance, or sticky routing that guarantees one — see
+  [Production](/docs/collaboration/production).
+
+## Versions
+
+`createVersion` records the document's **heads** — the hashes identifying its exact state — as the
+version id, and stores the saved document alongside so a restore is one load rather than a replay.
+`restoreVersion` applies the old content as a compensating change: non-destructive, and visible to
+every connected client immediately. See [Versions](/docs/collaboration/concepts/versions).
+
+Because the id is the heads, a version id is meaningful outside the library: it identifies a state
+Automerge itself can reason about.
+
+## Reading server-side
+
+`getDocumentText` returns the document's `content` field as a string — the convention this driver
+assumes for a text-bearing Automerge document. Anything else in the document is yours to read
+through the raw state:
+
+```ts
+const bytes = await collaboration.current.getDocumentState({ docName })
+```
+
+## When to use it
+
+Reach for Automerge when the document is **structured data several clients mutate** — a shared form,
+a configuration object, a records board — and the native change graph is worth more than the editor
+bindings. For anything a person types prose into or points at with a cursor,
+[Yjs](/docs/collaboration/engines/yjs) is the better answer.

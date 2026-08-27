@@ -1,0 +1,152 @@
+---
+title: Troubleshooting
+description: The symptoms that actually happen — stuck connections, silent divergence, disappearing edits, empty presence, restores that do nothing — and how to tell the causes apart quickly.
+icon: LifeBuoy
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Sorted by how often they come up.
+
+## The client never leaves `connecting`
+
+Almost always authorization, and almost always a pattern that does not match.
+
+Check in this order:
+
+1. **Call `authorize` directly** with the exact document name the client asked for. The manager
+   resolves the same way the handshake does:
+
+   ```ts
+   const permission = await collaboration.current.authorize({ userId: '42' }, 'researches/42/writing')
+   console.log(permission) // { canRead: false, ... } → this is your bug
+   ```
+
+2. **Check the pattern's segment count.** The matcher is exact: `researches/:id/writing` matches
+   `researches/42/writing` and **not** `researches/42/writing/draft`. A different shape needs its own
+   entry.
+
+3. **Confirm you wrote a rule at all.** No matching pattern and no global `authorize` means
+   [deny](/docs/collaboration/concepts/authorization) — by design, and silently.
+
+4. **Check the token response.** `GET /collaboration/token?doc=…` returning `403` confirms
+   authorization; `401` means no user was resolved (your auth middleware did not run, or
+   `routes.resolveUser` needs configuring); `400` means the `doc` param is missing.
+
+## `401` from the token endpoint on a request that is clearly logged in
+
+`routes.resolveUser` defaults to reading `ctx.auth.user`, which is only populated when
+`@adonisjs/auth`'s middleware ran **on that route**. Auto-registered routes get no middleware unless
+you give them some:
+
+```ts title="config/collaboration.ts"
+routes: {
+  middleware: [middleware.auth()],
+  // or, if your user is not at ctx.auth.user:
+  resolveUser: (ctx) => ({ id: String(ctx.currentUser.id), name: ctx.currentUser.name }),
+}
+```
+
+## Edits from another user never arrive
+
+The document is open in more than one process. See
+[Production](/docs/collaboration/production) — you need sticky routing keyed on the **document
+name**, one collaboration instance, or an edge engine.
+
+Quick confirmation: scale to one instance. If the problem disappears, that was it.
+
+Routing by client IP or session is not enough. Two users editing the same document are two different
+clients and will be routed independently.
+
+## Edits are lost on deploy or restart
+
+The last debounce window never flushed. Two causes:
+
+- **`storage` is not configured.** Everything went to memory and evaporated. There is no warning —
+  check your config first.
+- **The shutdown was not graceful.** A `SIGKILL` skips the flush. Raise the termination grace period
+  so the process has time to finish.
+
+## Restoring a version changes nothing
+
+`loadVersionSnapshot` is returning the current document instead of the version's bytes. With the
+bundled storages that does not happen; with a [custom backend](/docs/collaboration/storage/custom)
+it is the classic mistake, because there is no error — restore succeeds and the document is
+unchanged, and `diffVersions` reports `{ added: 0, removed: 0 }` between any two versions.
+
+```ts
+// The test that catches it
+await storage.saveDocument('doc/1', bytesA)
+await storage.saveVersion('doc/1', version, bytesA)
+await storage.saveDocument('doc/1', bytesB)
+assert.deepEqual(await storage.loadVersionSnapshot('doc/1', version.id), bytesA) // not bytesB
+```
+
+## `useCollabDoc` throws about the engine
+
+The server resolved this document to `automerge`, which cannot back a `Y.Doc`. Use
+[`useAutomergeDoc`](/docs/collaboration/engines/automerge) — or fix the routing if the document was
+meant to be Yjs. Check what the server actually decided:
+
+```ts
+await collaboration.current.engineFor({ docName })
+```
+
+Remember that `engineFor` in config **overrides** per-document `engine` declarations, so a broad
+function can quietly capture a document you thought was declared.
+
+## `listPresence` always returns an empty array
+
+`redisUrl` is not set. Without it there is no server-side roster and the call returns `[]` rather
+than throwing. Set it, or use [`useAwareness`](/docs/collaboration/concepts/presence) if the
+question can be answered from the browser.
+
+## The presence roster shows fewer people than are in the document
+
+The server-side roster tracks one entry per document connection, so several simultaneous editors
+collapse into one and a disconnect can clear the wrong entry. Use `listPresence` for *is anyone in
+here* and `useAwareness` for the accurate list of who.
+
+## Undo removes someone else's text
+
+ProseMirror's history is still enabled. `StarterKit.configure({ history: false })` — see
+[Tiptap collaboration](/docs/collaboration/advanced/tiptap-integration). It only reproduces with two
+people in the document, which is why it usually reaches production.
+
+## Constant disconnect/reconnect cycling
+
+A proxy is closing the idle WebSocket. Raise `proxy_read_timeout` (nginx), the idle timeout (ALB), or
+the equivalent — the reconnect loop is the library correctly recovering from a socket someone else
+closed.
+
+If it cycles every few seconds rather than every few minutes, look at the token instead: a
+[`403` on reissue](/docs/collaboration/routes/token-flow) after a permission change produces the same
+shape.
+
+## A read-only user can still edit
+
+Their edits are being dropped, but the UI never told them. `canWrite: false` makes the connection
+[read-only](/docs/collaboration/concepts/authorization) — the server ignores their updates while
+still sending them everyone else's, so locally the text moves and then snaps back.
+
+That is the enforcement working; what is missing is the UI. Gate the editor on the permission
+(`editable={canWrite}`) so the user is not offered an action that will be refused.
+
+## Comments do not appear for another user
+
+They are REST-backed and **not live** — they load on mount and on `refresh()`. Trigger a refresh
+from whatever signal you already have; see
+[Comments & versions](/docs/collaboration/client/comments-and-versions).
+
+## Column-not-found errors from the storage
+
+The tables were created by a schema that does not match the one the storage queries — usually
+migrations from an older install. Compare the live schema against the published migrations and
+reconcile; the table names are `collab_documents`, `collab_versions` and `collab_comments`.
+
+<Callout title="When nothing here fits">
+Reduce to the smallest failing case: one process, in-memory storage, an `authorize` that returns
+`{ canRead: true, canWrite: true, canComment: true }`, two tabs. If that works, add back one piece
+at a time — storage, then authorization, then the second instance. The layer where it breaks is the
+answer.
+</Callout>

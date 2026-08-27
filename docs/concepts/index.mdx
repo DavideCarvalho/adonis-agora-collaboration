@@ -1,29 +1,43 @@
 ---
 title: Concepts
-description: The core ideas — CRDTs, documents, versions, comments and presence — and how they compose.
-icon: BookOpen
+description: The four ideas the library is built on — the document as the unit of everything, convergence as a property of the data structure, one permission seam enforced on both paths, and the line between CRDT state and ordinary data.
+icon: Lightbulb
 ---
 
-# Concepts
-
-The library is built on a few ideas that compose. Read them in order.
+Four ideas carry the whole library. Everything else in these docs is a consequence of one of them.
 
 ## The document is the unit
 
-Everything revolves around a **document**, identified by a name such as `researches/42/writing`. The name drives engine routing, authorization and persistence.
+Everything is keyed by a **document name** — a path-like string such as
+`researches/42/writing`. That single string decides which CRDT engine syncs it, which
+authorization rule guards it, which row it persists to, which comment threads belong to it, and who
+counts as present in it. There is no other identifier, and there is no document registry to keep in
+sync: a name that matches a declared pattern is a document, and one that doesn't falls through to
+the global rule. See [Documents](/docs/collaboration/concepts/documents).
 
-## The engine owns conflict resolution
+## Convergence is structural, not arbitrated
 
-A **CRDT** guarantees replicas converge. Which engine (Yjs or Automerge) shapes the data model your UI edits.
+Two people editing the same paragraph is not a conflict the server resolves — it is a merge the
+**data structure** defines. A CRDT guarantees that replicas which have seen the same operations,
+in any order, hold the same state. That is why there is no "last write wins", no locking, and no
+server opinion about whose edit was real. The library's job shrinks to moving bytes and persisting
+them. See [CRDTs](/docs/collaboration/concepts/crdt).
 
-## Versions, comments and presence are layered
+## One permission seam, crossed twice
 
-On top of the live document, the library adds named **versions**, **anchored comments** per space, and **presence** (peer-to-peer awareness plus Redis-backed cross-instance counts).
+A browser cannot attach an `Authorization` header to a WebSocket handshake, so the client asks for
+a short-lived credential over REST first. That gives an attacker two doors to try — and the
+library puts the **same `authorize` callback** behind both of them. It is also **fail-closed**: a
+document matching no rule is denied, not allowed. See
+[Authorization](/docs/collaboration/concepts/authorization).
 
-## Deep dives
+## CRDT state and ordinary data are different things
 
-- [CRDTs](/docs/collaboration/concepts/crdt)
-- [Documents](/docs/collaboration/concepts/documents)
-- [Versions](/docs/collaboration/concepts/versions)
-- [Comments](/docs/collaboration/concepts/comments)
-- [Presence](/docs/collaboration/concepts/presence)
+The shared content lives in the CRDT because many people write it concurrently. Comments, named
+versions and the presence roster do not: they are created one at a time, they need to be queried,
+filtered and joined, and they need permission checks that a merge algorithm cannot express. So
+they live in your database and travel over REST, alongside the document rather than inside it. The
+consequence you feel day to day: comments keep working while the WebSocket is down, and a version
+is a row you can list without materializing the document. See
+[Versions](/docs/collaboration/concepts/versions), [Comments](/docs/collaboration/concepts/comments)
+and [Presence](/docs/collaboration/concepts/presence).

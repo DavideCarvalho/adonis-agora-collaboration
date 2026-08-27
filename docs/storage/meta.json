@@ -1,1 +1,5 @@
-{ "title": "Storage", "icon": "Database", "pages": ["lucid"] }
+{
+  "title": "Storage",
+  "icon": "Database",
+  "pages": ["index", "lucid", "custom"]
+}

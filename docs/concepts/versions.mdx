@@ -1,19 +1,114 @@
 ---
 title: Versions
-description: Named checkpoints in document history — snapshots on Yjs, native change graph on Automerge.
+description: Named checkpoints over a live document — how a version is created, listed, restored into the running session and diffed, and why Yjs snapshots and Automerge's change graph answer the same API differently.
 icon: History
 ---
 
-# Versions
+import { Callout } from 'fumadocs-ui/components/callout';
 
-Every document can be **versioned**: create a named checkpoint, list history, restore a previous state, diff two versions.
+A CRDT gives you a document that always converges. It does not give you the thing users actually
+ask for: *"take me back to how this looked before the review"*. That is a **version** — a named
+checkpoint you create deliberately, list, restore, and compare.
 
-- **Yjs** — `createVersion` stores a full binary snapshot; `restoreVersion` swaps the live document and connected clients converge in real time.
-- **Automerge** — history is native (every change has a hash); a version is a marker over the change graph.
+## The API
 
-One API hides both:
+Four calls, identical on every engine:
+
+```ts title="app/services/writing_service.ts"
+import collaboration from '@adonis-agora/collaboration/services/main'
+
+const manager = collaboration.current
+
+const version = await manager.createVersion({
+  docName: 'researches/42/writing',
+  createdBy: user.id,
+  label: 'before review',
+})
+// → { id, seq: 3, label: 'before review', createdBy, createdAt }
+
+const history = await manager.listVersions({ docName })
+const summary = await manager.diffVersions({ docName, aId: history[0].id, bId: version.id })
+// → { added: 12, removed: 4 }
+
+await manager.restoreVersion({ docName, versionId: version.id, restoredBy: user.id })
+```
+
+A version carries a `seq` alongside its `id` — a friendly 1, 2, 3… computed from the versions that
+already exist, so a UI can say "Version 3" without exposing a UUID. The `id` is the one you pass
+back to `restoreVersion` and `diffVersions`.
+
+From the client, the same operations are a hook away:
+
+```tsx
+const { versions, loading, create, restore, refresh } = useVersions({ docName })
+
+await create('before review')
+await restore(versions[0].id)
+```
+
+## Restoring is a live edit, not a rollback
+
+This is the part that surprises people. `restoreVersion` does not swap a row and ask everyone to
+reload. It **applies the old content to the live document inside a transaction** — which means it
+travels to every connected client through the same sync protocol as any other edit.
+
+Three consequences worth planning for:
+
+- **Everyone sees it immediately.** No refresh, no stale tab. Someone mid-sentence watches the
+  paragraph change under their cursor.
+- **It is not destructive to the history.** The restore is a new state on top of the existing
+  document, so the versions you already created still exist and still restore. There is no "the
+  future was deleted".
+- **It is not transactional against concurrent typing.** An edit landing in the same instant merges
+  with the restored content, because that is what the CRDT does. In practice: put a confirmation in
+  front of the button, and tell the room it is happening.
+
+<Callout title="Snapshot first, restore second">
+The idiomatic move before restoring is to create a version of the *current* state, so the restore
+itself is undoable:
 
 ```ts
-const v = await manager.createVersion({ docName, createdBy: userId, label: 'before review' })
-await manager.restoreVersion({ docName, versionId: v.id, restoredBy: userId })
+await manager.createVersion({ docName, createdBy: user.id, label: 'before restore' })
+await manager.restoreVersion({ docName, versionId, restoredBy: user.id })
 ```
+</Callout>
+
+## How each engine answers
+
+The API is uniform; the mechanism underneath is not, and the difference shows up in storage cost.
+
+**Yjs** has no built-in history, so the driver adds one: `createVersion` encodes the full document
+state and stores those bytes as the snapshot. Restoring hydrates a throwaway document from the
+snapshot and applies its content to the live one. Diffing materializes both snapshots, extracts the
+text, and reports a line-level `{ added, removed }` summary.
+
+Cost: every version is roughly the size of the document. A 200 KB document with 50 versions is
+10 MB. That is fine for deliberate, user-created checkpoints and ruinous for an automatic version
+every thirty seconds — see [Production](/docs/collaboration/production). Versioning is a feature you
+expose to users, not a background job.
+
+**Automerge** has history natively: every change carries a hash, and the change graph *is* the
+history. A version's `id` is therefore not a generated UUID but the document's **heads** at that
+moment — the hashes that identify the state exactly. The driver still saves the document's bytes
+alongside it, so restoring stays a single load rather than a replay of the graph, and Automerge's
+compression keeps that cheaper than the equivalent Yjs snapshot.
+
+| | Yjs | Automerge |
+| --- | --- | --- |
+| A version's `id` | a generated UUID | the document's heads at that moment |
+| The stored snapshot | the full encoded state | the full saved document (compressed) |
+| Restore | applies the snapshot's content into the live document | applies the snapshot's content as a compensating change |
+| `diffVersions` | line-level over the extracted text | line-level over the extracted text |
+
+Both restores are **non-destructive** — they move the document forward to look like the old state,
+they do not rewind history.
+
+## Where they persist
+
+Versions live in `collab_versions` (metadata) with their snapshot bytes, through the
+[storage backend](/docs/collaboration/storage) — the same interface that persists the document
+itself. They are ordinary rows: queryable, joinable, backup-able, and readable without waking the
+document up.
+
+Deleting a version is not part of the manager API. If a retention policy matters to you, prune
+`collab_versions` directly and treat the storage interface as the contract you are honouring.

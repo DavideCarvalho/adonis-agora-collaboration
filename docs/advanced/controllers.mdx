@@ -1,107 +1,191 @@
 ---
 title: Custom controllers
-description: Disable auto-registration and build the collaboration REST surface yourself — full control over routes, middleware and response shapes.
+description: Take over the HTTP surface without losing the library's token semantics — the three levels of control, a complete working controller, and the authorization the built-in routes do not do for you.
 icon: Route
 ---
 
-# Custom controllers
+import { Callout } from 'fumadocs-ui/components/callout';
 
-When you want total control over the HTTP surface — different routes, custom middleware, specific response shapes, or a versioned API — you can take over the REST layer entirely. The library still owns the hard parts (CRDT sync, storage, versions, comments); you own the controllers.
+The built-in routes are ordinary Adonis routes, which is why most apps never think about them. When
+you do need to think about them, there are three levels, and only the third means writing
+controllers.
 
-## 1. Disable auto-registration
+## Level one — change the wrapper
 
-```ts
-// config/collaboration.ts
+Prefix, middleware and user resolution are config. This is enough for the large majority of cases,
+including putting your auth middleware in front of every collaboration endpoint:
+
+```ts title="config/collaboration.ts"
+routes: {
+  prefix: '/api/collab',
+  middleware: [middleware.auth(), middleware.tenant()],
+  resolveUser: (ctx) => ({ id: String(ctx.auth.user!.id), name: ctx.auth.user!.fullName }),
+}
+```
+
+## Level two — register them yourself
+
+Disable auto-registration and call `collaborationRoutes` where you want it in `start/routes.ts` —
+inside an existing group, behind a version prefix, next to your other API routes:
+
+```ts title="config/collaboration.ts"
 routes: { enabled: false }
 ```
 
-The provider keeps booting the WebSocket and the manager; only the built-in REST routes are skipped.
+```ts title="start/routes.ts"
+import router from '@adonisjs/core/services/router'
+import { collaborationRoutes } from '@adonis-agora/collaboration'
+import { middleware } from '#start/kernel'
 
-## 2. Your controller
+router.group(async () => {
+  await collaborationRoutes(router, {
+    prefix: '/collab',
+    middleware: [middleware.auth()],
+  })
+}).prefix('/api/v2')
+```
 
-The `CollaborationManager` is available from the container as a singleton. A typical controller delegates to it:
+The provider still boots the manager and attaches the WebSocket — only the route registration is
+skipped.
 
-```ts
-// app/controllers/collaboration_controller.ts
+## Level three — write the controllers
+
+Now you own the handlers. The library still owns sync, storage, versions and comments; you own the
+HTTP shape.
+
+```ts title="config/collaboration.ts"
+routes: { enabled: false }
+```
+
+```ts title="app/controllers/collaboration_controller.ts"
 import { inject } from '@adonisjs/core'
-import { HttpContext } from '@adonisjs/core/http'
-import { CollaborationManager } from '@adonis-agora/collaboration'
-import { issueToken } from '@adonis-agora/collaboration'
+import type { HttpContext } from '@adonisjs/core/http'
+import {
+  CollabForbiddenError,
+  CollaborationManager,
+  issueToken,
+} from '@adonis-agora/collaboration'
+import app from '@adonisjs/core/services/app'
 
 @inject()
 export default class CollaborationController {
   constructor(private collaboration: CollaborationManager) {}
 
-  /** WebSocket credential for a document. */
+  /** A WebSocket credential for a document. */
   async token({ request, response, auth }: HttpContext) {
-    const docName = request.qs().doc as string
-    if (!docName) return response.badRequest({ error: 'doc required' })
+    const docName = request.qs().doc as string | undefined
+    if (!docName) return response.badRequest({ error: 'doc is required' })
 
+    const config = app.config.get<{ path?: string; partykit?: unknown }>('collaboration', {})
     const engine = await this.collaboration.engineFor({ docName })
-    const token = await issueToken(
-      { engine, partykit: this.collaborationConfig?.partykit },
-      { id: String(auth.user!.id) },
-      docName,
-      this.authorize,          // your policy, with the docName in hand
-    )
-    return { token, wsUrl, engine }
+
+    try {
+      return await issueToken(
+        { engine, path: config.path, partykit: config.partykit as never },
+        { id: String(auth.user!.id), name: auth.user!.fullName },
+        docName,
+        // The manager's resolution, NOT your own copy of the global callback —
+        // this is what keeps per-document rules applying.
+        (ctx, doc) => this.collaboration.authorize(ctx, doc),
+      )
+    } catch (error) {
+      if (error instanceof CollabForbiddenError) return response.forbidden({ error: error.message })
+      throw error
+    }
   }
 
-  /** Comments, versions, presence — delegate to the manager. */
-  async listComments({ request }: HttpContext) {
-    const { doc, space } = request.qs()
-    return this.collaboration.comments.list(String(doc), space ? String(space) : undefined)
+  /** Comments — with the permission check the built-in routes do not make. */
+  async listComments({ request, response, auth }: HttpContext) {
+    const { doc, space } = request.qs() as { doc?: string; space?: string }
+    if (!doc) return response.badRequest({ error: 'doc is required' })
+
+    const permission = await this.collaboration.authorize({ userId: String(auth.user!.id) }, doc)
+    if (!permission.canRead) return response.forbidden({ error: 'no access to this document' })
+
+    return this.collaboration.comments.list(doc, space)
+  }
+
+  async createComment({ request, response, auth }: HttpContext) {
+    const body = request.body()
+    const permission = await this.collaboration.authorize(
+      { userId: String(auth.user!.id) },
+      body.docName,
+    )
+    if (!permission.canComment) return response.forbidden({ error: 'commenting is not allowed' })
+
+    return this.collaboration.comments.create(body.docName, {
+      space: body.space,
+      anchor: body.anchor,
+      body: body.body,
+      userId: String(auth.user!.id),   // from the session, never from the request
+      authorName: auth.user!.fullName,
+    })
   }
 
   async createVersion({ request, auth }: HttpContext) {
     const { docName, label } = request.body()
-    return this.collaboration.createVersion({ docName, createdBy: String(auth.user!.id), label: label ?? null })
+    return this.collaboration.createVersion({
+      docName,
+      createdBy: String(auth.user!.id),
+      label: label ?? null,
+    })
   }
 
   async presence({ request }: HttpContext) {
-    const { doc } = request.qs()
-    return this.collaboration.listPresence({ docName: String(doc) })
+    return this.collaboration.listPresence({ docName: String(request.qs().doc) })
   }
 }
 ```
 
-> `issueToken` is exported so you keep the exact same token semantics (JWT for edge, base64 for self-hosted) even with your own route.
-
-## 3. Your routes and middleware
-
-```ts
-// start/routes.ts
-import router from '@adonisjs/core/services/router'
-
+```ts title="start/routes.ts"
 const Collaboration = () => import('#controllers/collaboration_controller')
 
 router
   .group(() => {
     router.get('/token', [Collaboration, 'token'])
     router.get('/comments', [Collaboration, 'listComments'])
+    router.post('/comments', [Collaboration, 'createComment'])
     router.post('/versions', [Collaboration, 'createVersion'])
     router.get('/presence', [Collaboration, 'presence'])
   })
   .prefix('/api/collab')
-  .middleware([authMiddleware, tenantMiddleware])   // your guards
+  .use([middleware.auth(), middleware.tenant()])
 ```
 
-## Trade-offs
+## The three details that matter
 
-**Take control when:** you need a versioned API, non-standard routes, response shapes your frontend already depends on, or guards that differ per route.
+**Use `issueToken`, do not hand-roll it.** It picks the right wire format for the engine (base64
+for self-hosted, a signed JWT for the edge), builds the `wsUrl`, and enforces `canRead`. Writing
+your own means a token the driver or the worker will not accept.
 
-**Stay with the defaults when:** the built-in routes are fine — they are ordinary routes, so Tuyau types them and you can still protect them via `routes.middleware`. The manual path adds surface you must test and version yourself.
+**Pass the manager's `authorize`, not the config's.** `this.collaboration.authorize(ctx, docName)`
+resolves declared documents first and falls back to the global callback — handing `issueToken` your
+raw `config.authorize` silently skips every per-document rule.
 
-## Midpoint: `collaborationRoutes` with options
+**Take `userId` from the session, never from the request body.** Anything a client sends about who
+it is, it can lie about. The built-in routes attribute a comment to the authenticated caller and
+ignore a body-supplied `userId`; a controller of your own should do the same.
 
-Between full defaults and full control, you can keep the built-in routes but change prefix and middleware:
+<Callout title="The built-in routes already guard themselves">
+Every built-in route resolves the caller and checks the matching permission — `canRead` to read,
+`canWrite` for versions, `canComment` for comments — before touching anything. See
+[Authorization](/docs/collaboration/concepts/authorization). The controller above reproduces that by
+hand, which earns its keep when you need a different response shape or an extra rule, and is pure
+duplication when you do not. Reach for level three for the surface, not for the guard.
+</Callout>
 
-```ts
-import { collaborationRoutes } from '@adonis-agora/collaboration'
+## What you keep either way
 
-collaborationRoutes(router, {
-  prefix: '/api/collab',
-  middleware: [authMiddleware],
-  resolveUser: (ctx) => ({ id: String(ctx.auth!.user!.id) }),
-})
-```
+Taking over HTTP does not fork the library. The WebSocket still runs, `authorize` still guards the
+handshake, storage still persists, the manager still resolves engines per document, and the client
+hooks still work — as long as your routes answer the same shapes. Point the client at your prefix
+with `baseUrl`, or keep the paths and change only the guards.
+
+## The trade
+
+**Take control when** you need per-route guards, a versioned API, a response shape a frontend
+already depends on, or an authorization check the built-ins do not make.
+
+**Stay with the defaults when** the built-in routes fit. They are ordinary routes: Tuyau types
+them, `routes.middleware` protects them, and `routes.prefix` moves them. Every controller you write
+is one more thing to test and keep in sync when the library's shapes evolve.

@@ -1,41 +1,206 @@
 ---
 title: Collaboration
-description: Collaborative editing (CRDT) for AdonisJS — Yjs/Automerge/edge engines, Redis presence, version control, anchored comments, codegen and React client hooks.
+description: Real-time collaborative editing for AdonisJS — the shared document converges on its own through a CRDT, while versions, anchored comments and presence layer on top through ordinary authorized routes.
 icon: Users
 ---
 
-# Collaboration
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+import { Cards, Card } from 'fumadocs-ui/components/card';
 
-**Collaboration** is the Agora package that turns an AdonisJS app into a real-time, multi-user editing backend. It solves the hard parts of collaboration for you — CRDT conflict resolution, version history, anchored comments and presence — behind one uniform API, and ships the React hooks to consume it.
+**`@adonis-agora/collaboration`** turns an AdonisJS app into a real-time, multi-user editing
+backend. Two people type in the same paragraph, drag the same shape on the same canvas, and both
+edits survive — not because a server arbitrated them, but because the data structure itself has a
+merge with no losing side. The library owns the sync engine, the persistence, the version history,
+the anchored comments and the presence, and ships the React hooks that consume all of it.
+
+<Callout type="info" title="The one rule">
+The **CRDT holds the shared content, and nothing else**. Text, shapes, cell values — anything two
+people edit at once — lives in the document and converges without a server opinion. Everything
+around it — who may open the document, the named versions, the comment threads, who is online —
+is ordinary authorized data in *your* database, reached over REST. Putting comments inside the
+CRDT, or reading the live document out of a table, is the mistake this split exists to prevent.
+See [Concepts](/docs/collaboration/concepts).
+</Callout>
+
+## The problem it solves
+
+Real-time editing looks like one feature and is actually five, each with its own failure mode: a
+sync protocol, a persistence story that doesn't lose the last thirty seconds, a permission check
+that holds on a WebSocket handshake (where you cannot send headers), a history you can name and
+roll back to, and a way to pin a comment to a range of text that keeps moving while someone else
+types. Wiring those five yourself means a Hocuspocus server, a hand-rolled token endpoint, a
+snapshot table, and a comment model that drifts out of sync with the document.
+
+`@adonis-agora/collaboration` collapses that into three guarantees:
+
+- **Convergence is the engine's job, not yours.** You pick `yjs` or `automerge`; the driver owns
+  the wire protocol, the merge and the debounced persistence. Your UI edits a scene or a rich-text
+  fragment — never a wire message.
+- **One permission seam, enforced on both paths.** `authorize(ctx, docName)` runs on the WebSocket
+  handshake *and* on the REST token issue, and it is **fail-closed**: a document that matches no
+  rule is denied. There is no path into a document that skips it.
+- **Versions, comments and presence come with it.** A named snapshot you can restore, comments
+  anchored to a text range or a canvas object, and a live peer list — all persisted through one
+  storage interface and exposed through routes Tuyau already types.
+
+## Quickstart
+
+The minimal loop — install, authorize, mount an editor — with zero infrastructure: the embedded
+Yjs engine and the in-memory store. Swap in [Lucid storage](/docs/collaboration/storage/lucid) and
+Redis presence when you go to production. For the full walkthrough, see
+[Getting started](/docs/collaboration/getting-started).
+
+<Steps>
+<Step>
+
+Install and configure the package:
+
+```bash
+node ace add @adonis-agora/collaboration
+```
+
+This registers the provider and the ace commands in `adonisrc.ts`, wires the codegen hook, and
+publishes `config/collaboration.ts`.
+
+</Step>
+<Step>
+
+Fill in `authorize`. The published config throws until you do — the library never grants access by
+default:
+
+```ts title="config/collaboration.ts"
+import { defineConfig, defineDocument, lucidStorage } from '@adonis-agora/collaboration'
+import Research from '#models/research'
+
+export default defineConfig({
+  engine: 'yjs',
+  storage: lucidStorage({ connection: 'primary' }),
+
+  documents: {
+    'researches/:id/writing': defineDocument<{ id: string }>({
+      async authorize(ctx, { params }) {
+        const research = await Research.query()
+          .where('id', params.id)
+          .andWhere('owner_id', ctx.userId)
+          .first()
+
+        if (!research) return { canRead: false, canWrite: false, canComment: false }
+        return { canRead: true, canWrite: true, canComment: true }
+      },
+    }),
+  },
+})
+```
+
+The pattern's `:id` segment is extracted for you — no regex per connection, and the params are
+typed by the parameter you give `defineDocument`.
+
+</Step>
+<Step>
+
+Mount the provider once, near the root of the React tree. It owns one session — one `Y.Doc` and one
+transport — per document name, shared by every hook that asks for that name:
+
+```tsx title="app/pages/researches/writing.tsx"
+import { CollaborationProvider } from '@adonis-agora/collaboration-client'
+
+export default function WritingPage({ research }: { research: { id: string } }) {
+  return (
+    <CollaborationProvider baseUrl={window.location.origin}>
+      <WritingEditor researchId={research.id} />
+    </CollaborationProvider>
+  )
+}
+```
+
+</Step>
+<Step>
+
+Edit the shared document. `useCollabDoc` fetches the token, resolves the engine the server chose,
+opens the WebSocket and hands you the `Y.Doc` — Tiptap writes straight into it:
+
+```tsx title="app/components/writing_editor.tsx"
+import { useAwareness, useCollabDoc } from '@adonis-agora/collaboration-client'
+import Collaboration from '@tiptap/extension-collaboration'
+import { useEditor, EditorContent } from '@tiptap/react'
+
+export function WritingEditor({ researchId }: { researchId: string }) {
+  const docName = `researches/${researchId}/writing`
+  const { doc, status } = useCollabDoc({ docName })
+  const { peers } = useAwareness({ docName })
+
+  const editor = useEditor({
+    extensions: [StarterKit, Collaboration.configure({ document: doc })],
+    editable: status === 'connected',
+  })
+
+  return (
+    <>
+      <PeerAvatars peers={peers} />
+      <EditorContent editor={editor} />
+    </>
+  )
+}
+```
+
+Every keystroke is now a CRDT operation that syncs to every other open tab and persists on a
+debounce.
+
+</Step>
+</Steps>
+
+## How the pieces connect
+
+```text
+Browser ──GET /collaboration/token?doc=…──▶ authorize(ctx, docName)   ← the permission seam
+   │                                          │
+   │        { token, wsUrl, engine }  ◀────────┘
+   ▼
+Browser ──WebSocket──▶ engine transport ──▶ authorize(ctx, docName)   ← the same seam, again
+                          (Hocuspocus │ Automerge │ PartyKit at the edge)
+                              │
+                              ├── debounced persistence ──▶ CollaborationStorage
+                              └── join/leave ─────────────▶ presence (Redis)
+
+Browser ──REST──▶ /collaboration/comments · /versions · /versions/restore · /state
+```
+
+The client never hard-codes an engine. It asks for a token, the server answers with the engine that
+document belongs to, and the hook picks the matching transport. Switching a document from the
+embedded Yjs server to a PartyKit worker at the edge is a config change; the editor code does not
+move.
 
 ## What you get
 
-- **CRDT engines** that converge on their own: `yjs` (embedded Hocuspocus, best for rich text and canvases), `automerge` (structured JSON documents with native history), and edge engines (`partykit`/`partyserver`) that move the WebSocket to Cloudflare Workers.
-- **Per-document routing** — declare which engine and authorization each document type uses, and the library extracts params and resolves the right driver for you.
-- **Unified version control** — snapshots on Yjs, native change graph on Automerge, one API (`createVersion`, `restore`, `diff`).
-- **Anchored comments** per space (`text-range`, `canvas-object`, `timestamp`), persisted in your storage.
-- **Presence** — peer-to-peer awareness on the client, plus Redis-backed cross-instance presence on the server when you set `redisUrl`.
-- **Built-in REST routes** (token, comments, versions, state) that Tuyau types for you.
-- **Codegen** — ace commands plus a typed registry in `.adonisjs/` that stays in sync with your document files.
-- **React client hooks** — `useCollabDoc`, `useAwareness`, `useComments`, `useVersions`, and editor-agnostic `useCollabEditor` with Excalidraw/tldraw/text adapters.
+- **Two CRDT engines, one API.** `yjs` (embedded Hocuspocus — rich text, canvases, awareness) and
+  `automerge` (a JSON-like document with a native change graph). Both answer the same
+  `getDocumentState` / `createVersion` / `restoreVersion` calls.
+- **Edge deployment without a rewrite.** `partykit` / `partyserver` move the WebSocket to Cloudflare
+  Durable Objects; Adonis keeps owning the token, the storage and the permission check.
+- **Version control on either engine.** Name a checkpoint, list the history, restore it live — Yjs
+  through binary snapshots, Automerge over its own change graph.
+- **Comments anchored where they belong.** A text range, a canvas object, or a media timestamp —
+  persisted with the document, scoped to a **space** so a canvas and its transcript don't share a
+  thread list.
+- **Presence in two layers.** Peer-to-peer awareness for live cursors, plus a Redis-backed roster
+  that answers "who is in this document" across every Node instance.
+- **Typed end to end.** Document names become a union in `.adonisjs/`, and the built-in routes are
+  ordinary routes — so Tuyau types them for the frontend.
 
-## How it fits together
+## Where to go next
 
-```
-Browser ──useCollabDoc──► GET /collaboration/token ──► authorize(user, doc)
-                            │  { token, wsUrl, engine }
-                            ▼
-Browser ──WebSocket──► engine transport (Hocuspocus | Automerge | PartyKit edge)
-                            │
-              Adonis ── storage (Lucid) ── versions ── comments ── presence (Redis)
-```
-
-The client never hard-codes an engine: the server resolves it per document and the hooks pick the matching transport. Your UI edits a scene or a doc — not a wire protocol.
-
-## Navigation
-
-- [Getting started](/docs/collaboration/getting-started)
-- [Engines](/docs/collaboration/engines)
-- [REST routes](/docs/collaboration/routes)
-- [Codegen](/docs/collaboration/codegen)
-- [Client hooks](/docs/collaboration/client)
+<Cards>
+  <Card title="Getting started" href="/docs/collaboration/getting-started" description="Install, write config/collaboration.ts, authorize a document, and open your first shared editor." />
+  <Card title="Concepts" href="/docs/collaboration/concepts" description="The four ideas — the document as the unit, convergence, the permission seam, and what is CRDT versus what is data." />
+  <Card title="Engines" href="/docs/collaboration/engines" description="Yjs, Automerge and the edge engines — what each one is good at, and how a document picks one." />
+  <Card title="REST routes" href="/docs/collaboration/routes" description="The ten built-in endpoints: the token flow, comments, versions and binary state." />
+  <Card title="Storage" href="/docs/collaboration/storage" description="Where document states, versions and comments persist — Lucid, and writing your own backend." />
+  <Card title="Client hooks" href="/docs/collaboration/client" description="The provider, document sessions, awareness, comments, versions and editor adapters." />
+  <Card title="Codegen" href="/docs/collaboration/codegen" description="Ace commands and the typed document registry generated into .adonisjs/." />
+  <Card title="Advanced" href="/docs/collaboration/advanced" description="Take over the REST surface, or wire Tiptap onto the shared document." />
+  <Card title="Testing" href="/docs/collaboration/testing" description="Fake transports, in-memory storage, and proving authorize actually denies." />
+  <Card title="Production" href="/docs/collaboration/production" description="Multiple instances, sticky sessions, debounce, Redis presence and backup." />
+  <Card title="Troubleshooting" href="/docs/collaboration/troubleshooting" description="The symptoms that actually happen, and what causes each one." />
+  <Card title="API reference" href="/docs/collaboration/api-reference" description="Every config option, manager method, exported helper, route and hook — from source." />
+</Cards>

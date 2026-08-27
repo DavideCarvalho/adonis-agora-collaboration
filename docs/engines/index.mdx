@@ -1,31 +1,91 @@
 ---
 title: Engines
-description: How the CRDT engines work and how to choose per document.
+description: The CRDT backend behind a document — what a driver owns, how Yjs, Automerge and the edge engines compare, how a document picks one, and what changes in your code when it does.
 icon: Layers
 ---
 
-# Engines
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cards, Card } from 'fumadocs-ui/components/card';
 
-An engine is the CRDT backend that owns conflict resolution for a document. The library wraps each engine behind a driver and exposes one uniform API — state, versions, comments, presence.
+An **engine** is the CRDT backend that owns a document: its merge, its wire protocol, its debounced
+persistence and its version mechanism. The library wraps each one behind a **driver** and exposes
+the same manager API over all of them — `getDocumentState`, `getDocumentText`, `createVersion`,
+`restoreVersion`, `diffVersions` — so the engine is a config decision rather than an architectural
+one.
+
+Drivers are built **lazily, one per engine, on first use**. Configuring four engines and only ever
+opening Yjs documents means only the Yjs driver exists in memory.
 
 ## At a glance
 
-| Engine | Data model | History | Best for |
-|---|---|---|---|
-| `yjs` | Shared types + rich text | Snapshots | Text, Tiptap, Excalidraw/tldraw scenes |
-| `automerge` | JSON-like document | Native change graph | Structured documents, form-like data |
-| `partykit`/`partyserver` | Same as Yjs (edge) | Snapshots | Global latency, separate origin |
+| | `yjs` | `automerge` | `partykit` / `partyserver` |
+| --- | --- | --- | --- |
+| Where the socket lives | your Adonis process | your Adonis process | Cloudflare Durable Objects |
+| Data model | shared types — rich text, maps, arrays | a JSON-like document | same as Yjs, at the edge |
+| Rich-text editors | Tiptap, ProseMirror, CodeMirror | none | Tiptap, ProseMirror, CodeMirror |
+| Live cursors (awareness) | yes | no | yes |
+| History | binary snapshots the driver adds | native change graph | binary snapshots |
+| Client hook | `useCollabDoc` | `useAutomergeDoc` | `useCollabDoc` |
+| Runs behind >1 instance | with sticky sessions | no | yes, natively |
+| Extra deployment | none | none | a Worker you own |
 
-## Choosing per document
+## Choosing
 
-```ts
-engineFor: (docName) => (docName.startsWith('whiteboards/') ? 'automerge' : 'yjs')
+Start with **`yjs`**. It is the default, it has the editor bindings, it has awareness, and it is
+what the rest of these docs assume unless a page says otherwise.
+
+Reach for **`automerge`** when the document is structured JSON that several clients mutate — a
+form, a config object, a board of records — and you would rather have a native change graph than an
+editor binding you were never going to use. It cannot back a rich-text editor.
+
+Reach for the **edge engines** when latency across continents is the problem you are actually
+solving, and you are willing to own a Cloudflare Worker and a shared secret to fix it.
+
+<Callout type="warn" title="A whiteboard is usually still Yjs">
+The instinct to pick Automerge for a canvas is understandable — a scene *is* structured JSON — but
+Excalidraw and tldraw both want awareness for remote cursors, and the shipped editor adapters are
+built on the Yjs session. Automerge is for data you compute over, not for a surface people point at.
+</Callout>
+
+## How a document picks its engine
+
+Three ways, in the order the manager resolves them:
+
+```ts title="config/collaboration.ts"
+// 1. A sweeping function — wins outright, for every document
+engineFor: (docName) => (docName.startsWith('archives/') ? 'automerge' : 'yjs'),
+
+// 2. Per declared document type
+documents: {
+  'whiteboards/:id': defineDocument({ engine: 'automerge' }),
+},
+
+// 3. The global default (and the fallback when nothing else matches)
+engine: 'yjs',
 ```
 
-The client resolves the engine from `GET /collaboration/token` and picks the matching transport automatically.
+The client is never told which engine to use — it **asks**. `GET /collaboration/token?doc=…`
+answers with `{ token, wsUrl, engine }`, and the hook picks the transport that matches. Moving a
+document from the embedded Yjs server to a PartyKit worker is a config change plus a deploy; the
+editor component does not know it happened.
 
-## Deep dives
+## What stays the same when you switch
 
-- [Yjs (Hocuspocus)](/docs/collaboration/engines/yjs)
-- [Automerge](/docs/collaboration/engines/automerge)
-- [Edge](/docs/collaboration/engines/edge)
+Everything except the sync itself:
+
+- **Comments** live at `manager.comments` and never touch a driver, so they follow the document
+  across engines untouched.
+- **Storage** is one `CollaborationStorage` implementation shared by every driver — the same tables,
+  the same rows.
+- **Authorization** is resolved by the manager before any driver is involved.
+- **Versions** answer the same four calls, with the mechanism differing underneath.
+
+What does change is the **client hook** — Automerge documents cannot back a `Y.Doc`, so they get
+their own hook rather than being forced through a Y.Doc-shaped interface. See
+[Automerge](/docs/collaboration/engines/automerge).
+
+<Cards>
+  <Card title="Yjs (Hocuspocus)" href="/docs/collaboration/engines/yjs" description="The default — embedded Hocuspocus, rich text, canvases, awareness and snapshot versions." />
+  <Card title="Automerge" href="/docs/collaboration/engines/automerge" description="A JSON-like document with a native change graph, and its own client hook." />
+  <Card title="Edge (PartyKit / PartyServer)" href="/docs/collaboration/engines/edge" description="Move the WebSocket to Cloudflare Durable Objects while Adonis keeps the token and the storage." />
+</Cards>
