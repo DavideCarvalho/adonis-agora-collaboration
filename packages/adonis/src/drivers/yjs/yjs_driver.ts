@@ -1,4 +1,4 @@
-import { Hocuspocus, type onAuthenticatePayload } from '@hocuspocus/server';
+import { Hocuspocus, type onAuthenticatePayload, type onLoadDocumentPayload } from '@hocuspocus/server';
 import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import { WebSocketServer } from 'ws';
@@ -74,6 +74,18 @@ export class YjsDriver implements CollaborationDriver {
         if (options.presence && userId) {
           presenceByDoc.delete(documentName);
           await options.presence.leave(documentName, userId);
+        }
+      },
+
+      // Seed each in-memory doc from the persisted state: without this hook the
+      // Hocuspocus doc starts EMPTY on every connection, so a previously saved
+      // document comes back blank to clients (and is then overwritten on save).
+      async onLoadDocument({ documentName }: onLoadDocumentPayload) {
+        const stored = await storage.loadDocument(documentName);
+        if (stored?.state && stored.state.byteLength > 0) {
+          const doc = new Y.Doc();
+          Y.applyUpdate(doc, stored.state);
+          return { document: doc };
         }
       },
 
