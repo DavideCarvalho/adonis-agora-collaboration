@@ -1,15 +1,98 @@
 ---
 title: Lucid storage
-description: Persist document states, versions and comments in the app's database via Lucid.
+description: The production backend — how it resolves the connection, the three tables and their columns, what the published migrations do, and what actually needs backing up.
 icon: Database
 ---
 
-# Lucid storage
+import { Callout } from 'fumadocs-ui/components/callout';
 
-The `CollaborationStorage` interface is the persistence seam. `lucidStorage({ connection })` resolves the Lucid connection from inside the library — the same pattern as `stores.lucid` from Durable, and it removes the `import db` in your config.
+`lucidStorage` persists documents, versions and comments in your app's own database, through the
+Lucid connection you name.
 
-```ts
-storage: lucidStorage({ connection: 'entretextos' })
+```ts title="config/collaboration.ts"
+import { defineConfig, lucidStorage } from '@adonis-agora/collaboration'
+
+export default defineConfig({
+  engine: 'yjs',
+  storage: lucidStorage({ connection: 'primary' }),
+  // ...
+})
 ```
 
-Tables are created on first use (IF NOT EXISTS), so there is no migration to ship for a quick start. In development you may omit `storage` for an in-memory fallback (data is lost on restart).
+The connection is resolved **inside the library**, lazily, at first use — there is no `import db`
+in your config file and no database access during boot. That matters more than it looks: a config
+file that touches the container at module scope is a config file that breaks in ace commands and
+tests.
+
+<Callout title="Omitting the connection uses the app's default">
+`connection` is optional: leave it out and the storage uses whatever `db.connection()` resolves to
+— the same connection an unqualified Lucid query uses. Name it when collaboration data lives
+somewhere other than your primary database.
+</Callout>
+
+## The tables
+
+| Table | Key | Holds |
+| --- | --- | --- |
+| `collab_documents` | `doc_name` | the encoded document state, plus free-form `meta` |
+| `collab_versions` | `(doc_name, id)` | version metadata and the snapshot bytes for that version |
+| `collab_comments` | `id` | anchored comments, indexed by `(doc_name, space)` |
+
+Document state and version snapshots are stored as **binary**. Comment anchors are `jsonb`, so a
+future anchor kind is a code change rather than a migration.
+
+## Migrations, and the tables that create themselves
+
+`node ace collaboration:init` publishes a migration per table. Run them like any other:
+
+```sh
+node ace migration:run
+```
+
+The storage *also* issues `CREATE TABLE IF NOT EXISTS` before its first query, so a fresh clone
+works before anyone has migrated. Both paths create the same schema — but ship the migrations
+anyway. They are what makes the schema reviewable in a pull request, versioned with the code, and
+reversible. The lazy creation is there so development does not stall, not so you can skip it.
+
+## Reading the data yourself
+
+These are ordinary tables. Nothing stops you from querying them, and some things are much easier
+there than through the manager:
+
+```ts
+// Every document a user has commented on, without opening any of them
+const docs = await db
+  .from('collab_comments')
+  .where('user_id', user.id)
+  .distinct('doc_name')
+
+// Version count per document, for a housekeeping report
+const counts = await db
+  .from('collab_versions')
+  .select('doc_name')
+  .count('* as versions')
+  .groupBy('doc_name')
+```
+
+Reading `collab_documents.state` is the one exception. Those bytes are a **CRDT encoding**, not
+your content — decoding them by hand means reimplementing Yjs. Ask the manager instead, which also
+gets you the live version when someone has the document open:
+
+```ts
+const text = await collaboration.current.getDocumentText({ docName })
+const bytes = await collaboration.current.getDocumentState({ docName })
+```
+
+## Backups
+
+`collab_documents` is the one table whose loss is unrecoverable — it *is* the content. Versions are
+recoverable in the sense that the document survives without them; comments are ordinary rows.
+
+Two properties worth designing around:
+
+- **Row size grows with the document.** A long manuscript is a large binary column, rewritten on
+  every debounce window. Watch the write amplification before you lower `debounce` on a table that
+  is already large.
+- **Versions multiply that.** Each one stores its own snapshot. Deliberate, user-created checkpoints
+  are fine; an automatic version every minute is a storage plan, not a feature. See
+  [Production](/docs/collaboration/production).

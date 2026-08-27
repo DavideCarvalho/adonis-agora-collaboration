@@ -26,7 +26,11 @@ export class LucidStorage implements CollaborationStorage {
 
   constructor(
     private db: LucidConnectionLike,
-    private connection = 'entretextos',
+    /**
+     * Lucid connection name. Omitted uses the app's default connection —
+     * `db.connection(undefined)` is exactly what an unqualified query uses.
+     */
+    private connection?: string,
   ) {}
 
   /** Ensures the tables lazily on demand — boot doesn't touch the database. */
@@ -59,6 +63,9 @@ export class LucidStorage implements CollaborationStorage {
       t.string('created_by').nullable();
       t.string('label').nullable();
       t.integer('seq');
+      // The document's bytes at the moment the version was created — without
+      // it a restore would replay the CURRENT state, which is a no-op.
+      t.binary('snapshot').nullable();
       t.timestamp('created_at', { useTz: true });
       t.primary(['doc_name', 'id']);
     });
@@ -127,7 +134,7 @@ export class LucidStorage implements CollaborationStorage {
     }));
   }
 
-  async saveVersion(docName: string, version: CollabVersion, _snapshot: Uint8Array): Promise<void> {
+  async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
     await this.ensure();
     await this.knex()
       .from('collab_versions')
@@ -137,15 +144,25 @@ export class LucidStorage implements CollaborationStorage {
         created_by: version.createdBy,
         label: version.label,
         seq: version.seq,
+        snapshot: Buffer.from(snapshot),
         created_at: new Date(version.createdAt),
       })
       .onConflict(['doc_name', 'id'])
       .ignore();
   }
 
-  async loadVersionSnapshot(docName: string, _versionId: string): Promise<Uint8Array | null> {
-    const doc = await this.loadDocument(docName);
-    return doc?.state ?? null;
+  async loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null> {
+    await this.ensure();
+    const row = await this.knex()
+      .from('collab_versions')
+      .where('doc_name', docName)
+      .andWhere('id', versionId)
+      .first();
+    if (!row) return null;
+    // Rows written before the snapshot column existed fall back to the live
+    // document, so an old history still lists and restores without throwing.
+    if (!row.snapshot) return (await this.loadDocument(docName))?.state ?? null;
+    return new Uint8Array(row.snapshot as Buffer);
   }
 
   async listComments(docName: string, space?: string): Promise<CollabComment[]> {

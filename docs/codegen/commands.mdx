@@ -1,15 +1,101 @@
 ---
 title: Commands
-description: collaboration:init and make:collab-document.
+description: collaboration:init and make:collab-document — what each one writes, every flag, and the generated document-types file explained line by line.
 icon: SquareTerminal
 ---
 
-# Commands
+import { Callout } from 'fumadocs-ui/components/callout';
 
-- `collaboration:init` — base directories, migrations, PartyKit worker
-- `make:collab-document <name>` — shared types in `app/collaboration/documents/`
+## `collaboration:init`
+
+Scaffolds the parts of an installation that depend on your app rather than on the package.
+
+```sh
+node ace collaboration:init
+node ace collaboration:init --engine=partykit
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--engine` | `yjs` \| `automerge` \| `partykit` — defaults to the engine in your config |
+
+It writes three things:
+
+1. **`app/collaboration/documents/`** — the folder the codegen hook scans. Empty at first.
+2. **Migrations** for `collab_documents`, `collab_versions` and `collab_comments` — only when a
+   database is configured. See [Lucid storage](/docs/collaboration/storage/lucid).
+3. **`partykit-worker/`** — only with `--engine=partykit`: the party implementation, its
+   `package.json` and a `partykit.toml` with your app's base URL already filled in. It also prints
+   the deployment steps, including `partykit secret put COLLAB_JWT_SECRET`.
+
+It does **not** publish `config/collaboration.ts` or register the provider — those come from
+`node ace configure @adonis-agora/collaboration`, which `node ace add` runs for you. And it does not
+register the REST routes: the provider does that at boot.
+
+<Callout title="Running it with --engine=partykit before configuring the host">
+The command warns rather than failing when `config.partykit.roomHost` is unset — the worker is
+generated and the driver will throw at runtime until you fill it in. Scaffold first, configure
+second, deploy third.
+</Callout>
+
+## `make:collab-document`
+
+Declares a document type: its name, the comment spaces it has, and the anchor kinds those comments
+may use.
 
 ```sh
 node ace make:collab-document researches/writing
-# creates app/collaboration/documents/writing_types.ts
+node ace make:collab-document whiteboards/board --spaces=canvas --anchors=canvas-object
+node ace make:collab-document lessons/recording --spaces=video,transcript --anchors=timestamp,text-range
 ```
+
+| Flag | Default | Values |
+| --- | --- | --- |
+| `--spaces` | `text` | any comma-separated list — they are your names |
+| `--anchors` | `text-range` | `text-range`, `canvas-object`, `timestamp` |
+
+Anchor kinds are validated against the three the library supports; an unknown one fails the command
+rather than generating a type nothing can satisfy. Spaces are free-form.
+
+The result lands at `app/collaboration/documents/<name>_types.ts`:
+
+```ts title="app/collaboration/documents/writing_types.ts"
+import type { CommentAnchor } from '@adonis-agora/collaboration'
+
+/** Anchor kinds accepted by this document. */
+export type WritingAnchor = Extract<CommentAnchor, { kind: 'text-range' }>
+
+/** Document spaces (e.g. main text, canvas, media). */
+export type WritingSpace = 'text'
+
+export interface WritingCollabDocument {
+  readonly docName: string
+  readonly engine: string
+}
+
+export const WritingDocument: WritingCollabDocument = {
+  docName: 'researches/writing',
+  engine: 'yjs',
+}
+
+export default WritingDocument
+```
+
+Three things to notice:
+
+- **`WritingSpace` is a union, not a string.** Pass it to `useComments({ space })` and a typo stops
+  compiling.
+- **`WritingAnchor` is narrowed from the library's union**, so a canvas document cannot accidentally
+  be handed a `text-range` anchor.
+- **The file is importable from the frontend.** Everything in it is a type or a constant — no server
+  imports, so a React component can share exactly the same definitions the backend uses.
+
+The `_types` suffix is the convention the registry generator strips to derive the document name, so
+keep it.
+
+<Callout title="Declaring a document type is not declaring a route">
+This file is a *contract*, not configuration. Which engine a document actually uses and who may open
+it still come from `config/collaboration.ts` — see
+[Documents](/docs/collaboration/concepts/documents). The `engine` field here is a convenience for
+frontend code that wants to know what to expect.
+</Callout>

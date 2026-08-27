@@ -1,36 +1,32 @@
 ---
 title: Getting started
-description: Install and configure @adonis-agora/collaboration in your AdonisJS app — providers, commands, the config file, storage and authorization.
+description: Install @adonis-agora/collaboration, write config/collaboration.ts, authorize a document, choose a storage backend, scaffold the tables, and open your first shared editor.
 icon: Rocket
 ---
 
-# Getting started
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
 
-Collaboration lets multiple users edit the same document in real time. The library brings **CRDT conflict resolution** (via Yjs or Automerge), **version control**, **anchored comments** and **presence** to an AdonisJS app, exposing a REST + WebSocket surface your frontend consumes through React hooks.
+By the end of this guide two browser tabs will be editing the same document, their edits will
+merge without a conflict, and a reload will bring the content back from your database. Nothing here
+requires Redis, a worker, or a second process — those come later, when you have more than one Node
+instance.
 
-This guide walks through installing the package, wiring it into Adonis, and writing a `config/collaboration.ts` that matches how your app models documents.
-
-## Install
-
-The package is installed like any AdonisJS package:
+<Steps>
+<Step title="Install">
 
 ```sh
 node ace add @adonis-agora/collaboration
 ```
 
-`add` installs the dependency. Next, wire it into the application:
+`add` installs the package and runs `configure`, which does three things:
 
-```sh
-node ace configure @adonis-agora/collaboration
-```
-
-`configure` does three things:
-
-1. registers the service **provider** in `adonisrc.ts` (boots the collaboration layer);
+1. registers the **service provider** in `adonisrc.ts` — it builds the manager, attaches the
+   WebSocket to the HTTP server and mounts the REST routes;
 2. registers the **ace commands** (`collaboration:init`, `make:collab-document`);
 3. registers the **codegen hook** and publishes `config/collaboration.ts`.
 
-You can confirm the wiring by listing commands:
+Confirm the wiring:
 
 ```sh
 node ace list | grep collab
@@ -38,81 +34,223 @@ node ace list | grep collab
 # make:collab-document
 ```
 
-## The config file
+</Step>
 
-The published `config/collaboration.ts` starts with a minimal, **fail-closed** shape — the library never authorizes by default, so you must fill `authorize`.
+<Step title="Scaffold the tables">
 
-```ts
-// config/collaboration.ts
+```sh
+node ace collaboration:init
+```
+
+This creates `app/collaboration/documents/` (the folder the codegen hook scans) and — when a
+database is configured — three migrations: `collab_documents`, `collab_versions` and
+`collab_comments`. Run them:
+
+```sh
+node ace migration:run
+```
+
+<Callout title="The tables also create themselves">
+`lucidStorage` issues `CREATE TABLE IF NOT EXISTS` on first use, so a fresh clone works before
+anyone has run a migration. Ship the migrations anyway: they are what makes the schema reviewable,
+versioned and rollback-able. The lazy creation is a development convenience, not the plan.
+</Callout>
+
+</Step>
+
+<Step title="Write the config">
+
+The published `config/collaboration.ts` is deliberately incomplete: its `authorize` throws. The
+library has no idea who may read `researches/42/writing`, and it will not guess.
+
+```ts title="config/collaboration.ts"
+import env from '#start/env'
 import { defineConfig, lucidStorage } from '@adonis-agora/collaboration'
 
 export default defineConfig({
   engine: 'yjs',
   path: '/collaboration',
-  redisUrl: process.env.REDIS_URL,
   debounce: 2000,
-  storage: lucidStorage({ connection: 'entretextos' }),
+  storage: lucidStorage({ connection: 'primary' }),
 
   async authorize(ctx, docName) {
-    // Called on every WebSocket handshake and on REST token issuance.
-    // Return per-document permissions.
+    // ctx.userId is the id resolved on the handshake / by the token endpoint.
     return { canRead: true, canWrite: true, canComment: true }
   },
 })
 ```
 
-### `engine`
+That `authorize` is a placeholder — the next step replaces it with something real.
 
-The CRDT backend. `yjs` (embedded Hocuspocus) is the default and best for rich text. See [Engines](/docs/collaboration/engines) for when to pick Automerge or edge engines.
+</Step>
 
-### `storage`
+<Step title="Authorize a document">
 
-Document states, versions and comments need a persistence backend. `lucidStorage({ connection })` resolves the Lucid connection from inside the library (same pattern as `stores.lucid` from Durable) — the app no longer imports `db` by hand. In development, omitting `storage` falls back to an in-memory store (data is lost on restart).
+`authorize` runs on **every** WebSocket handshake and **every** REST token issue. It receives the
+connection context (at minimum a `userId`) and the document name, and answers three questions:
 
-### `redisUrl`
+| Field | Question | What `false` does |
+| --- | --- | --- |
+| `canRead` | may this user open the document at all? | the handshake is dropped; the read endpoints answer `403` |
+| `canWrite` | may they change the shared content? | the connection becomes **read-only** — they still see every edit, theirs are dropped |
+| `canComment` | may they leave anchored comments? | the comment write endpoints answer `403` |
 
-Optional. When set, the provider spins up a Redis-backed presence store so `manager.listPresence()` works across multiple Node instances. Without it, presence is client-only (Yjs awareness).
+All three are enforced by the library itself, on the socket and on the REST routes. Read them on
+the client as well — `editable={canWrite}`, hiding the comment composer — so the UI does not offer
+an action the server will refuse.
 
-### `authorize`
+For an app where every document type has its own rule, writing one `authorize` with a chain of
+regexes gets ugly fast. Declare the document types instead — the library matches the incoming name
+against each pattern and hands you the extracted, typed params:
 
-The heart of the security model. It receives the handshake context (at minimum `userId`) and the document name, and returns:
+```ts title="config/collaboration.ts"
+import { defineConfig, defineDocument, lucidStorage } from '@adonis-agora/collaboration'
+import Research from '#models/research'
+import Whiteboard from '#models/whiteboard'
 
-- `canRead` — may the user open the document?
-- `canWrite` — may they edit the shared content?
-- `canComment` — may they add anchored comments?
+export default defineConfig({
+  engine: 'yjs',
+  storage: lucidStorage({ connection: 'primary' }),
 
-A connection is dropped when `canRead` is false. The same callback is used when issuing the WebSocket token over REST, so the permission seam holds on both paths.
+  documents: {
+    'researches/:id/writing': defineDocument<{ id: string }>({
+      async authorize(ctx, { params }) {
+        const research = await Research.query()
+          .where('id', params.id)
+          .andWhere('owner_id', ctx.userId)
+          .first()
 
-## Declarative documents
+        if (!research) return { canRead: false, canWrite: false, canComment: false }
+        return { canRead: true, canWrite: research.status === 'draft', canComment: true }
+      },
+    }),
 
-When each document type needs its own engine or authorization rules, hand-writing a regex per connection gets repetitive and error-prone. Instead, declare patterns and let the library match and extract the params for you:
+    'whiteboards/:id': defineDocument<{ id: string }>({
+      engine: 'automerge',
+      async authorize(ctx, { params }) {
+        const member = await Whiteboard.isMember(params.id, ctx.userId)
+        return { canRead: member, canWrite: member, canComment: member }
+      },
+    }),
+  },
+})
+```
 
-```ts
-documents: {
-  'researches/:id/writing': defineDocument({
-    engine: 'yjs',
-    async authorize(ctx, { id }) {
-      const research = await findAccessibleResearch(ctx.userId, id)
-      return research
-        ? { canRead: true, canWrite: true, canComment: true }
-        : { canRead: false, canWrite: false, canComment: false }
-    },
-  }),
+Two things happen here at once. `researches/:id/writing` and `whiteboards/:id` get **different
+authorization**, and `whiteboards/:id` also gets a **different engine** — Automerge instead of the
+global default. The rest of the app is unaffected.
+
+<Callout type="warn" title="Unmatched documents are denied, not allowed">
+A document name that matches no pattern falls back to the global `authorize`. If you did not write
+one, the answer is `{ canRead: false, canWrite: false, canComment: false }` — the library fails
+closed. That is the correct default, and it is also the most common cause of a client stuck on
+`connecting`: the pattern simply does not match the name the client asked for.
+</Callout>
+
+</Step>
+
+<Step title="Mount the client provider">
+
+`@adonis-agora/collaboration-client` keeps one session per document name — one `Y.Doc`, one
+transport, one reconnect loop — inside a provider. Mount it once, above every component that
+touches a shared document:
+
+```tsx title="app/pages/researches/writing.tsx"
+import { CollaborationProvider } from '@adonis-agora/collaboration-client'
+
+export default function WritingPage({ research }: { research: { id: string } }) {
+  return (
+    <CollaborationProvider baseUrl={window.location.origin}>
+      <WritingEditor researchId={research.id} />
+    </CollaborationProvider>
+  )
 }
 ```
 
-`defineDocument` keys are URL-like patterns (`:name` segments). The library matches the incoming `docName` against each pattern, extracts the params, and uses the document's engine and `authorize`. Anything that doesn't match falls back to the global `engine`/`authorize`.
+Same-origin apps (Inertia, a monolith) need nothing else — the session cookie rides along and the
+token endpoint resolves the user through your auth middleware. A separate frontend origin adds
+`getHeaders`:
 
-## REST routes
+```tsx
+<CollaborationProvider
+  baseUrl="https://api.example.com"
+  getHeaders={() => ({ authorization: `Bearer ${accessToken()}` })}
+>
+```
 
-The provider registers ten endpoints under `/collaboration` automatically — see [REST routes](/docs/collaboration/routes). Because they are normal routes, the Tuyau codegen types them for you.
+`getHeaders` is a **function**, called per request, so a rotating access token is picked up without
+remounting the provider.
 
-## Client
+</Step>
 
-On the frontend, `@adonis-agora/collaboration-client` exposes React hooks that resolve the engine from the server and speak the right transport. See [Client hooks](/docs/collaboration/client).
+<Step title="Open the editor">
+
+```tsx title="app/components/writing_editor.tsx"
+import { useAwareness, useCollabDoc } from '@adonis-agora/collaboration-client'
+import Collaboration from '@tiptap/extension-collaboration'
+import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
+import { EditorContent, useEditor } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
+
+export function WritingEditor({ researchId }: { researchId: string }) {
+  const docName = `researches/${researchId}/writing`
+  const { doc, status, error } = useCollabDoc({ docName })
+  const { peers, awareness } = useAwareness({ docName })
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({ history: false }), // the CRDT owns undo/redo
+      Collaboration.configure({ document: doc }),
+      CollaborationCursor.configure({ provider: { awareness }, user: currentUser }),
+    ],
+    editable: status === 'connected',
+  }, [awareness])   // the channel is rebuilt on reconnect
+
+  if (error) return <p>Could not open this document: {error.message}</p>
+
+  return (
+    <>
+      <PeerAvatars peers={peers} />
+      <EditorContent editor={editor} />
+    </>
+  )
+}
+```
+
+Three details worth internalizing. `history: false` on StarterKit is not optional — ProseMirror's
+own undo stack does not know about remote operations, so it will happily undo someone else's
+paragraph; the CRDT's undo manager is the one that understands "mine". `editable` stays `false`
+until the status is `connected`, so local typing cannot race the initial sync. And `useAwareness`
+hands back the awareness channel itself alongside `peers`, which is what `CollaborationCursor` needs
+to publish the local caret — keyed on `awareness`, because that channel is rebuilt on every
+reconnect.
+
+Open the page in two tabs. Type in one. It appears in the other, and both survive a reload.
+
+</Step>
+</Steps>
+
+## Where the data actually is
+
+After that first session, four things exist:
+
+- The **live document** — a CRDT held in memory by the driver, synced to every connected client and
+  flushed to `collab_documents` on a debounce (`debounce`, default 2000 ms).
+- **Versions** — nothing yet, until someone calls `createVersion`. See
+  [Versions](/docs/collaboration/concepts/versions).
+- **Comments** — rows in `collab_comments`, keyed by document and **space**. See
+  [Comments](/docs/collaboration/concepts/comments).
+- **Presence** — in-memory awareness inside each browser. Cross-instance presence needs Redis; see
+  [Presence](/docs/collaboration/concepts/presence).
 
 ## Next steps
 
-- Generate shared types for your first document: `node ace make:collab-document researches/writing`
-- Add the editor page with `useCollabDoc` / `useCollabEditor`
-- Enable presence with `redisUrl` when you run multiple instances
+- **Type your document names.** `node ace make:collab-document researches/writing` generates the
+  shared types, and the [typed registry](/docs/collaboration/codegen/documents-registry) turns every
+  document name in the app into a union.
+- **Add comments and history.** `useComments` and `useVersions` are REST-backed hooks that work
+  even while the WebSocket is down — see [Client hooks](/docs/collaboration/client).
+- **Go multi-instance.** Set `redisUrl` so `listPresence` aggregates across every Node process, and
+  read [Production](/docs/collaboration/production) before you scale out.
+- **Move the WebSocket to the edge.** [Edge engines](/docs/collaboration/engines/edge) put the sync
+  on Cloudflare Durable Objects while Adonis keeps the token and the storage.

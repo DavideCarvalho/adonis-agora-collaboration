@@ -1,0 +1,357 @@
+---
+title: API reference
+description: Every config option, manager method, exported helper, type, route and client hook — from source.
+icon: BookMarked
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The complete public surface of both packages.
+
+## `config/collaboration.ts`
+
+```ts
+defineConfig({
+  engine?: 'yjs' | 'automerge' | 'partykit' | 'partyserver'
+  engineFor?: (docName: string) => CollaborationEngine | Promise<CollaborationEngine>
+  documents?: Record<string, CollabDocumentDeclaration>
+  authorize?: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>
+  storage?: CollaborationStorage
+  path?: string
+  debounce?: number
+  redisUrl?: string
+  partykit?: PartyKitConfig
+  routes?: {
+    enabled?: boolean
+    prefix?: string
+    middleware?: unknown[]
+    resolveUser?: ResolveUserFn
+  }
+})
+```
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `engine` | `'yjs'` | the fallback engine for anything not routed elsewhere |
+| `engineFor` | — | **overrides** per-document `engine`, for every document |
+| `documents` | — | pattern → declaration; first match wins |
+| `authorize` | — | the global fallback. Absent **and** unmatched ⇒ deny |
+| `storage` | in-memory | an unconfigured install loses everything on restart |
+| `path` | `'/collaboration'` | the WebSocket upgrade path on the Adonis HTTP server |
+| `debounce` | `2000` | ms of quiet before the state is flushed to storage |
+| `redisUrl` | — | enables the cross-instance presence roster |
+| `partykit` | — | required when the engine is `partykit`/`partyserver` |
+| `routes.enabled` | `true` | `false` skips auto-registration; call `collaborationRoutes` yourself |
+| `routes.prefix` | `'/collaboration'` | |
+| `routes.middleware` | `[]` | applied to the whole group |
+| `routes.resolveUser` | `ctx.auth.user` | throws a `401` when there is no user |
+
+### `PartyKitConfig`
+
+```ts
+{
+  roomHost: string          // 'my-app.partykit.dev' or 'localhost:1999'
+  party?: string            // default 'main'
+  jwtSecret?: string        // HS256 secret shared with the worker
+  fetchTimeoutMs?: number   // default 10000
+}
+```
+
+## `defineDocument`
+
+```ts
+defineDocument<P extends Record<string, string>>(declaration: {
+  engine?: CollaborationEngine
+  authorize?: (
+    ctx: CollabConnectionContext,
+    info: { docName: string; params: P },
+  ) => Promise<CollabPermission>
+}): CollabDocumentDeclaration<P>
+```
+
+The type parameter types `params`; it is **not** inferred from the pattern string.
+
+```ts
+'researches/:id/writing': defineDocument<{ id: string }>({
+  async authorize(ctx, { docName, params }) { /* params.id is a string */ },
+})
+```
+
+`matchDocumentPattern(pattern, docName)` is exported too — same-segment-count matching, returning the
+extracted params or `null`.
+
+## `CollaborationManager`
+
+Resolve it from the container, or reach the singleton through the service:
+
+```ts
+import collaboration from '@adonis-agora/collaboration/services/main'
+
+const manager = collaboration.current   // ← note `.current`
+```
+
+<Callout type="warn" title="The service exports an accessor, not the manager">
+`collaboration.current.getDocumentText({ docName })`, not `collaboration.getDocumentText(...)`. The
+indirection is what lets the module be imported before the app has booted; `.current` throws with a
+clear message if it is read too early.
+</Callout>
+
+| Method | Returns |
+| --- | --- |
+| `authorize(ctx, docName)` | `Promise<CollabPermission>` — the resolved rule, same as the handshake uses |
+| `engineFor({ docName })` | `Promise<CollaborationEngine>` |
+| `getDocumentState({ docName })` | `Promise<Uint8Array>` — live document if open, else storage |
+| `getDocumentText({ docName })` | `Promise<string>` — plain text; `''` when it is not a text layout |
+| `createVersion({ docName, createdBy, label? })` | `Promise<CollabVersion>` |
+| `listVersions({ docName })` | `Promise<CollabVersion[]>` |
+| `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live |
+| `diffVersions({ docName, aId, bId })` | `Promise<{ added: number; removed: number }>` |
+| `persistDocument({ docName, state })` | `Promise<void>` — throws without configured storage |
+| `listPresence({ docName })` | `Promise<PresenceMember[]>` — `[]` without Redis |
+| `attach(server)` | `Promise<void>` — called by the provider |
+| `close()` | `Promise<void>` |
+| `comments` | the `CommentService` (below) |
+| `presence` | the `PresenceService`, when Redis is configured |
+| `engine` | the configured default engine, as a string |
+
+### `manager.comments`
+
+| Method | Returns |
+| --- | --- |
+| `list(docName, space?)` | `Promise<CollabComment[]>` — sorted oldest first |
+| `create(docName, { space, anchor, body, userId, authorName? })` | `Promise<CollabComment>` |
+| `resolve(docName, commentId, resolved)` | `Promise<CollabComment \| null>` — a toggle |
+| `remove(docName, commentId)` | `Promise<boolean>` |
+
+## Types
+
+```ts
+type CollaborationEngine = 'yjs' | 'automerge' | 'partykit' | 'partyserver'
+
+interface CollabConnectionContext {
+  userId: string
+  user?: { name?: string; avatarUrl?: string | null }
+}
+
+interface CollabPermission {
+  canRead: boolean      // enforced by the library
+  canWrite: boolean     // false ⇒ the connection is read-only; version writes 403
+  canComment: boolean   // false ⇒ the comment write endpoints 403
+}
+
+type CommentAnchor =
+  | { kind: 'text-range'; start: number; end: number; selectedText: string }
+  | { kind: 'canvas-object'; shapeId: string; relativeX: number; relativeY: number }
+  | { kind: 'timestamp'; at: number; end?: number }
+
+interface CollabComment {
+  id: string
+  documentName: string
+  space: string
+  anchor: CommentAnchor
+  body: string
+  userId: string
+  authorName?: string | null
+  resolvedAt: string | null
+  createdAt: string
+  updatedAt: string | null
+}
+
+interface CollabVersion {
+  id: string            // UUID on Yjs; the document heads on Automerge
+  seq: number           // friendly 1, 2, 3…
+  label: string | null
+  createdBy: string | null
+  createdAt: string
+}
+
+interface PresenceMember {
+  userId: string
+  name?: string | null
+  avatarUrl?: string | null
+}
+```
+
+## `CollaborationStorage`
+
+```ts
+interface CollaborationStorage {
+  loadDocument(docName: string): Promise<{ state: Uint8Array } | null>
+  saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void>
+
+  listVersions(docName: string): Promise<CollabVersion[]>
+  saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>
+  loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>
+
+  listComments(docName: string, space?: string): Promise<CollabComment[]>
+  saveComment(docName: string, comment: CollabComment): Promise<void>
+  deleteComment(docName: string, commentId: string): Promise<void>
+}
+```
+
+Implementations: `lucidStorage({ connection })` / `LucidStorage`, `FileSystemStorage(baseDir?)`,
+`InMemoryCollaborationStorage`.
+
+## Token helpers
+
+```ts
+issueToken(config, user, docName, authorize?): Promise<{ token: string; wsUrl: string; engine: string }>
+buildWsUrl(config, docName): string
+signPartyKitToken(payload, secret, expiresInSeconds?): string
+verifyPartyKitToken(token, secret): { userId; docName; exp } | null
+parseLegacyToken(token): CollabConnectionContext | null
+
+class CollabForbiddenError extends Error   // authorize denied canRead
+class CollabUnauthorizedError extends Error // no user resolved
+```
+
+`issueToken` enforces `canRead` when an `authorize` is passed — pass the **manager's**, not your
+config's, so per-document rules apply.
+
+## Routes
+
+```ts
+collaborationRoutes(router, {
+  prefix?: string
+  middleware?: unknown[]
+  resolveUser?: ResolveUserFn
+  authorize?: AuthorizeFn
+  manager?: CollabManagerLike | (() => Promise<CollabManagerLike>)
+  engine?: string
+  path?: string
+  partykit?: { roomHost?; jwtSecret?; party? }
+}): Promise<void>
+```
+
+| Method | Path | Body / query |
+| --- | --- | --- |
+| `GET` | `/token` | `?doc=` |
+| `GET` | `/comments` | `?doc=&space=` |
+| `POST` | `/comments` | `{ docName, space, anchor, body, userId, authorName? }` |
+| `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) |
+| `DELETE` | `/comments/:id` | `?doc=` |
+| `GET` | `/versions` | `?doc=` |
+| `POST` | `/versions` | `{ docName, label?, userId? }` |
+| `POST` | `/versions/restore` | `{ docName, versionId }` → `204` |
+| `GET` | `/state` | `?doc=` → `application/octet-stream` |
+| `POST` | `/state` | `?doc=` · raw body · `x-collab-worker-secret` |
+
+Also exported: `defaultResolveUser`, `secretsMatch(received, expected)`.
+
+## Ace commands
+
+| Command | Flags |
+| --- | --- |
+| `collaboration:init` | `--engine=yjs\|automerge\|partykit` |
+| `make:collab-document <name>` | `--spaces=a,b` · `--anchors=text-range,canvas-object,timestamp` |
+
+## Client — `@adonis-agora/collaboration-client`
+
+### `CollaborationProvider`
+
+```tsx
+<CollaborationProvider
+  baseUrl={string}
+  getHeaders?={() => Record<string, string> | Promise<Record<string, string>>}
+  createTransport?={(info, doc, docName) => CollabTransport}
+  fetchImpl?={typeof fetch}
+/>
+```
+
+### Hooks
+
+```ts
+useCollabDoc({ docName }): { doc: Y.Doc; status: CollabStatus; error: Error | null }
+
+useAutomergeDoc<T>({ docName, WebSocketImpl? }): {
+  doc: A.Doc<T> | null
+  status: CollabStatus
+  error: Error | null
+  change(fn: A.ChangeFn<T>): void
+}
+
+useAwareness({ docName }): {
+  peers: CollabPeer[]                              // everyone except you
+  status: CollabStatus
+  awareness: Awareness | null                      // the channel; null until connected
+}
+
+useCollabEditor<S>({ docName, editorId, adapter, doc? }): {
+  state: S
+  update(next: S): void
+  status: CollabStatus
+  peers: CollabPeer[]
+}
+
+useComments({ docName, space? }): {
+  comments: CollabComment[]
+  loading: boolean
+  error: Error | null
+  refresh(): Promise<void>
+  create(input): Promise<CollabComment>
+  resolve(commentId, resolved?): Promise<void>
+  remove(commentId): Promise<void>
+}
+
+useVersions({ docName }): {
+  versions: CollabVersion[]
+  loading: boolean
+  error: Error | null
+  refresh(): Promise<void>
+  create(label?): Promise<CollabVersion>
+  restore(versionId): Promise<void>
+}
+```
+
+`type CollabStatus = 'connecting' | 'connected' | 'disconnected' | 'error'`
+
+### Editor adapters
+
+```ts
+createExcalidrawAdapter<S>(): CollabEditorAdapter<{ elements: S[]; appState?: Record<string, unknown> }>
+createTldrawAdapter<S>(): CollabEditorAdapter<{ snapshot: S }>
+createTextAdapter(): CollabEditorAdapter<string>
+
+interface CollabEditorAdapter<S> {
+  empty(): S
+  create(doc: CollabDoc, editorId: string): { state: S; update(next: S): void }
+}
+
+interface CollabDoc {
+  read<T>(key: string): T | undefined
+  write(key: string, value: unknown): void
+  onUpdate(callback: () => void): () => void
+}
+```
+
+### Session and REST client
+
+```ts
+class DocSession {
+  constructor(docName: string, config: CollaborationClientConfig)
+  readonly doc: Y.Doc
+  readonly docName: string
+  get transport(): CollabTransport | undefined
+  get engine(): string | undefined
+  get error(): Error | null
+  getStatus(): CollabStatus
+  subscribe(listener: () => void): () => void   // also starts the session
+  start(): Promise<void>                        // idempotent
+  destroy(): void
+}
+
+fetchToken(config, docName)
+listComments(config, docName, space?)
+createComment(config, input)
+resolveComment(config, docName, commentId, resolved)
+deleteComment(config, docName, commentId)
+listVersions(config, docName)
+createVersion(config, docName, label)
+restoreVersion(config, docName, versionId)
+collabFetch<T>(config, path, init?)
+
+class CollabRestError extends Error { status: number; body: string }
+```
+
+Transports: `HocuspocusCollabTransport`, `PartyKitCollabTransport`, `PartyServerCollabTransport`,
+and `defaultTransportFactory`.

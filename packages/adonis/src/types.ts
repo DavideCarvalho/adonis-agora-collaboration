@@ -133,6 +133,7 @@ export interface CollaborationConfig {
    * authorize per document type (see {@link CollabDocumentDeclaration}).
    * Optional — plain `engine` + `authorize` remain the fallback.
    */
+  // biome-ignore lint/suspicious/noExplicitAny: params are per-entry — a concrete Record<string, string> would reject defineDocument<{ id: string }>
   documents?: Record<string, import('./documents.js').CollabDocumentDeclaration<any>>;
   /** Omitted = in-memory (dev only). The config stub publishes a default. */
   storage?: CollaborationStorage;

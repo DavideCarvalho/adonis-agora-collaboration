@@ -32,8 +32,6 @@ export default class CollaborationServiceProvider {
     this.config = config;
 
     this.app.container.singleton(CollaborationManager, () => {
-
-
       const presenceStore =
         config.redisUrl && config.redisUrl.length > 0
           ? new RedisPresenceStore(new Redis(config.redisUrl))
@@ -42,6 +40,7 @@ export default class CollaborationServiceProvider {
       const managerConfig = {
         engine: config.engine ?? 'yjs',
         ...(config.engineFor ? { engineFor: config.engineFor } : {}),
+        ...(config.documents ? { documents: config.documents } : {}),
         ...(config.authorize ? { authorize: config.authorize } : {}),
         path: config.path ?? '/collaboration',
         debounce: config.debounce ?? 2000,
@@ -95,7 +94,10 @@ export default class CollaborationServiceProvider {
     if (routes?.prefix !== undefined) runtimeOptions.prefix = routes.prefix;
     if (routes?.middleware !== undefined) runtimeOptions.middleware = routes.middleware;
     if (routes?.resolveUser !== undefined) runtimeOptions.resolveUser = routes.resolveUser;
-    if (this.config?.authorize !== undefined) runtimeOptions.authorize = this.config.authorize;
+    // The token endpoint must resolve permissions exactly like the WebSocket
+    // handshake does — through the manager, so declared documents' own
+    // `authorize` applies and an unmatched document still fails closed.
+    runtimeOptions.authorize = (ctx, docName) => manager.authorize(ctx, docName);
 
     await collaborationRoutes(router, runtimeOptions);
   }

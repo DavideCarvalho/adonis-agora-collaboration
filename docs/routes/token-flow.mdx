@@ -1,17 +1,108 @@
 ---
 title: Token flow
-description: How the client obtains a short-lived WebSocket credential — and why the permission seam holds on REST too.
+description: How a browser gets a credential a WebSocket can carry — the five steps, the two token formats, what happens when one expires, and how the reconnect loop turns expiry into revocation.
 icon: KeyRound
 ---
 
-# Token flow
+import { Callout } from 'fumadocs-ui/components/callout';
 
-Browsers cannot attach headers to a WebSocket handshake. So the client asks for a credential first:
+`new WebSocket(url)` takes a URL and nothing else. No headers, no `fetch` options, no way to attach
+a bearer token or a custom auth scheme. Everything about how this library authenticates a real-time
+connection follows from that one line of browser API.
 
-1. `GET /collaboration/token?doc=researches/42/writing`
-2. Your auth middleware resolves the user (same-origin: session cookie)
-3. The library runs `authorize(user, docName)` — same seam as the handshake
-4. Returns `{ token, wsUrl, engine }` (JWT for edge, base64 for self-hosted)
-5. The client opens the WebSocket with `?token=`
+## The five steps
 
-Fail-closed: without a resolved user, the endpoint returns 401. For manual control, disable auto-registration and call `collaborationRoutes(router, { middleware })`.
+```text
+1. GET /collaboration/token?doc=researches/42/writing
+2.   ↳ routes.resolveUser(ctx)      → the authenticated user, or 401
+3.   ↳ authorize(ctx, docName)      → canRead === false ? 403
+4.   ↳ 200 { token, wsUrl, engine }
+5. new WebSocket(`${wsUrl}?doc=…&token=${token}`)
+     ↳ authorize(ctx, docName) again → refused if it says no
+```
+
+Step 2 is where your normal auth works: a session cookie on a same-origin request, or the headers
+`getHeaders` supplies from a separate frontend. Step 3 is the
+[permission seam](/docs/collaboration/concepts/authorization), and step 5 crosses it a second time —
+the socket does not trust the token's contents, it re-asks.
+
+The client does all of this for you. `useCollabDoc` fetches the token, reads the `engine` from the
+response, picks the matching transport and opens the socket; you never see steps 1 through 5.
+
+## The response
+
+```json
+{
+  "token": "eyJ1c2VySWQiOiJ1XzEiLCJ1c2VyIjp7Im5hbWUiOiJKYW5lIn19",
+  "wsUrl": "/collaboration",
+  "engine": "yjs"
+}
+```
+
+`engine` is what makes the client engine-agnostic — it is the server telling the browser which
+protocol this document speaks. `wsUrl` is a relative path for self-hosted engines (the client
+resolves it against its base URL) and an absolute `wss://` origin for edge engines.
+
+## Two formats, two trust models
+
+| Engine | Format | Verified by | Lifetime |
+| --- | --- | --- | --- |
+| `yjs`, `automerge` | base64 JSON of the connection context | the same Adonis process, on the handshake | until the socket closes |
+| `partykit`, `partyserver` | HS256 JWT over `{ userId, docName, iat, exp }` | the edge worker, with the shared secret | 5 minutes |
+
+The self-hosted token is **not a grant**. The process that issued it re-runs `authorize` when the
+socket arrives, so the token's contents are a claim about identity that the server then checks
+against its own rules. Tampering with it does not help: the re-check is what decides.
+
+The edge JWT **is** a grant. A Durable Object has no database, cannot call `authorize`, and has
+nothing to check the claim against — so the signature has to carry the whole decision. That is why
+it is signed with a shared secret, expires in five minutes, and is scoped to a single document
+name. See [Edge engines](/docs/collaboration/engines/edge).
+
+## Expiry is the feature
+
+Tokens expiring is the normal path, not an error. The client's session watches the transport, and
+on a disconnect it tears the transport down, **fetches a fresh token**, and rebuilds — with
+exponential backoff doubling per failed attempt, capped at 15 seconds, and reset the moment a
+connection succeeds.
+
+That loop is quietly doing something important: because every reconnect re-runs `authorize`, access
+revoked while someone is connected takes effect at the next reconnect without anyone reloading a
+page. Revocation is not a separate mechanism — it is the same check, running again.
+
+<Callout title="Which also means authorize runs often">
+Every handshake, every token issue, every reconnect. Keep it to one indexed query. If your rule is
+genuinely expensive, cache it in your own layer — the library deliberately does not cache it for
+you, because a cached permission is a permission that outlives its revocation.
+</Callout>
+
+## Failure modes
+
+| Symptom | Cause |
+| --- | --- |
+| `401` from `/token` | no user on the context — your auth middleware did not run, or `resolveUser` needs configuring |
+| `403` from `/token` | `authorize` said `canRead: false`, or no pattern matched and it fell through to deny |
+| `400` from `/token` | the `doc` query param is missing |
+| Client loops `connecting` → `disconnected` | the token is issued but the handshake is refused — the two paths resolved differently, or the socket never reached `path` |
+
+See [Troubleshooting](/docs/collaboration/troubleshooting) for how to tell these apart quickly.
+
+## Taking it over
+
+`issueToken` is exported, so a custom controller keeps the exact same semantics — the same two
+formats, the same `authorize` enforcement, the same `wsUrl` construction:
+
+```ts
+import { issueToken } from '@adonis-agora/collaboration'
+
+const engine = await collaboration.engineFor({ docName })
+const issued = await issueToken(
+  { engine, path: '/collaboration', partykit: config.partykit },
+  { id: String(auth.user!.id), name: auth.user!.fullName },
+  docName,
+  (ctx, doc) => collaboration.authorize(ctx, doc),
+)
+```
+
+Passing the manager's `authorize` — rather than your own copy of the global callback — is what keeps
+per-document rules applying. See [Custom controllers](/docs/collaboration/advanced/controllers).

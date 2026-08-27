@@ -1,15 +1,138 @@
 ---
 title: Yjs (Hocuspocus)
-description: The default engine — embedded Hocuspocus on your Adonis server, y-protocols over WebSocket.
+description: The default engine — an embedded Hocuspocus server sharing the Adonis HTTP port, y-protocols over WebSocket, shared types for text and canvases, awareness for live cursors, and snapshot-based versions.
 icon: FileText
 ---
 
-# Yjs (Hocuspocus)
+import { Callout } from 'fumadocs-ui/components/callout';
 
-The default. The server embeds a Hocuspocus instance; browsers connect a WebSocket at `/collaboration` and speak the binary `y-protocols`.
+The default. Your Adonis process embeds a Hocuspocus sync server, browsers connect a WebSocket to
+`/collaboration` on the **same port your HTTP app already listens on**, and they speak the binary
+`y-protocols` wire format. There is no second process, no broker, and no extra port to open in a
+firewall.
 
-- Rich text via `Y.XmlFragment` (Tiptap/ProseMirror bindings)
-- Scenes via `Y.Map` (Excalidraw/tldraw mirror their state into a doc key)
-- Version control = full-state snapshots
+```ts title="config/collaboration.ts"
+export default defineConfig({
+  engine: 'yjs',
+  path: '/collaboration',   // the upgrade path on the Adonis HTTP server
+  debounce: 2000,           // ms of quiet before the state is flushed to storage
+  storage: lucidStorage({ connection: 'primary' }),
+  // ...
+})
+```
 
-**Choose Yjs when** the document is text or a canvas of objects.
+The provider attaches the upgrade handler once the HTTP server exists, and filters on `path` — every
+other upgrade request passes through untouched, so other WebSocket features in the same app keep
+working.
+
+## The shared types
+
+A Yjs document is a container of named **shared types**, each with its own merge semantics. You
+rarely construct them yourself; the editor binding does it. But knowing what is in the document
+explains what versions capture and what `getDocumentText` can read:
+
+| Type | Holds | Used by |
+| --- | --- | --- |
+| `Y.XmlFragment` | rich text with marks and nesting | Tiptap / ProseMirror — the `default` fragment |
+| `Y.Map` | a keyed record | Excalidraw and tldraw scenes, mirrored under one key |
+| `Y.Array` | an ordered list | lists, ordered records |
+| `Y.Text` | plain text with formatting | CodeMirror, plain editors |
+
+The document is a *container*: a page with a rich-text body and a canvas beside it can keep both
+under different keys of one document, sharing a name, a version history and a comment store.
+
+## Rich text with Tiptap
+
+The full walkthrough lives in [Tiptap collaboration](/docs/collaboration/advanced/tiptap-integration);
+the short version:
+
+```tsx
+const { doc, status } = useCollabDoc({ docName })
+
+const editor = useEditor({
+  extensions: [
+    StarterKit.configure({ history: false }),          // the CRDT owns undo
+    Collaboration.configure({ document: doc }),
+    CollaborationCursor.configure({ user: { name, color } }),
+  ],
+  editable: status === 'connected',
+})
+```
+
+<Callout type="warn" title="Disable the editor's own history">
+ProseMirror's undo stack does not distinguish your operations from a collaborator's, so leaving it
+enabled means Ctrl+Z can undo someone else's paragraph. `history: false` hands undo to the CRDT's
+own manager, which tracks origin.
+</Callout>
+
+## Canvases
+
+Excalidraw and tldraw both serialize to a scene object, and both are mirrored into a `Y.Map` key by
+an adapter — so the same `useCollabEditor` hook drives either:
+
+```tsx
+const { state, update, status, peers } = useCollabEditor({
+  docName: 'whiteboards/1',
+  editorId: 'excalidraw',
+  adapter: createExcalidrawAdapter(),
+})
+```
+
+See [Editors](/docs/collaboration/client/editors).
+
+## Awareness
+
+Awareness is part of the Yjs protocol, not something the library adds: each client broadcasts an
+ephemeral state — cursor, selection, name, colour — to the others in the room. It is what
+`useAwareness` reads, and it is per-room and per-process by nature. See
+[Presence](/docs/collaboration/concepts/presence).
+
+## Persistence and the debounce
+
+Every change is applied to the live in-memory document immediately and broadcast to every connected
+client. Writing to storage is **debounced**: after `debounce` milliseconds of quiet, the driver
+encodes the full state and saves it.
+
+The window is a straight trade. Lower means less data at risk if the process dies; higher means
+fewer writes under sustained typing. The default of 2000 ms is a reasonable middle for prose. Two
+things worth knowing about the edges:
+
+- Sustained typing keeps resetting the timer, so a very high `debounce` can mean a long stretch with
+  nothing written. Treat it as a *maximum acceptable data loss* dial.
+- Graceful shutdown flushes pending documents, so a normal deploy does not lose the window. A
+  `SIGKILL` does.
+
+## Versions
+
+Yjs has no built-in history, so the driver adds one: `createVersion` stores the **full encoded
+state** as a snapshot, and `restoreVersion` applies that snapshot's content back into the live
+document inside a transaction — so every connected client sees the restore arrive as an ordinary
+edit. `diffVersions` materializes both snapshots, extracts the text and reports
+`{ added, removed }` by line. See [Versions](/docs/collaboration/concepts/versions).
+
+## Reading a document server-side
+
+`getDocumentText` extracts plain text from the Tiptap layout — the input for search indexing, a RAG
+pipeline, a grammar checker, or a word count:
+
+```ts
+const text = await collaboration.current.getDocumentText({ docName })
+```
+
+It prefers the live document when one is open and falls back to storage otherwise, so it is correct
+whether or not anyone is editing. A document that is not in the Tiptap layout returns an empty
+string rather than throwing — check for it before feeding the result to something that expects
+content.
+
+`getDocumentState` gives you the raw encoded bytes instead, for backup or transfer.
+
+## Running more than one instance
+
+The embedded server holds each document in the memory of **one process**. Two instances behind a
+load balancer will happily host two independent copies of the same document, and they will not see
+each other's edits.
+
+The fix is sticky routing: every connection for a given document name must land on the same
+instance. Read [Production](/docs/collaboration/production) before you scale out — or move the
+document to an [edge engine](/docs/collaboration/engines/edge), where a Durable Object is the
+single owner by construction.

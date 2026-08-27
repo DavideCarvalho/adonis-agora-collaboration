@@ -1,1 +1,5 @@
-{"title": "Engines", "icon": "Layers", "pages": ["yjs", "automerge", "edge"]}
+{
+  "title": "Engines",
+  "icon": "Layers",
+  "pages": ["index", "yjs", "automerge", "edge"]
+}

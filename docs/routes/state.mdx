@@ -1,11 +1,65 @@
 ---
 title: Binary state
-description: The machine-to-machine state endpoints used by edge workers.
+description: The two machine-to-machine endpoints that carry a document's raw bytes — who calls them, why the write path is secret-authenticated rather than session-authenticated, and what to use them for.
 icon: Server
 ---
 
-# Binary state
+import { Callout } from 'fumadocs-ui/components/callout';
 
-`GET/POST /collaboration/state?doc=` carries the raw document binary. In edge mode, the PartyKit worker loads its initial state here and persists post-debounce.
+`/collaboration/state` is the only pair of endpoints that speaks bytes rather than JSON. They exist
+because an [edge worker](/docs/collaboration/engines/edge) needs to load a document it has never
+seen and hand it back when the room goes quiet — and neither of those is a user action.
 
-Because it is machine-to-machine, `POST /state` requires the worker's **shared secret** (`config.partykit.jwtSecret`), not a user session.
+```http
+GET  /collaboration/state?doc=researches/42/writing   → application/octet-stream
+POST /collaboration/state?doc=researches/42/writing   ← the raw document binary
+```
+
+## The read path
+
+`GET /state` returns the document's encoded state as `application/octet-stream`. It goes through the
+manager, so it prefers the **live in-memory document** when one is open and falls back to storage
+otherwise — the bytes are current either way.
+
+A worker calls it once, when a Durable Object wakes for a document, to hydrate the room. Your own
+code can call it too: it is the honest way to take a backup, ship a document to another
+environment, or hand a snapshot to an offline tool.
+
+```ts
+const bytes = await collaboration.current.getDocumentState({ docName })
+```
+
+Missing `doc` returns `400`. A document that has never existed returns an empty body rather than a
+`404` — an empty document and an absent one are the same thing here.
+
+## The write path
+
+`POST /state` takes the raw body and persists it as the document's state. The worker calls it after
+its own debounce, so the edge is where sync happens and your database is still where the document
+lives.
+
+<Callout type="warn" title="This one is not authenticated by a user session">
+There is no user in this request. It is one server talking to another, so it is authenticated by a
+**shared worker secret** in `x-collab-worker-secret`, compared timing-safely against
+`config.partykit.jwtSecret`. A request without it — or with the wrong one — gets `403` and never
+reaches storage.
+
+Treat that secret exactly like a database password. Anyone who has it can overwrite the content of
+any document name they can guess, and no `authorize` call stands in the way.
+</Callout>
+
+Two other responses worth knowing:
+
+- `501` when no storage backend is configured — persisting a worker snapshot into an in-memory store
+  would silently drop it, so the endpoint refuses instead.
+- `400` when `doc` is missing.
+
+## Why the split exists at all
+
+Self-hosted engines never touch these endpoints: the driver holds the document and writes it
+straight to storage. They are entirely an edge concern, and they are what lets an edge deployment
+keep the same properties as a local one — the document is synced at the edge and **owned** by your
+database, which is where your backups, your migrations and your queries already are.
+
+If you are not running an edge engine, treat `GET /state` as a useful backup hook and leave `POST`
+alone.

@@ -1,76 +1,169 @@
 ---
 title: Tiptap collaboration
-description: Wire the writing editor to a shared Y.Doc — real-time collaborative editing with cursors and live updates.
-icon: Braces
+description: Turn a single-user Tiptap editor into a shared one — the provider, the shared Y.Doc, remote cursors, the undo trap, and what the saved document actually looks like.
+icon: PenTool
 ---
 
-# Tiptap collaboration
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
 
-This is the concrete integration for the `writing_editor.tsx` pattern: turn a single-user Tiptap editor into a real-time shared one with a `Y.Doc`.
+Tiptap has a first-class Yjs binding, which makes it the shortest path from a normal editor to a
+collaborative one: the extension writes into the shared document, and every keystroke becomes a CRDT
+operation that syncs and converges. There is no save button and no conflict dialog to build.
 
-## 1. Install the Tiptap collaboration extensions
+<Steps>
+<Step title="Add the Tiptap glue">
 
-The client package already ships `yjs`/`y-protocols`. Add the Tiptap glue:
+The client package already ships `yjs` and `y-protocols`. What is missing is Tiptap's side:
 
 ```sh
-pnpm add @tiptap/extension-collaboration y-prosemirror
+pnpm add @tiptap/extension-collaboration @tiptap/extension-collaboration-cursor y-prosemirror
 ```
 
-## 2. Wrap the tree with the provider
+</Step>
+<Step title="Mount the provider once">
 
-Where the writing page (or layout) renders the editor, mount the provider once:
+Above the editor — in the layout, not the page, so navigating away and back reuses the session:
 
-```tsx
+```tsx title="app/pages/researches/writing.tsx"
 import { CollaborationProvider } from '@adonis-agora/collaboration-client'
 
-export default function WritingPage({ research }) {
+export default function WritingPage({ research }: { research: { id: string } }) {
   return (
-    <CollaborationProvider>
+    <CollaborationProvider baseUrl={window.location.origin}>
       <WritingEditor researchId={research.id} />
     </CollaborationProvider>
   )
 }
 ```
 
-## 3. Get the shared doc and feed it to Tiptap
+</Step>
+<Step title="Feed the shared document to Tiptap">
 
-In `writing_editor.tsx`, replace the standalone editor with a collaborative one:
-
-```tsx
-import { useCollabDoc, useAwareness } from '@adonis-agora/collaboration-client'
+```tsx title="app/components/writing_editor.tsx"
+import { useAwareness, useCollabDoc } from '@adonis-agora/collaboration-client'
 import Collaboration from '@tiptap/extension-collaboration'
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
+import { EditorContent, useEditor } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
 
 export function WritingEditor({ researchId }: { researchId: string }) {
   const docName = `researches/${researchId}/writing`
-  const { doc, status } = useCollabDoc({ docName })
-  const { peers } = useAwareness({ docName })
+  const { doc, status, error } = useCollabDoc({ docName })
+  const { peers, awareness } = useAwareness({ docName })
 
   const editor = useEditor({
     extensions: [
-      StarterKit,
-      Underline,
-      TextAlign,
-      Collaboration.configure({ document: doc }),       // sync into the Y.Doc
-      CollaborationCursor.configure({ user: { name: currentUserName, color: currentUserColor } }),
-      Placeholder,
-      CharacterCount,
+      StarterKit.configure({ history: false }),   // ← the CRDT owns undo
+      Collaboration.configure({ document: doc }),
+      // CollaborationCursor reads `provider.awareness`, so the awareness
+      // object is all it needs — there is no provider to hand it.
+      CollaborationCursor.configure({
+        provider: { awareness },
+        user: { name: currentUser.name, color: currentUser.color },
+      }),
+      Placeholder.configure({ placeholder: 'Start writing…' }),
     ],
-    editable: status === 'connected',                    // lock until synced
-  })
+    // The awareness object is rebuilt on reconnect, so re-create the editor
+    // when it changes rather than holding a stale channel.
+  }, [awareness])
 
-  return <EditorContent editor={editor} />
+  if (error) return <p>Could not open this document: {error.message}</p>
+
+  return (
+    <>
+      <PeerAvatars peers={peers} />
+      <EditorContent editor={editor} />
+    </>
+  )
 }
 ```
 
-## 4. Why this works
+</Step>
+</Steps>
 
-`useCollabDoc` resolves the engine from `GET /collaboration/token`, opens the WebSocket and returns the shared `Y.Doc` plus connection status. `Collaboration.configure({ document: doc })` makes Tiptap read/write into that doc, so every keystroke is a Yjs operation that syncs and converges. `CollaborationCursor` maps `useAwareness` peers onto cursors.
+## The two lines that matter
 
-The `doc` must be available before the editor mounts — `useCollabDoc` returns the session's `Y.Doc` immediately (it starts connecting lazily), so `Collaboration.configure({ document: doc })` always has a document to attach to.
+<Callout type="warn" title="history: false is not optional">
+ProseMirror's undo stack does not know which operations were yours. Leave it enabled and Ctrl+Z will
+happily undo the paragraph your colleague just typed — a bug that only shows up with two people in
+the room, which is to say only in production. `history: false` hands undo to the CRDT's own manager,
+which tracks origin and undoes only your own edits.
+</Callout>
 
-> **Note on `editable`:** keep the editor read-only until `status === 'connected'` to avoid local edits racing the initial sync snapshot.
+`editable: status === 'connected'` is the second one. `useCollabDoc` returns the `Y.Doc` immediately
+and connects in the background, so the editor mounts against a document that is briefly empty.
+Typing during that window produces local operations that merge with the server's state when it
+arrives — the CRDT behaving exactly as specified, and rarely what the writer meant. Keep it
+read-only until sync completes.
 
-## Payload shape
+## Why passing `doc` straight in is safe
 
-The saved document is a standard Tiptap/Yjs doc (an `XmlFragment` named `default`). Versions (`createVersion`), comments and `getDocumentText` (for LanguageTool/RAG) all work against it, since the Yjs driver serializes the full state.
+The session caches one `Y.Doc` per document name for as long as the provider lives, so `doc` is the
+same object on every render. `Collaboration.configure({ document: doc })` therefore never receives a
+new document mid-life, and you do not need to memoize it or key the editor on it.
+
+## Remote cursors
+
+`useAwareness` returns two things, and the difference matters. `peers` is a **snapshot** — everyone
+else in the room, re-read on every awareness change — which is what you render an avatar stack from.
+`awareness` is the **channel object itself**, which is what an editor extension needs in order to
+publish the local cursor and subscribe to remote ones.
+
+`CollaborationCursor` takes a `provider` and reads `provider.awareness` off it, so `{ awareness }` is
+a complete provider as far as it is concerned. Both views come from the same channel, which is why
+the avatar stack and the in-editor carets never disagree.
+
+The channel is rebuilt on every reconnect, so key the editor on it — otherwise a reconnected session
+leaves the extension publishing into an abandoned channel and remote carets quietly stop moving.
+
+Give each user a stable colour. Deriving it from the user id rather than assigning it at random per
+session means the same person is the same colour in every tab and after every reconnect:
+
+```ts
+const color = `hsl(${hashToDegrees(currentUser.id)} 70% 50%)`
+```
+
+## What gets saved
+
+The document is a standard Tiptap/Yjs structure: a `Y.XmlFragment` named `default`. Everything else
+in the library reads it as such:
+
+```ts
+// Plain text — for search indexing, RAG, grammar checking, word counts
+const text = await collaboration.current.getDocumentText({ docName })
+
+// A named checkpoint of exactly this state
+await collaboration.current.createVersion({ docName, createdBy: user.id, label: 'before review' })
+```
+
+`getDocumentText` walks the Tiptap layout and returns the plain text, preferring the live document
+when someone has it open. A document that is not in that layout returns an empty string rather than
+throwing — worth checking before you feed the result to something that expects content.
+
+## Adding comments to the editor
+
+Comments anchor to a text range, and a Tiptap selection is exactly that:
+
+```tsx
+const { create } = useComments({ docName, space: 'text' })
+
+function commentOnSelection(body: string) {
+  const { from, to } = editor.state.selection
+  return create({
+    space: 'text',
+    anchor: {
+      kind: 'text-range',
+      start: from,
+      end: to,
+      selectedText: editor.state.doc.textBetween(from, to),
+    },
+    body,
+    userId: currentUser.id,
+  })
+}
+```
+
+Offsets drift as other people type above the range, which is why `selectedText` is part of the
+anchor — it is what lets the sidebar still show what a comment was about. See
+[Comments](/docs/collaboration/concepts/comments).

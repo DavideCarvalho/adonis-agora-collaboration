@@ -1,17 +1,100 @@
 ---
 title: Presence
-description: Who is online — peer-to-peer awareness on the client, Redis-backed presence across instances on the server.
+description: Who is in this document right now — peer-to-peer awareness for live cursors, a Redis-backed roster that spans Node instances, and the different questions each layer can answer.
 icon: Users
 ---
 
-# Presence
+import { Callout } from 'fumadocs-ui/components/callout';
 
-Two layers answer "who is online":
+"Who is online" is two different questions with two different answers, and the library answers both
+in different places. Getting them mixed up is the usual reason presence looks broken.
 
-- **Client (awareness)** — Yjs awareness broadcasts cursor/name state peer-to-peer within a room. Zero server config; gives you live cursors.
-- **Server (cross-instance)** — when `redisUrl` is set, the provider spins up a Redis store; the Yjs driver records join/leave on connect/disconnect, and `manager.listPresence({ docName })` aggregates across all Node instances.
+## Layer one — awareness, in the browser
 
-```ts
-const { peers } = useAwareness({ docName })              // client-side
-const online = await manager.listPresence({ docName })        // server-side, cross-instance
+Yjs ships an **awareness** protocol alongside document sync: a small ephemeral state each client
+broadcasts to the others in the same room. Cursor position, selection, display name, colour. It
+never touches the server's memory in any meaningful way, it is not persisted, and it disappears the
+moment a tab closes.
+
+```tsx
+const { peers, status } = useAwareness({ docName })
+// peers: [{ clientId, userId, name, avatarUrl }] — everyone except you
 ```
+
+This is the layer that draws live cursors and the avatar stack. It is instant, it is free, and it
+needs zero configuration. Feed it from the editor — `CollaborationCursor` in Tiptap writes the local
+user into awareness automatically — and read `peers` to render everyone else.
+
+Its limit is exactly its nature: awareness only knows about clients connected to **the same
+document room, through the same process**. Two Node instances behind a load balancer each hold their
+own room, and neither knows the other exists.
+
+## Layer two — the server roster, across instances
+
+The second question is asked from the server, and it is a different one: *does this document have
+anyone in it right now*, from anywhere. Locking a resource, deciding whether to send a
+"someone edited your document" notification, showing an occupancy badge in a list — none of those
+can be answered from one browser's awareness state.
+
+Set `redisUrl` and the provider spins up a Redis-backed presence store. The driver records a join on
+connect and a leave on disconnect, and the manager aggregates:
+
+```ts title="config/collaboration.ts"
+export default defineConfig({
+  engine: 'yjs',
+  redisUrl: env.get('REDIS_URL'),
+  // ...
+})
+```
+
+```ts title="app/services/document_service.ts"
+import collaboration from '@adonis-agora/collaboration/services/main'
+
+const online = await collaboration.current.listPresence({ docName })
+// → [{ userId, name, avatarUrl }] across every Node instance
+```
+
+Entries carry a **60-second TTL**, refreshed on join. That is a deliberate safety net: a process
+killed mid-connection never runs its disconnect handler, and without an expiry its users would look
+online forever. The cost is that the roster is eventually consistent — a hard crash leaves a ghost
+for up to a minute.
+
+Without `redisUrl`, `listPresence` returns an empty array rather than throwing. Single-instance
+development keeps working; you just get nothing from the layer you did not configure.
+
+## Choosing a layer
+
+| You want to | Use | Because |
+| --- | --- | --- |
+| Draw live cursors and selections | `useAwareness` | it updates on every mouse move, peer to peer |
+| Show the avatar stack in the editor | `useAwareness` | it is already there, with no round trip |
+| Show "3 people editing" in a document **list** | `listPresence` | the list page has no socket to those documents |
+| Decide something server-side | `listPresence` | the server cannot read a browser's awareness |
+| Work correctly behind more than one instance | `listPresence` | awareness is per-process |
+
+<Callout title="They are not redundant, and they will disagree">
+Awareness is richer and faster; the Redis roster is broader and slower. A user who just closed a tab
+can be gone from awareness and still in the roster for up to a minute. Show whichever one answers
+the question the UI is actually asking, and do not try to reconcile them into one number.
+</Callout>
+
+## Feeding the metadata
+
+Presence entries are only as useful as what you put in them. The name and avatar come from the
+connection context, which comes from the token endpoint's resolved user:
+
+```ts title="config/collaboration.ts"
+routes: {
+  resolveUser: (ctx) => ({ id: String(ctx.auth.user!.id), name: ctx.auth.user!.fullName }),
+}
+```
+
+Without a `name`, `listPresence` gives you ids and your UI has to resolve them itself — a query per
+render of a list that was supposed to be cheap. Set it once, here.
+
+<Callout type="warn" title="One roster entry per document, not per user">
+The server-side roster currently tracks a single user per document connection, so a document with
+several simultaneous editors reports fewer people than are actually in it, and a disconnect can
+clear the wrong entry. Use `listPresence` for the *is anyone in here* question — which it answers
+correctly — and `useAwareness` when you need the accurate list of who.
+</Callout>

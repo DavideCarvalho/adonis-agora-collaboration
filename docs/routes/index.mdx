@@ -1,25 +1,174 @@
 ---
-title: Routes
-description: The built-in REST endpoints — token flow, comments, versions and binary state — auto-registered and typeable by Tuyau.
+title: REST routes
+description: The ten built-in endpoints — the full request and response reference, how they are auto-registered, the three levels of control over them, and why every document name travels as a query or body field.
 icon: Route
 ---
 
-# Routes
+import { Callout } from 'fumadocs-ui/components/callout';
 
-Collaboration is not only a WebSocket. The library ships **ten REST endpoints** auto-registered under `/collaboration`. Because they are ordinary routes, Tuyau types them for your frontend.
+Collaboration is not only a WebSocket. Everything that is not the live document — the credential
+to open it, its comment threads, its version history, its raw bytes — travels over ordinary HTTP.
+The provider mounts ten endpoints under `/collaboration` at boot, and because they are ordinary
+Adonis routes, Tuyau types them for your frontend like any other.
 
-| Method | Route | Use |
-|---|---|---|
-| GET | `/collaboration/token?doc=` | Ephemeral WebSocket token |
-| GET/POST | `/collaboration/comments` | List/create comments |
-| PATCH/DELETE | `/collaboration/comments/:id?doc=` | Resolve/remove |
-| GET/POST | `/collaboration/versions` | List/create versions |
-| POST | `/collaboration/versions/restore` | Restore a version |
-| GET/POST | `/collaboration/state?doc=` | Binary state (edge) |
+## The endpoints
 
-`docName` always via query/body — names contain slashes.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/collaboration/token?doc=` | mint a WebSocket credential for a document |
+| `GET` | `/collaboration/comments?doc=&space=` | list a document's comments, optionally one space |
+| `POST` | `/collaboration/comments` | create an anchored comment |
+| `PATCH` | `/collaboration/comments/:id?doc=` | resolve or reopen a comment |
+| `DELETE` | `/collaboration/comments/:id?doc=` | remove a comment |
+| `GET` | `/collaboration/versions?doc=` | list a document's versions |
+| `POST` | `/collaboration/versions` | create a named version |
+| `POST` | `/collaboration/versions/restore` | restore a version into the live document |
+| `GET` | `/collaboration/state?doc=` | read the raw document binary |
+| `POST` | `/collaboration/state?doc=` | persist a document binary (worker only) |
 
-## Deep dives
+<Callout title="The document name never rides in the path">
+`researches/42/writing` has slashes in it, so putting it in a route segment means escaping it and
+un-escaping it correctly everywhere forever. Every endpoint takes the name in the **query string**
+(`?doc=`) or the **body** (`docName`) instead. The only path parameter in the whole surface is a
+comment id, which is a UUID.
+</Callout>
 
-- [Token flow](/docs/collaboration/routes/token-flow)
-- [Binary state](/docs/collaboration/routes/state)
+## Reference
+
+### `GET /collaboration/token`
+
+The one endpoint with a security story of its own — see [Token flow](/docs/collaboration/routes/token-flow).
+
+```http
+GET /collaboration/token?doc=researches/42/writing
+```
+
+```json
+{ "token": "eyJ1c2VySWQ…", "wsUrl": "/collaboration", "engine": "yjs" }
+```
+
+| Status | When |
+| --- | --- |
+| `400` | the `doc` query param is missing |
+| `401` | no authenticated user could be resolved |
+| `403` | `authorize` returned `canRead: false` |
+
+### Comments
+
+```http
+GET /collaboration/comments?doc=researches/42/writing&space=text
+```
+
+Returns `CollabComment[]`, oldest first. Omit `space` for every space.
+
+```http
+POST /collaboration/comments
+Content-Type: application/json
+
+{
+  "docName": "researches/42/writing",
+  "space": "text",
+  "anchor": { "kind": "text-range", "start": 120, "end": 160, "selectedText": "the sentence" },
+  "body": "rephrase this",
+  "userId": "u_1",
+  "authorName": "Jane"
+}
+```
+
+Returns the created comment, with its generated `id` and `createdAt`.
+
+```http
+PATCH  /collaboration/comments/:id?doc=researches/42/writing   { "resolved": true }
+DELETE /collaboration/comments/:id?doc=researches/42/writing
+```
+
+`resolved` defaults to `true`, so an empty `PATCH` body resolves; pass `false` to reopen. `DELETE`
+answers `{ "deleted": true }`, or `{ "deleted": false }` when the id was already gone — a
+double-click is not an error.
+
+### Versions
+
+```http
+GET  /collaboration/versions?doc=researches/42/writing
+POST /collaboration/versions            { "docName": "…", "label": "before review", "userId": "u_1" }
+POST /collaboration/versions/restore    { "docName": "…", "versionId": "…" }
+```
+
+`POST /versions` returns the created `CollabVersion`. `POST /versions/restore` returns `204` and
+takes effect **live** — every connected client receives the restored content through the sync
+protocol. See [Versions](/docs/collaboration/concepts/versions).
+
+### Binary state
+
+```http
+GET  /collaboration/state?doc=researches/42/writing   → application/octet-stream
+POST /collaboration/state?doc=researches/42/writing   ← the worker's snapshot
+```
+
+Machine-to-machine, used by edge workers. `POST` requires the worker's shared secret in
+`x-collab-worker-secret` and answers `403` without it. See
+[Binary state](/docs/collaboration/routes/state).
+
+## Three levels of control
+
+**Level one — leave them alone.** The provider registers everything under `/collaboration` at boot.
+Nothing to write.
+
+**Level two — keep the handlers, change the wrapper.** Prefix, middleware and user resolution are
+config:
+
+```ts title="config/collaboration.ts"
+routes: {
+  prefix: '/api/collab',
+  middleware: [middleware.auth(), middleware.tenant()],
+  resolveUser: (ctx) => ({ id: String(ctx.auth.user!.id), name: ctx.auth.user!.fullName }),
+}
+```
+
+Or register them yourself, for full control over placement in `start/routes.ts`:
+
+```ts title="start/routes.ts"
+import router from '@adonisjs/core/services/router'
+import { collaborationRoutes } from '@adonis-agora/collaboration'
+
+// with routes.enabled = false in config
+await collaborationRoutes(router, {
+  prefix: '/api/collab',
+  middleware: [middleware.auth()],
+})
+```
+
+**Level three — write the controllers.** Disable auto-registration and build the surface yourself,
+keeping the library's token semantics through the exported `issueToken`. See
+[Custom controllers](/docs/collaboration/advanced/controllers).
+
+## Authentication
+
+The token endpoint resolves the caller through `routes.resolveUser`, which defaults to reading
+`ctx.auth.user` and **throwing a 401 when there is none** — so an install that forgot to protect
+these routes fails closed rather than minting anonymous credentials.
+
+Every other endpoint runs the same check. Each resolves the caller through `routes.resolveUser`
+and then runs the document's `authorize`, requiring the permission that route needs:
+
+| Endpoint | Requires |
+| --- | --- |
+| `GET /comments`, `GET /versions`, `GET /state` | `canRead` |
+| `POST /versions`, `POST /versions/restore` | `canWrite` |
+| `POST`/`PATCH`/`DELETE /comments` | `canComment` |
+
+`POST /state` is the exception: it is machine-to-machine and authenticated by the worker secret
+instead. See [Binary state](/docs/collaboration/routes/state).
+
+<Callout title="A comment is attributed to the caller, not to the body">
+`POST /comments` takes the author from the authenticated user and ignores any `userId` in the
+request body — otherwise anyone could comment as anyone. The same applies to the `createdBy` on a
+version.
+</Callout>
+
+<Callout type="warn" title="They still need your auth middleware">
+The routes enforce *authorization* — who may do what to which document. They do not perform
+*authentication*: `resolveUser` reads `ctx.auth.user`, which is only populated when your auth
+middleware ran on that route. Without it every request is unauthenticated and answers `401`, which
+is safe but not useful. Set `routes.middleware`.
+</Callout>

@@ -1,1 +1,5 @@
-{ "title": "Routes", "icon": "Route", "pages": ["overview", "token-flow", "state"] }
+{
+  "title": "REST routes",
+  "icon": "Route",
+  "pages": ["index", "token-flow", "state"]
+}

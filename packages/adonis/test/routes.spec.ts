@@ -174,6 +174,9 @@ function baseOptions(manager: CollabManagerLike) {
     engine: 'yjs',
     path: '/collaboration',
     resolveUser: authResolver,
+    // Delegation tests care about what reaches the manager, not about the
+    // permission gate — routes_permissions.spec.ts covers denial.
+    authorize: async () => ({ canRead: true, canWrite: true, canComment: true }),
   };
 }
 
@@ -291,19 +294,21 @@ describe('comments + versions endpoints', () => {
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(manager));
 
-    const listCtx = makeCtx({ qs: { doc: 'd/1', space: 'text' } });
+    const listCtx = makeCtx({ qs: { doc: 'd/1', space: 'text' }, user: { id: 'u1' } });
     await find('GET', '/comments').handler(listCtx);
 
     const createCtx = makeCtx({
-      body: { docName: 'd/1', space: 'text', anchor: {}, body: 'note', userId: 'u1' },
+      body: { docName: 'd/1', space: 'text', anchor: {}, body: 'note' },
+      user: { id: 'u1' },
     });
     await find('POST', '/comments').handler(createCtx);
 
-    const versionCtx = makeCtx({ body: { docName: 'd/1', label: 'v', userId: 'u1' } });
+    const versionCtx = makeCtx({ body: { docName: 'd/1', label: 'v' }, user: { id: 'u1' } });
     await find('POST', '/versions').handler(versionCtx);
 
     expect(manager.calls.some((c) => c.startsWith('comments:d/1'))).toBe(true);
     expect(manager.calls.some((c) => c.includes('"body":"note"'))).toBe(true);
+    // createdBy comes from the authenticated user now, not from the body.
     expect(manager.calls.some((c) => c === 'version:d/1:u1:v')).toBe(true);
   });
 });
@@ -313,7 +318,7 @@ describe('state endpoints', () => {
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(makeManager()));
 
-    const ctx = makeCtx({ qs: { doc: 'docs/1' } });
+    const ctx = makeCtx({ qs: { doc: 'docs/1' }, user: { id: 'u1' } });
     await find('GET', '/state').handler(ctx);
 
     expect(ctx.__lastHeader['content-type']).toBe('application/octet-stream');

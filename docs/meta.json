@@ -3,9 +3,8 @@
   "pages": [
     "index",
     "getting-started",
-    "---Concepts---",
+    "---Guides---",
     "concepts",
-    "---Engines---",
     "engines",
     "---Backend---",
     "routes",
@@ -13,10 +12,15 @@
     "codegen",
     "---Client---",
     "client",
-    "---Advanced---",
-    "advanced"
+    "---Operations---",
+    "advanced",
+    "testing",
+    "production",
+    "troubleshooting",
+    "---Reference---",
+    "api-reference"
   ],
   "root": true,
-  "description": "Collaborative editing (CRDT) for AdonisJS — engines, presence, versions, comments, codegen and React hooks.",
+  "description": "Real-time collaborative editing for AdonisJS — CRDT engines, presence, versions and anchored comments behind one API.",
   "icon": "Users"
 }

@@ -104,6 +104,65 @@ export function secretsMatch(received: string | undefined, expected: string | un
   return timingSafeEqual(digest(received), digest(expected));
 }
 
+/* ───────────────────────────── permissions ───────────────────────────── */
+
+/**
+ * Resolve the caller and the permission they hold on `docName` — the same
+ * `authorize` the WebSocket handshake runs, so a document's rule cannot be
+ * bypassed by going through HTTP instead of the socket.
+ *
+ * Returns a response instead of a permission when the request should stop:
+ * `400` without a document, `401` without a user, `403` when the rule denies
+ * the capability the route needs.
+ */
+async function guard(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  userResolver: NonNullable<CollabRoutesRuntime['resolveUser']>,
+  docName: string | undefined,
+  capability: 'canRead' | 'canWrite' | 'canComment',
+): Promise<{ user: CollabRouteUser; docName: string } | { denied: unknown }> {
+  if (!docName) {
+    return { denied: ctx.response.status(400).json({ error: 'a document name is required' }) };
+  }
+
+  let user: CollabRouteUser | null;
+  try {
+    user = await userResolver(ctx);
+  } catch (error) {
+    if (error instanceof CollabUnauthorizedError) {
+      return { denied: ctx.response.status(401).json({ error: error.message }) };
+    }
+    throw error;
+  }
+  if (!user) {
+    return { denied: ctx.response.status(401).json({ error: 'unauthenticated' }) };
+  }
+
+  // No authorize configured at all means the app has not written a rule yet —
+  // fail closed rather than serving every document to every caller.
+  const permission = runtime.authorize
+    ? await runtime.authorize(
+        { userId: user.id, ...(user.name ? { user: { name: user.name } } : {}) },
+        docName,
+      )
+    : { canRead: false, canWrite: false, canComment: false };
+
+  if (!permission[capability]) {
+    return {
+      denied: ctx.response
+        .status(403)
+        .json({ error: `no ${capability} access to document "${docName}"` }),
+    };
+  }
+
+  return { user, docName };
+}
+
+function isDenied(result: object): result is { denied: unknown } {
+  return 'denied' in result;
+}
+
 /* ───────────────────────────── handlers ───────────────────────────── */
 
 async function handleToken(
@@ -146,80 +205,134 @@ async function handleToken(
   }
 }
 
-async function handleListComments(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
+async function handleListComments(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
   const { doc, space } = ctx.request.qs() as { doc?: string; space?: string };
+  const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
-  return manager.comments.list(String(doc), space);
+  return manager.comments.list(allowed.docName, space);
 }
 
-async function handleCreateComment(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
+async function handleCreateComment(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
   const body = ctx.request.body<{
     docName: string;
     space: string;
     anchor: unknown;
     body: string;
-    userId: string;
     authorName?: string | null;
   }>();
+  const allowed = await guard(ctx, runtime, resolveUser, body.docName, 'canComment');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
-  return manager.comments.create(body.docName, {
+  return manager.comments.create(allowed.docName, {
     space: body.space,
     anchor: body.anchor,
     body: body.body,
-    userId: body.userId,
-    authorName: body.authorName ?? null,
+    // The author is who the request authenticated as, never who it claims to
+    // be: a body-supplied userId would let anyone comment as anyone.
+    userId: allowed.user.id,
+    authorName: body.authorName ?? allowed.user.name ?? null,
   });
 }
 
-async function handleResolveComment(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
-  const doc = String(ctx.request.qs().doc ?? '');
+async function handleResolveComment(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
+  const doc = ctx.request.qs().doc as string | undefined;
   const commentId = String((ctx.request.params as Record<string, unknown> | undefined)?.id ?? '');
   const resolved = Boolean(ctx.request.body<{ resolved?: boolean }>().resolved ?? true);
+  const allowed = await guard(ctx, runtime, resolveUser, doc, 'canComment');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
-  return manager.comments.resolve(doc, commentId, resolved);
+  return manager.comments.resolve(allowed.docName, commentId, resolved);
 }
 
-async function handleDeleteComment(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
-  const doc = String(ctx.request.qs().doc ?? '');
+async function handleDeleteComment(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
+  const doc = ctx.request.qs().doc as string | undefined;
   const commentId = String((ctx.request.params as Record<string, unknown> | undefined)?.id ?? '');
+  const allowed = await guard(ctx, runtime, resolveUser, doc, 'canComment');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
-  return { deleted: await manager.comments.remove(doc, commentId) };
+  return { deleted: await manager.comments.remove(allowed.docName, commentId) };
 }
 
-async function handleListVersions(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
-  const doc = String(ctx.request.qs().doc ?? '');
+async function handleListVersions(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
+  const doc = ctx.request.qs().doc as string | undefined;
+  const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
-  return manager.listVersions({ docName: doc });
+  return manager.listVersions({ docName: allowed.docName });
 }
 
-async function handleCreateVersion(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
-  const body = ctx.request.body<{ docName: string; label?: string; userId?: string }>();
+async function handleCreateVersion(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
+  const body = ctx.request.body<{ docName: string; label?: string }>();
+  const allowed = await guard(ctx, runtime, resolveUser, body.docName, 'canWrite');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
   return manager.createVersion({
-    docName: body.docName,
-    createdBy: body.userId ?? null,
+    docName: allowed.docName,
+    createdBy: allowed.user.id,
     label: body.label ?? null,
   });
 }
 
-async function handleRestoreVersion(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
+async function handleRestoreVersion(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
   const body = ctx.request.body<{ docName: string; versionId: string }>();
+  const allowed = await guard(ctx, runtime, resolveUser, body.docName, 'canWrite');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
   await manager.restoreVersion({
-    docName: body.docName,
+    docName: allowed.docName,
     versionId: body.versionId,
-    restoredBy: null,
+    restoredBy: allowed.user.id,
   });
   return ctx.response.noContent();
 }
 
-async function handleGetState(ctx: CollabHttpContext, runtime: Runtime): Promise<unknown> {
-  const doc = String(ctx.request.qs().doc ?? '');
-  if (!doc) {
-    return ctx.response.status(400).json({ error: 'query param "doc" is required' });
-  }
+async function handleGetState(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
+): Promise<unknown> {
+  const doc = ctx.request.qs().doc as string | undefined;
+  const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
+  if (isDenied(allowed)) return allowed.denied;
+
   const manager = await runtime.manager();
-  const state = await manager.getDocumentState({ docName: doc });
+  const state = await manager.getDocumentState({ docName: allowed.docName });
   ctx.response.header('content-type', 'application/octet-stream');
   return ctx.response.send(Buffer.from(state));
 }
@@ -270,25 +383,36 @@ export async function collaborationRoutes(
   options: CollabRoutesRuntime & { managerFallback?: () => Promise<CollabManagerLike> },
 ): Promise<void> {
   const runtime = await resolveRuntime(options, options.managerFallback);
+  const resolveUser = options.resolveUser ?? defaultResolveUser;
 
   router
     .group(() => {
-      registerRoute(router, 'get', '/token', (ctx) =>
-        handleToken(ctx, runtime, options.resolveUser ?? defaultResolveUser),
+      registerRoute(router, 'get', '/token', (ctx) => handleToken(ctx, runtime, resolveUser));
+
+      registerRoute(router, 'get', '/comments', (ctx) =>
+        handleListComments(ctx, runtime, resolveUser),
+      );
+      registerRoute(router, 'post', '/comments', (ctx) =>
+        handleCreateComment(ctx, runtime, resolveUser),
+      );
+      registerRoute(router, 'patch', '/comments/:id', (ctx) =>
+        handleResolveComment(ctx, runtime, resolveUser),
+      );
+      registerRoute(router, 'delete', '/comments/:id', (ctx) =>
+        handleDeleteComment(ctx, runtime, resolveUser),
       );
 
-      registerRoute(router, 'get', '/comments', (ctx) => handleListComments(ctx, runtime));
-      registerRoute(router, 'post', '/comments', (ctx) => handleCreateComment(ctx, runtime));
-      registerRoute(router, 'patch', '/comments/:id', (ctx) => handleResolveComment(ctx, runtime));
-      registerRoute(router, 'delete', '/comments/:id', (ctx) => handleDeleteComment(ctx, runtime));
-
-      registerRoute(router, 'get', '/versions', (ctx) => handleListVersions(ctx, runtime));
-      registerRoute(router, 'post', '/versions', (ctx) => handleCreateVersion(ctx, runtime));
+      registerRoute(router, 'get', '/versions', (ctx) =>
+        handleListVersions(ctx, runtime, resolveUser),
+      );
+      registerRoute(router, 'post', '/versions', (ctx) =>
+        handleCreateVersion(ctx, runtime, resolveUser),
+      );
       registerRoute(router, 'post', '/versions/restore', (ctx) =>
-        handleRestoreVersion(ctx, runtime),
+        handleRestoreVersion(ctx, runtime, resolveUser),
       );
 
-      registerRoute(router, 'get', '/state', (ctx) => handleGetState(ctx, runtime));
+      registerRoute(router, 'get', '/state', (ctx) => handleGetState(ctx, runtime, resolveUser));
       registerRoute(router, 'post', '/state', (ctx) => handleSaveState(ctx, runtime));
     })
     .prefix(options.prefix ?? '/collaboration')

@@ -1,0 +1,166 @@
+---
+title: Production
+description: The operational checklist — why documents are process-bound and what sticky routing has to guarantee, tuning the debounce against data loss, Redis presence, shutdown, secrets, growth and backup.
+icon: ServerCog
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Everything in the quickstart runs on one process with in-memory storage. This page is the gap
+between that and a deployment you can page someone about.
+
+## The constraint that shapes everything: documents are process-bound
+
+A self-hosted engine holds each open document in the memory of **one Node process**. Two instances
+behind a round-robin load balancer will each hold their own copy of `researches/42/writing`, sync
+their own clients into it, and never see each other. Both copies get written to storage, and one
+overwrites the other.
+
+There is no error. Users describe it as "my colleague's edits sometimes disappear".
+
+Three ways out:
+
+**Sticky routing by document name.** Every connection for a document must land on the same instance.
+Routing by client IP or session is *not* sufficient — two users on the same document are two
+different clients. Hash the `doc` query parameter:
+
+```nginx
+# The document name is the shard key, not the client.
+map $arg_doc $collab_backend {
+    default "";
+}
+
+upstream collab {
+    hash $arg_doc consistent;
+    server app1:3333;
+    server app2:3333;
+}
+
+location /collaboration {
+    proxy_pass http://collab;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600s;   # a WebSocket is a long-lived connection
+}
+```
+
+Consistent hashing matters: a plain modulo reshuffles every document when you add an instance.
+
+**One collaboration instance.** Scale your HTTP tier freely and pin the WebSocket to a single
+process. Simple, honest, and enough for a long time — a Node process handles a lot of concurrent
+documents.
+
+**Move to the edge.** A [Durable Object](/docs/collaboration/engines/edge) is the single owner of a
+document by construction, so the problem does not exist. This is the answer that scales without
+routing rules.
+
+<Callout type="warn" title="Automerge is single-instance, full stop">
+The Automerge driver broadcasts to the sockets its own process holds. There is no cross-instance
+fan-out, so Automerge documents need one instance or sticky routing that genuinely guarantees one.
+</Callout>
+
+## Tune the debounce as a data-loss budget
+
+`debounce` (default 2000 ms) is the quiet period before the document is flushed to storage. It is
+not a performance dial — it is **how much work you are willing to lose to a `SIGKILL`**.
+
+| Setting | Trade |
+| --- | --- |
+| 500–1000 ms | frequent writes; a large document means real write amplification |
+| 2000 ms | the default; a reasonable middle for prose |
+| 5000 ms+ | far fewer writes; up to five seconds of typing at risk |
+
+Two things to know about the edges. Sustained typing keeps resetting the timer, so a high value can
+mean a long stretch with nothing written at all. And a **graceful** shutdown flushes pending
+documents — so a normal deploy loses nothing, and only a hard kill hits the window.
+
+Which makes graceful shutdown load-bearing:
+
+```yaml
+# Give in-flight documents time to flush before the process is killed.
+terminationGracePeriodSeconds: 30
+```
+
+## Turn on Redis presence
+
+Without `redisUrl`, `listPresence` returns an empty array — quietly, everywhere. If any part of your
+product asks "who is in this document" from the server, it needs Redis:
+
+```ts title="config/collaboration.ts"
+redisUrl: env.get('REDIS_URL'),
+```
+
+Entries carry a 60-second TTL, refreshed on join, so a process killed mid-connection leaves a ghost
+for up to a minute rather than forever. Use the roster for the *is anyone here* question and
+[awareness](/docs/collaboration/concepts/presence) for the accurate list of who.
+
+## Storage, and how it grows
+
+Two numbers to watch:
+
+- **`collab_documents.state`** is the full encoded document, rewritten on every debounce window. A
+  long manuscript is a large binary column with a high write rate. This is the table to keep an eye
+  on first.
+- **`collab_versions.snapshot`** stores a snapshot per version. Deliberate, user-created checkpoints
+  are fine. An automatic version every minute is a storage plan, not a feature — a 200 KB document
+  versioned hourly is ~5 MB a day, per document.
+
+If versions are going to be frequent, prune them on a schedule. There is no retention policy in the
+library, and `collab_versions` is an ordinary table:
+
+```ts
+// Keep the 20 most recent versions per document
+await db.rawQuery(`
+  DELETE FROM collab_versions v
+  WHERE v.seq <= (
+    SELECT MAX(seq) - 20 FROM collab_versions WHERE doc_name = v.doc_name
+  )
+`)
+```
+
+## Backups
+
+`collab_documents` is the only table whose loss is unrecoverable — it *is* the content. Include it
+in your normal database backup and verify a restore actually reopens: the bytes are a CRDT encoding,
+so "the row is there" is not the same as "the document opens".
+
+`GET /collaboration/state?doc=` is the supported way to export one document's bytes for an
+out-of-band archive.
+
+## Secrets
+
+Running an [edge engine](/docs/collaboration/engines/edge) adds one secret with real reach:
+`config.partykit.jwtSecret`, shared with the worker.
+
+It signs the tokens the worker trusts **and** authenticates `POST /collaboration/state`. Whoever
+holds it can mint a credential for any document name and overwrite any document's content — no
+`authorize` call stands in the way. Treat it like a database password: environment-injected, never
+in the repo, rotated on a schedule and immediately after any suspected exposure.
+
+Rotation means updating both sides — `config.partykit.jwtSecret` and
+`partykit secret put COLLAB_JWT_SECRET`. Tokens minted with the old secret are refused, so
+connected clients reconnect with fresh ones within a backoff window.
+
+## Timeouts and proxies
+
+WebSockets are long-lived, and the default idle timeout on most proxies is not. Raise
+`proxy_read_timeout` (nginx), the idle timeout (ALB), or the equivalent — otherwise clients see a
+disconnect and reconnect loop that looks like a library bug and is a proxy setting.
+
+`config.partykit.fetchTimeoutMs` (default 10 s) bounds the Adonis-to-worker HTTP calls that back
+`getDocumentState`, `createVersion` and `restoreVersion` on an edge document. Raise it if the worker
+is far away and those operations start failing rather than being slow.
+
+## Before you ship
+
+- [ ] `authorize` is written, and the **denial** path has a test
+- [ ] `storage` is set — an unconfigured install silently keeps everything in memory
+- [ ] Migrations are run, or you have deliberately chosen the lazily created tables
+- [ ] Either one collaboration instance, or sticky routing keyed on the **document name**
+- [ ] `redisUrl` set if anything server-side asks who is present
+- [ ] Proxy read timeouts raised well above the reconnect interval
+- [ ] Graceful shutdown long enough for the debounce window to flush
+- [ ] `jwtSecret` injected from the environment, if you run an edge engine
+- [ ] A version-retention plan, if versions are created automatically
+- [ ] `collab_documents` in the backup, and a restore that has actually been tried

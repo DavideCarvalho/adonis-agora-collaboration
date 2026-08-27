@@ -10,10 +10,10 @@ import type { CollabConnectionContext, CollabPermission, CollaborationEngine } f
  * @example
  * // config/collaboration.ts
  * documents: {
- *   'researches/:id/writing': defineDocument({
+ *   'researches/:id/writing': defineDocument<{ id: string }>({
  *     engine: 'yjs',
- *     async authorize(ctx, { id }) {
- *       const research = await findAccessibleResearch(ctx.userId, id)
+ *     async authorize(ctx, { docName, params }) {
+ *       const research = await findAccessibleResearch(ctx.userId, params.id)
  *       return research
  *         ? { canRead: true, canWrite: true, canComment: true }
  *         : { canRead: false, canWrite: false, canComment: false }
@@ -21,7 +21,9 @@ import type { CollabConnectionContext, CollabPermission, CollaborationEngine } f
  *   }),
  * }
  */
-export interface CollabDocumentDeclaration<P extends Record<string, string> = Record<string, string>> {
+export interface CollabDocumentDeclaration<
+  P extends Record<string, string> = Record<string, string>,
+> {
   /** Engine deste tipo de documento (default: o engine global). */
   engine?: CollaborationEngine;
   /**

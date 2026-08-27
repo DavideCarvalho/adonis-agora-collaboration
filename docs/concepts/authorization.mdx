@@ -1,0 +1,147 @@
+---
+title: Authorization
+description: The permission seam — why a WebSocket needs a token endpoint, how the same authorize callback guards both doors, what fail-closed means in practice, and which of the three permissions the library actually enforces.
+icon: ShieldCheck
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A browser cannot attach an `Authorization` header to a WebSocket handshake. `new WebSocket(url)`
+takes a URL and nothing else. That single limitation shapes the entire security model of every
+real-time library, this one included, and it is worth understanding before you write your first
+`authorize`.
+
+## Two doors, one lock
+
+Since the socket cannot carry credentials, the client asks for a **short-lived credential over
+HTTP first**, where cookies and headers work normally, and then puts that credential in the socket
+URL:
+
+```text
+1. GET /collaboration/token?doc=researches/42/writing
+      ↳ your auth middleware resolves the user (session cookie, bearer token, …)
+      ↳ authorize(ctx, docName)  ──▶ canRead === false ?  403, nothing issued
+      ↳ 200 { token, wsUrl, engine }
+
+2. new WebSocket(`${wsUrl}?doc=…&token=${token}`)
+      ↳ authorize(ctx, docName)  ──▶ canRead === false ?  handshake refused
+```
+
+`authorize` runs **on both**. Not a cached copy of its answer from step 1 — the callback itself,
+again, with the same document name. A token that was valid when it was minted does not grant
+access if the user lost it in between, and a hand-crafted socket URL that skips the token endpoint
+still meets the same check.
+
+<Callout title="Why not just check once?">
+Because the two paths are reachable independently. The token endpoint sits behind your HTTP
+middleware; the WebSocket upgrade does not. Checking only at issue time would make the socket
+trust a string, and checking only at the socket would let the token endpoint hand credentials to
+anyone. The seam is only a seam if both sides of it are closed.
+</Callout>
+
+## Fail-closed, by construction
+
+`authorize` resolution has three steps and a floor:
+
+1. the matched [declared document](/docs/collaboration/concepts/documents)'s own `authorize`;
+2. the global `config.authorize`;
+3. **deny** — `{ canRead: false, canWrite: false, canComment: false }`.
+
+There is no fourth step where an unmatched document is treated as public. If you declare patterns
+for three document types and a client asks for a fourth, it is refused. If you forget to write
+`authorize` entirely, *everything* is refused. The published `config/collaboration.ts` even ships
+an `authorize` that throws, so an unconfigured install fails loudly instead of quietly serving
+documents to the internet.
+
+The practical consequence: **a client stuck on `connecting` is usually a pattern that doesn't
+match**, not a broken socket. See [Troubleshooting](/docs/collaboration/troubleshooting).
+
+## The connection context
+
+`authorize` receives what the library knows about the caller:
+
+```ts
+interface CollabConnectionContext {
+  /** The authenticated user's id, as a string. */
+  userId: string
+  /** Free-form metadata carried into presence — name, avatar. */
+  user?: { name?: string; avatarUrl?: string | null }
+}
+```
+
+That is deliberately thin. It is an identity, not a session — you look up everything else yourself,
+which is why `authorize` is `async`:
+
+```ts title="config/collaboration.ts"
+async authorize(ctx, docName) {
+  const membership = await Membership.query()
+    .where('user_id', ctx.userId)
+    .andWhere('workspace_id', workspaceOf(docName))
+    .first()
+
+  if (!membership) return { canRead: false, canWrite: false, canComment: false }
+
+  return {
+    canRead: true,
+    canWrite: membership.role !== 'viewer',
+    canComment: true,
+  }
+}
+```
+
+Where does `userId` come from? On the REST path, from `routes.resolveUser` — which defaults to
+reading `ctx.auth.user` and **throws a 401 when there isn't one**, so an unprotected deployment
+fails closed rather than issuing anonymous tokens. On the socket path, from the token the client
+presents, which the endpoint minted from that same resolved user.
+
+```ts title="config/collaboration.ts"
+routes: {
+  // Only needed when your user isn't at ctx.auth.user
+  resolveUser: (ctx) => ({ id: String(ctx.currentTenantUser.id), name: ctx.currentTenantUser.name }),
+}
+```
+
+Because `authorize` is `async` and runs on every handshake, keep it cheap. One indexed query is
+fine; three joins and a permission-matrix rebuild will be felt on every reconnect. Cache in your
+own layer if it gets expensive — the library deliberately does not cache the answer for you.
+
+## What the three permissions actually do
+
+All three are enforced by the library, on both the socket and the REST surface:
+
+| Permission | On the WebSocket | On the REST routes |
+| --- | --- | --- |
+| `canRead` | the handshake is refused | `/token`, `/comments` (GET), `/versions` (GET) and `/state` (GET) answer `403` |
+| `canWrite` | the connection is made **read-only** — inbound updates are dropped, outbound sync continues | `/versions` (POST) and `/versions/restore` answer `403` |
+| `canComment` | — | `/comments` POST, PATCH and DELETE answer `403` |
+
+`canWrite: false` binds the **connection**, not the UI. A client that is merely told it may not
+write can simply not ask, so the rule is applied where the update arrives: Hocuspocus marks the
+connection read-only, and the Automerge driver drops that client's inbound messages. The client
+still receives everyone else's edits — read-only means read-only, not disconnected.
+
+<Callout title="Read them on the client too, for a UI that tells the truth">
+Enforcement is the server's job; *explaining* it is the UI's. Drive `editable` from `canWrite` and
+hide the comment composer when `canComment` is false, so a user is not offered an action that will
+be refused. That is presentation, not security — the server no longer depends on it.
+</Callout>
+
+## Token shape and lifetime
+
+Two wire formats, chosen by engine — you never construct either by hand, but knowing which is
+which explains the security properties:
+
+| Engine | Format | Verified by | Lifetime |
+| --- | --- | --- | --- |
+| `yjs`, `automerge` | base64 JSON of the connection context | your own Adonis process, on the handshake | until the socket closes |
+| `partykit`, `partyserver` | HS256 JWT over `{ userId, docName, iat, exp }` | the edge worker, with the shared secret | 5 minutes |
+
+The self-hosted format is not a bearer credential in the usual sense — the same process that
+issued it re-runs `authorize` when it is presented, so its contents are a hint, not a grant. The
+edge JWT **is** a grant: the worker has no database and cannot re-check anything, which is why it
+is signed, short-lived and scoped to a single document name. See
+[Edge engines](/docs/collaboration/engines/edge).
+
+Tokens expiring is normal, not exceptional: the client's session rebuilds the transport with a
+**fresh token** on every reconnect, with exponential backoff capped at 15 seconds. Your `authorize`
+runs again each time — which is what makes revocation take effect without anyone reloading a page.

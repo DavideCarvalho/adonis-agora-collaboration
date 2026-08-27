@@ -1,1 +1,5 @@
-{ "title": "Client", "icon": "Braces", "pages": ["sessions", "editors"] }
+{
+  "title": "Client",
+  "icon": "Braces",
+  "pages": ["index", "sessions", "comments-and-versions", "editors"]
+}

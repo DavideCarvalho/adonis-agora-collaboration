@@ -22,6 +22,9 @@ import { lineDiff, resolveStorage } from '../shared.js';
  * scaling, updates are re-broadcast via Redis pub/sub (same philosophy as transmit).
  */
 
+/** Connections whose permission denied canWrite — their updates are dropped. */
+const readOnlyClients = new WeakSet<object>();
+
 interface Room {
   // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
   text: any;
@@ -99,16 +102,22 @@ export class AutomergeDriver implements CollaborationDriver {
 
           const room = await this.loadRoom(docName);
           room.clients.add(ws);
+          if (!permission.canWrite) readOnlyClients.add(ws);
 
           // Sends the full state to the new client.
           ws.send(A.save(room.text));
 
           ws.on('message', (data) => {
+            // A read-only connection still receives every update; its own are
+            // dropped. Enforced here because the client cannot be trusted to
+            // respect a permission it was merely told about.
+            if (readOnlyClients.has(ws)) return;
             void this.handleClientMessage(docName, data as Uint8Array, ws);
           });
 
           ws.on('close', () => {
             room.clients.delete(ws);
+            readOnlyClients.delete(ws);
           });
         } catch {
           ws.close(4001, 'authentication failed');

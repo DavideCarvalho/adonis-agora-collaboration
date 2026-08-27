@@ -1,19 +1,39 @@
 ---
 title: Codegen
-description: Ace commands and the typed document registry — generated types that keep frontend and backend in sync.
+description: Two ace commands and a generated registry that keeps document names, spaces and anchors typed on both sides of the wire — derived from the files on disk instead of a list you maintain.
 icon: WandSparkles
 ---
 
-# Codegen
+import { Cards, Card } from 'fumadocs-ui/components/card';
 
-AdonisJS v7 generates code from your application into `.adonisjs/`. The collaboration package plugs in so documents are typed in one place and reused everywhere.
+A document name is a string, and strings drift. Someone renames a route, someone else keeps typing
+`researches/42/writting`, and nothing complains until a user sees an empty editor. The codegen layer
+turns that string into a type.
 
-## Commands
+There are two moving parts:
 
-- `collaboration:init` — base directories, migrations, PartyKit worker
-- `make:collab-document <name>` — shared types in `app/collaboration/documents/`
+- **`make:collab-document`** writes a file per document type under `app/collaboration/documents/`,
+  declaring its name, its comment **spaces** and its allowed **anchor kinds**. That file is
+  types-only, so the frontend can import it without pulling in server code.
+- **An Assembler `init` hook** scans that folder and regenerates
+  `.adonisjs/collaboration/documents.ts`, where every document name becomes a union member.
 
-## Deep dives
+Neither is a registry you maintain. Both are derived from what is on disk, which means they cannot
+disagree with it.
 
-- [Commands](/docs/collaboration/codegen/commands)
-- [Typed registry](/docs/collaboration/codegen/documents-registry)
+```sh
+node ace collaboration:init                        # scaffold the folders and migrations
+node ace make:collab-document researches/writing   # declare a document type
+node ace codegen                                   # refresh the registry (also runs on dev/build)
+```
+
+```ts
+import type { CollabDocumentName } from '.adonisjs/collaboration/documents.js'
+
+function open(name: CollabDocumentName) { /* autocompleted, exhaustive */ }
+```
+
+<Cards>
+  <Card title="Commands" href="/docs/collaboration/codegen/commands" description="collaboration:init and make:collab-document — every flag, and what each one writes." />
+  <Card title="Typed registry" href="/docs/collaboration/codegen/documents-registry" description="The generated union, when it refreshes, and how to consume it from the frontend." />
+</Cards>

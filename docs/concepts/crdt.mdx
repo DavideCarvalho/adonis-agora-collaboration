@@ -1,20 +1,74 @@
 ---
 title: CRDTs
-description: Why conflict-free replicated data types let multiple users edit the same document and always converge.
+description: Why a conflict-free replicated data type removes the conflict instead of resolving it, what Yjs and Automerge each model, and the three consequences that show up in your application code.
 icon: GitMerge
 ---
 
-# CRDTs
+import { Callout } from 'fumadocs-ui/components/callout';
 
-A **CRDT** (conflict-free replicated data type) is a data structure with a mathematically guaranteed merge: given the same operations, every replica converges to the same state — no central "last write wins", no locking.
+A **CRDT** — conflict-free replicated data type — is a data structure whose merge is defined by
+the structure itself. Give two replicas the same set of operations in any order, and they end up
+byte-identical. No coordinator decides who won, because the question never comes up.
 
-The library wraps two CRDTs:
+## The conflict that doesn't happen
 
-- **Yjs** — shared types optimized for rich text (`Y.XmlFragment`) and key/value maps. Default engine.
-- **Automerge** — a JSON-like document where every change gets a hash (native history).
+Think about the naive version. Two people open the same paragraph. Both send "here is my new
+text". Whoever's request lands second overwrites the first, and someone's sentence is gone. The
+usual fixes — an edit lock, an operational-transform server, a "someone else changed this, reload"
+banner — all exist to *manage* that collision.
 
-## Why it matters
+A CRDT removes it. Every edit is an operation with enough identity attached (who made it, where it
+sits relative to its neighbours) that "insert 'cat' at position 4" and "insert 'dog' at position 4"
+are not competing claims on position 4 — they are two insertions with a deterministic order. Both
+survive. Every replica agrees on which came first. Nobody was asked.
 
-Without a CRDT, two users editing the same paragraph produce a conflict someone must resolve. With one, the merge is defined by the data structure itself: both edits survive, in a deterministic order. The library just needs to ship the bytes around.
+The price is that the document is no longer a string you can `SET` — it is a structure you apply
+operations to. That is the trade this library is built around, and the reason
+[the shared content is the only thing inside it](/docs/collaboration/concepts).
 
-See [Engines](/docs/collaboration/engines) for how the choice shapes your data model.
+## The two engines model different shapes
+
+| | Yjs | Automerge |
+| --- | --- | --- |
+| Shape | shared types — `Y.XmlFragment` (rich text), `Y.Map`, `Y.Array` | a JSON-like document you mutate in a callback |
+| History | none built in; the library adds binary snapshots | native — every change carries a hash |
+| Editor bindings | Tiptap/ProseMirror, Excalidraw, tldraw, CodeMirror | none for rich text |
+| Awareness (live cursors) | yes, part of the protocol | no |
+
+Yjs is what you want for anything a human types or drags: it has the rich-text type, the editor
+bindings, and the awareness channel that carries cursors. Automerge is what you want for structured
+JSON that several clients mutate — a form, a config, a board of records — where a native change
+graph is worth more than an editor binding you were never going to use. See
+[Engines](/docs/collaboration/engines) for the full comparison and how a document picks one.
+
+## What it changes in your code
+
+Three consequences you will meet on the first day:
+
+- **Undo is not the editor's job.** ProseMirror's history plugin has no idea which operations were
+  yours; it will cheerfully undo the paragraph your colleague just wrote. Disable it
+  (`StarterKit.configure({ history: false })`) and let the CRDT's undo manager, which tracks
+  origin, own it.
+- **You do not read the document from the database.** The authoritative copy is the live in-memory
+  document the driver holds; the stored bytes are a debounced flush of it. Ask the manager
+  (`getDocumentState`, `getDocumentText`) and it prefers the live document, falling back to storage
+  only when nobody has it open.
+
+  ```ts
+  import collaboration from '@adonis-agora/collaboration/services/main'
+
+  // Correct: goes through the driver, which knows about the live document.
+  const text = await collaboration.current.getDocumentText({ docName })
+  ```
+
+- **Merges do not fail, but they can surprise.** Two people rewriting the *same sentence* converge
+  to a document containing both rewrites interleaved. That is the algorithm working as specified,
+  not a bug — and it is why [presence](/docs/collaboration/concepts/presence) matters: showing the
+  other cursor is what stops people from editing the same words in the first place.
+
+<Callout title="Convergence is not authorization">
+A CRDT guarantees that everyone who receives an operation applies it identically. It says nothing
+about who is allowed to *send* one. That is the
+[permission seam](/docs/collaboration/concepts/authorization)'s job, and it happens before the
+socket is open — not inside the merge.
+</Callout>

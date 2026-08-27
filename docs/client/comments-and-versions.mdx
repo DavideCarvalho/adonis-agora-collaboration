@@ -1,0 +1,156 @@
+---
+title: Comments & versions
+description: The two REST-backed hooks — their full shape, which operations update optimistically and which refetch, error handling, and why they keep working while the socket is down.
+icon: MessageSquare
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+`useComments` and `useVersions` are the client's half of the data that lives *beside* the document
+rather than inside it. Both go over REST, both load on mount, and both expose a `refresh()` you
+control.
+
+## `useComments`
+
+```tsx
+const {
+  comments,   // CollabComment[] — oldest first
+  loading,
+  error,
+  create,
+  resolve,
+  remove,
+  refresh,
+} = useComments({ docName, space: 'text' })
+```
+
+Omit `space` to get every space; pass one to scope the list to a single surface. Changing `space`
+refetches.
+
+```tsx
+await create({
+  space: 'text',
+  anchor: { kind: 'text-range', start: 120, end: 160, selectedText: 'the sentence' },
+  body: 'rephrase this',
+  userId: currentUser.id,
+  authorName: currentUser.name,
+})
+
+await resolve(comment.id)        // resolve
+await resolve(comment.id, false) // reopen
+await remove(comment.id)
+```
+
+The three write operations differ in how the list updates, and the difference is deliberate:
+
+| Operation | Local list | Why |
+| --- | --- | --- |
+| `create` | **refetched** | the server assigns the id and timestamps — the row you get back is the truth |
+| `resolve` | **updated in place** | only `resolvedAt` changes, and you already know its new value |
+| `remove` | **updated in place** | the row is gone; there is nothing to learn from a refetch |
+
+So `create` costs a round trip and `resolve`/`remove` feel instant. If you need
+`create` to feel instant too, render an optimistic placeholder and let the refetch replace it.
+
+A comment anchor is yours to build from your editor's selection:
+
+```tsx
+function useCommentOnSelection(editor: Editor, docName: string) {
+  const { create } = useComments({ docName, space: 'text' })
+
+  return (body: string) => {
+    const { from, to } = editor.state.selection
+    return create({
+      space: 'text',
+      anchor: {
+        kind: 'text-range',
+        start: from,
+        end: to,
+        selectedText: editor.state.doc.textBetween(from, to),
+      },
+      body,
+      userId: currentUser.id,
+    })
+  }
+}
+```
+
+Store `selectedText`: offsets in a document other people are editing drift, and the quote is what
+lets the sidebar still show what a comment was about. See
+[Comments](/docs/collaboration/concepts/comments).
+
+## `useVersions`
+
+```tsx
+const { versions, loading, error, create, restore, refresh } = useVersions({ docName })
+
+const version = await create('before review')  // label is optional
+await restore(versions[0].id)
+```
+
+Both writes refetch, because both change the list — `create` adds a row with a server-assigned `seq`,
+and `restore` is worth re-reading the history after.
+
+Render `seq` rather than `id`: it is the friendly 1, 2, 3… the library maintains for exactly this.
+
+```tsx
+{versions.map((version) => (
+  <li key={version.id}>
+    <strong>Version {version.seq}</strong>
+    {version.label && <em> — {version.label}</em>}
+    <time>{new Date(version.createdAt).toLocaleString()}</time>
+    <button onClick={() => restore(version.id)}>Restore</button>
+  </li>
+))}
+```
+
+<Callout type="warn" title="Restoring is immediate and visible to everyone">
+`restore` applies the old content to the **live** document, so every connected client sees it
+happen — including someone mid-sentence. Confirm before calling it, and consider snapshotting the
+current state first so the restore is itself undoable:
+
+```tsx
+await create('before restore')
+await restore(versionId)
+```
+</Callout>
+
+## They work when sync does not
+
+Both hooks are REST-backed. They touch the session only to stay aligned with the document's
+lifecycle — they do not need the WebSocket. A reconnecting editor still renders its comment sidebar
+and its history, which is usually exactly what you want on a flaky connection.
+
+The flip side: they are **not live**. Someone else's new comment shows up when you `refresh()`.
+Trigger it from whatever signal you already have — a poll, an SSE stream, a flag in the shared
+document that everyone is watching anyway:
+
+```tsx
+// The document is already a broadcast channel — use it.
+useEffect(() => {
+  const flag = doc.getMap('meta')
+  const onChange = () => void refresh()
+  flag.observe(onChange)
+  return () => flag.unobserve(onChange)
+}, [doc, refresh])
+```
+
+## Errors
+
+Both hooks expose `error` rather than throwing, and both keep the last good list while a refetch
+fails — so a transient error does not blank the sidebar. Failures from the write operations
+**do** reject, so `await create(...)` in a `try`/`catch` is the right shape for a form.
+
+REST failures are `CollabRestError`, carrying `status` and the response `body`:
+
+```tsx
+import { CollabRestError } from '@adonis-agora/collaboration-client'
+
+try {
+  await create({ /* … */ })
+} catch (cause) {
+  if (cause instanceof CollabRestError && cause.status === 403) {
+    toast('You do not have permission to comment on this document.')
+  }
+}
+```

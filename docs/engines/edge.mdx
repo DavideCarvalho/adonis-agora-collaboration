@@ -1,16 +1,120 @@
 ---
 title: Edge (PartyKit / PartyServer)
-description: Move the WebSocket to Cloudflare Workers — browsers connect to the edge, not your server.
+description: Move the WebSocket to Cloudflare Durable Objects — how the worker, the signed token and the /state endpoints divide the work, what you have to own, and when the latency is worth it.
 icon: Cloud
 ---
 
-# Edge (PartyKit / PartyServer)
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Steps, Step } from 'fumadocs-ui/components/steps';
 
-Deploy a Worker (Cloudflare Durable Objects) speaking the same Yjs wire protocol. Browsers connect **directly to the edge**; the `PartyKitDriver` on the Adonis side is the worker's HTTP client for state and versions.
+The edge engines move the **sync** to Cloudflare Durable Objects and leave everything else in
+Adonis. Browsers connect to a Worker near them instead of crossing an ocean to your origin, while
+your app keeps owning identity, authorization, storage, versions and comments.
 
-```sh
-node ace collaboration:init --engine=partykit   # generates partykit-worker/
-npx partykit deploy                             # deploys to the edge
+The trade is explicit: you gain global latency and a natural single-owner-per-document guarantee,
+and you take on a second deployment, a shared secret, and a token that is a real grant rather than
+a hint.
+
+## How the work divides
+
+```text
+Browser ──GET /collaboration/token?doc=…──▶ Adonis
+                                             ↳ authorize(ctx, docName)
+                                             ↳ signs a 5-minute HS256 JWT { userId, docName }
+                    ◀── { token, wsUrl: wss://<host>/parties/main/<doc>, engine }
+
+Browser ──WebSocket──▶ Cloudflare Durable Object (one per document)
+                          ↳ verifies the JWT with the shared secret
+                          ↳ GET  /collaboration/state?doc=…   ← loads the initial state
+                          ↳ POST /collaboration/state?doc=…   → persists, post-debounce
+                                 (authenticated by the worker secret, not a user session)
 ```
 
-Trade-off: global latency for a separate deployment you must own and secure (JWT shared secret, `/state` sync back to Adonis).
+Two boundaries carry the security here, and they are different in kind:
+
+- **The token is a grant.** The worker has no database and cannot re-run `authorize`, so it trusts
+  the signature. That is why the JWT is short-lived and scoped to a single document name — see
+  [Authorization](/docs/collaboration/concepts/authorization).
+- **`POST /state` is machine-to-machine.** It carries the raw document binary from the worker back
+  to your database, so it is authenticated by a **shared worker secret** compared timing-safely, not
+  by a user session. See [Binary state](/docs/collaboration/routes/state).
+
+## Setting it up
+
+<Steps>
+<Step title="Configure the engine">
+
+```ts title="config/collaboration.ts"
+export default defineConfig({
+  engine: 'partykit',
+  storage: lucidStorage({ connection: 'primary' }),
+  partykit: {
+    roomHost: env.get('PARTYKIT_HOST'),      // my-app.partykit.dev, or localhost:1999
+    party: 'main',
+    jwtSecret: env.get('COLLAB_JWT_SECRET'), // shared with the worker
+    fetchTimeoutMs: 10_000,
+  },
+  async authorize(ctx, docName) { /* ... */ },
+})
+```
+
+`jwtSecret` is not optional in practice: without it the token endpoint throws, and a worker
+configured to require a token rejects every connection.
+
+</Step>
+<Step title="Generate the worker">
+
+```sh
+node ace collaboration:init --engine=partykit
+```
+
+This scaffolds `partykit-worker/` — the party implementation, its `package.json` and its
+`partykit.toml`, with your Adonis base URL already filled in.
+
+</Step>
+<Step title="Deploy it">
+
+```sh
+cd partykit-worker
+npm install
+npx partykit secret put COLLAB_JWT_SECRET   # the same value as config.partykit.jwtSecret
+npx partykit dev                            # local
+npx partykit deploy                         # production
+```
+
+</Step>
+</Steps>
+
+<Callout type="warn" title="The secret is the whole boundary">
+The worker's only way to know a connection is legitimate is the signature. A leaked
+`COLLAB_JWT_SECRET` means anyone can mint a token for any document name — no `authorize` call
+stands between them and the content. Rotate it like a database password, and never ship it to the
+browser.
+</Callout>
+
+## What Adonis still does
+
+The `PartyKitDriver` is your app's **HTTP client for the worker**, not a sync server. It is how
+`getDocumentState`, `createVersion` and `restoreVersion` keep working on an edge document: the
+driver calls the worker over HTTP, with `fetchTimeoutMs` bounding the wait. Comments and
+authorization never involve the worker at all.
+
+Which means the manager API is unchanged. A version created on an edge document is the same call,
+stored in the same table, listed by the same hook.
+
+## `partykit` versus `partyserver`
+
+Both speak the same Yjs wire protocol and both go through the same driver. PartyKit is the hosted
+platform with its own CLI and deployment flow; PartyServer is the library form you embed in a
+Worker you already deploy. Pick based on how you want to ship the Worker — the Adonis side is
+identical.
+
+## When the edge is worth it
+
+**Yes** when your users are spread across continents and the round trip to your origin is what
+makes typing feel laggy; when you want one owner per document without engineering sticky sessions;
+or when you would rather not have long-lived WebSockets on your application servers at all.
+
+**No** when your users are in one region — you would be adding a deployment, a secret and a
+network hop to solve a problem you do not have. Start with [Yjs](/docs/collaboration/engines/yjs) and
+move a document to the edge when you can measure the reason.

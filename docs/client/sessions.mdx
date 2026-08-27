@@ -1,21 +1,148 @@
 ---
 title: Sessions
-description: Document sessions, token flow, reconnects and presence.
+description: One Y.Doc and one transport per document name — how a session starts, what each status means, how reconnection with fresh tokens works, and why the doc reference is stable across renders.
 icon: FileText
 ---
 
-# Sessions
+import { Callout } from 'fumadocs-ui/components/callout';
 
-`useCollabDoc` connects to a document and returns the shared `Y.Doc` plus status. Sessions are cached per document and survive unmounts.
+A **session** is everything the client needs for one document: a `Y.Doc`, a transport, a status, and
+a reconnect loop. The provider keeps one per document name and hands the same instance to every hook
+that asks for it.
 
 ```tsx
 const { doc, status, error } = useCollabDoc({ docName: 'researches/42/writing' })
 ```
 
-Tokens expire: on disconnect the session rebuilds the transport with a **fresh token** and exponential backoff (cap 15s).
+## Shared, and longer-lived than your component
+
+Three components on the same page asking for `researches/42/writing` get **one** session: one
+socket, one document, one set of listeners. And a session outlives the components that opened it —
+unmounting the editor does not close the connection, so navigating away and back resumes instead of
+reconnecting.
+
+Sessions are destroyed with the provider. That is the lifetime to design around: mount the provider
+in the layout, not in a page, or every route change becomes a full reconnect.
+
+<Callout title="The doc reference is stable">
+`doc` is the same `Y.Doc` object on every render for as long as the session lives, which is what
+makes `Collaboration.configure({ document: doc })` safe to pass into a `useEditor` config. You do
+not need to memoize it, and you should not key an editor on it.
+</Callout>
+
+## Starting up
+
+Opening a document is a sequence, and `status` is how you watch it:
+
+```text
+'connecting'  → token requested, transport being built
+'connected'   → synced; safe to edit
+'disconnected'→ socket closed; a reconnect is scheduled
+'error'       → the token could not be fetched, or the handshake was refused
+```
+
+The session starts **lazily**, on the first subscriber, and starting is idempotent — ten components
+calling `useCollabDoc` for the same name produce one token request.
+
+Gate editing on `connected`:
 
 ```tsx
-const { peers } = useAwareness({ docName })   // peer-to-peer presence
-const { comments, create, resolve } = useComments({ docName, space: 'text' })
-const { versions, create: createVersion } = useVersions({ docName })
+const { doc, status, error } = useCollabDoc({ docName })
+
+const editor = useEditor({
+  extensions: [StarterKit.configure({ history: false }), Collaboration.configure({ document: doc })],
+  editable: status === 'connected',
+})
+
+if (error) return <DocumentUnavailable error={error} />
 ```
+
+Not for cosmetics: `doc` is handed back immediately, before the server's state arrives. Typing into
+it during `connecting` produces local operations that merge with the incoming state — which is the
+CRDT behaving correctly, and rarely what the user meant.
+
+## Reconnecting, and why the token is refetched
+
+[Tokens expire](/docs/collaboration/routes/token-flow). So on a disconnect the session does not
+retry the same socket — it **tears the transport down and rebuilds it with a fresh token**:
+
+```text
+disconnected → wait 1s  → new token → new transport
+             → wait 2s  → …
+             → wait 4s  → …
+             → capped at 15s
+             → a successful connection resets the backoff to 1s
+```
+
+The side effect is the useful part: every reconnect re-runs your `authorize`. Revoke someone's
+access while they are connected and it takes effect on their next reconnect, with no reload and no
+separate revocation channel.
+
+`error` holds the last failure and stays set while the loop retries, so you can show "reconnecting,
+last error: …" without wiring your own state.
+
+## Awareness
+
+`useAwareness` reads the same session's ephemeral peer state:
+
+```tsx
+const { peers, status, awareness } = useAwareness({ docName })
+// peers:     [{ clientId, userId, name, avatarUrl }] — everyone except you
+// awareness: the channel object itself, or null before the transport connects
+```
+
+Two views of one channel, for two different jobs:
+
+- **`peers` is a snapshot** — re-read on every awareness change, and what you render an avatar stack
+  or a presence list from.
+- **`awareness` is the channel** — what an editor extension needs in order to publish the local
+  cursor and subscribe to remote ones. Tiptap's `CollaborationCursor` takes a `provider` and reads
+  `provider.awareness`, so `{ awareness }` is a complete provider as far as it is concerned. See
+  [Tiptap collaboration](/docs/collaboration/advanced/tiptap-integration).
+
+The hook re-renders on every awareness change: someone joining, leaving, or moving a cursor. That is
+frequent by design — this is the cursor channel — so render `peers` into something cheap, and do not
+run effects off it that hit the network.
+
+`awareness` is `null` until the transport connects, and it is **rebuilt on every reconnect**. Key
+anything that holds onto it on the object itself, or a reconnected session leaves your extension
+publishing into an abandoned channel.
+
+<Callout title="Awareness is per-process, not global">
+`peers` is everyone connected to the same document room on the same server process. For the
+cross-instance answer — "is anyone in this document, anywhere" — ask the server's
+[presence roster](/docs/collaboration/concepts/presence).
+</Callout>
+
+## Below the hook
+
+`DocSession` is exported, for a non-React frontend or a test:
+
+```ts
+import { DocSession } from '@adonis-agora/collaboration-client'
+
+const session = new DocSession('researches/42/writing', { baseUrl: 'https://api.example.com' })
+const unsubscribe = session.subscribe(() => console.log(session.getStatus()))
+
+await session.start()          // idempotent
+session.doc                    // the Y.Doc
+session.engine                 // what the server said, once the token arrived
+session.destroy()              // closes the transport and the document
+```
+
+`subscribe` starts the session too, so a subscriber never misses the first transition.
+
+## Testing without a server
+
+`createTransport` on the provider replaces the transport factory wholesale — the token is still
+fetched (stub `fetchImpl` to avoid that), but nothing opens a socket:
+
+```tsx
+<CollaborationProvider
+  baseUrl="http://test"
+  fetchImpl={fakeFetchReturningAToken}
+  createTransport={(info, doc) => new FakeTransport(doc)}
+>
+```
+
+See [Testing](/docs/collaboration/testing).

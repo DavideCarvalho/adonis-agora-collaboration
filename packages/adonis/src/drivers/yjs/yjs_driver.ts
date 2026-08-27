@@ -44,13 +44,17 @@ export class YjsDriver implements CollaborationDriver {
     const storage = this.storage;
 
     this.hocuspocus = new Hocuspocus({
-      async onAuthenticate({ documentName, token }: onAuthenticatePayload) {
+      async onAuthenticate({ documentName, token, connectionConfig }: onAuthenticatePayload) {
         const ctx = parseLegacyToken(token);
         if (!ctx) throw new Error('invalid token');
         const permission = await options.authorize(ctx, documentName);
         if (!permission.canRead) {
           throw new Error('no access to this document');
         }
+        // canWrite has to bind the connection itself: a client that is only
+        // told it may not write can simply not ask. Hocuspocus drops inbound
+        // updates on a read-only connection while still syncing outbound.
+        connectionConfig.readOnly = !permission.canWrite;
       },
 
       async onConnect({ documentName, requestParameters }: onConnectPayload) {
