@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/collaboration",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "description": "Collaborative editing (CRDT) for AdonisJS 7 — Yjs (Hocuspocus) and Automerge drivers, Redis-backed presence, unified version control. Part of the Agora ecosystem.",
   "license": "MIT",
   "repository": {
@@ -79,7 +79,11 @@
       "default": "./dist/configure.js"
     }
   },
-  "files": ["dist/", "README.md", "CHANGELOG.md"],
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "sideEffects": false,
   "scripts": {
     "build": "pnpm run clean && tsc -p tsconfig.build.json && pnpm run build:commands && pnpm run copy:stubs",
