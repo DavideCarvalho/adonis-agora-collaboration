@@ -33,6 +33,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # NOTE: biome does not format package.json here (see the override in biome.json).
+      # pnpm rewrites those manifests during a cold install on the runner — expanding the
+      # `files`/`keywords` arrays the formatter had collapsed — so with the override off, lint
+      # fails on files that are correct in the repo and in a local cold clone. The package
+      # manager owns that file's formatting; the formatter should not fight it.
       - name: Lint
         run: pnpm lint
 
