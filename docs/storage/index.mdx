@@ -20,6 +20,7 @@ interface CollaborationStorage {
   listVersions(docName): Promise<CollabVersion[]>
   saveVersion(docName, version, snapshot): Promise<void>
   loadVersionSnapshot(docName, versionId): Promise<Uint8Array | null>
+  pruneVersions({ keep, docName?, dryRun? }): Promise<number>
 
   listComments(docName, space?): Promise<CollabComment[]>
   saveComment(docName, comment): Promise<void>
@@ -27,7 +28,7 @@ interface CollaborationStorage {
 }
 ```
 
-Nine methods, no transactions, no query language. That narrowness is deliberate: it is what makes a
+Ten methods, no transactions, no query language. That narrowness is deliberate: it is what makes a
 Postgres backend, an S3 backend and a test double interchangeable.
 
 ## What calls what
@@ -38,6 +39,9 @@ Postgres backend, an S3 backend and a test double interchangeable.
 - `saveVersion` receives the document's bytes **at that moment** and must keep them. Returning them
   later from `loadVersionSnapshot` is what makes a restore restore anything;
   handing back the *current* state instead turns restore into a silent no-op.
+- `pruneVersions` is the retention seam: delete all but the `keep` most recent versions **per
+  document** and return how many went. It is what `node ace collaboration:prune` calls, and the
+  reason no one has to write a DELETE against the version table by hand.
 - The comment methods are ordinary CRUD, called from `manager.comments` and the REST routes.
 
 <Callout type="warn" title="saveComment is an upsert">

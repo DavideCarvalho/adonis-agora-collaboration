@@ -1,4 +1,8 @@
-import { Hocuspocus, type onAuthenticatePayload, type onLoadDocumentPayload } from '@hocuspocus/server';
+import {
+  Hocuspocus,
+  type onAuthenticatePayload,
+  type onLoadDocumentPayload,
+} from '@hocuspocus/server';
 import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import { WebSocketServer } from 'ws';

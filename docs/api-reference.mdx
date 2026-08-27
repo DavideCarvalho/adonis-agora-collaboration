@@ -106,6 +106,7 @@ clear message if it is read too early.
 | `listVersions({ docName })` | `Promise<CollabVersion[]>` |
 | `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live |
 | `diffVersions({ docName, aId, bId })` | `Promise<{ added: number; removed: number }>` |
+| `pruneVersions({ keep, docName?, dryRun? })` | `Promise<number>` — versions deleted; `keep` is per document |
 | `persistDocument({ docName, state })` | `Promise<void>` — throws without configured storage |
 | `listPresence({ docName })` | `Promise<PresenceMember[]>` — `[]` without Redis |
 | `attach(server)` | `Promise<void>` — called by the provider |
@@ -182,6 +183,7 @@ interface CollaborationStorage {
   listVersions(docName: string): Promise<CollabVersion[]>
   saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>
   loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>
+  pruneVersions(options: { keep: number; docName?: string; dryRun?: boolean }): Promise<number>
 
   listComments(docName: string, space?: string): Promise<CollabComment[]>
   saveComment(docName: string, comment: CollabComment): Promise<void>

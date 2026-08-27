@@ -3,3 +3,4 @@ dist/
 .turbo/
 coverage/
 *.tsbuildinfo
+packages/adonis/test/integration/__generated__/

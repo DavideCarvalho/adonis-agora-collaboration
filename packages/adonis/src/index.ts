@@ -49,6 +49,7 @@ export type {
   CollabVersion,
   CollabDiffSummary,
   PartyKitConfig,
+  PruneVersionsOptions,
 } from './types.js';
 
 // Root-level export so `node ace configure @adonis-agora/collaboration`

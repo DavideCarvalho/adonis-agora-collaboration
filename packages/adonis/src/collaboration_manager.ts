@@ -16,6 +16,7 @@ import type {
   CollabVersion,
   CollaborationConfig,
   CollaborationEngine,
+  PruneVersionsOptions,
 } from './types.js';
 
 /**
@@ -191,6 +192,27 @@ export class CollaborationManager {
       );
     }
     await this.config.storage.saveDocument(docName, state);
+  }
+
+  /**
+   * Deletes all but the `keep` most recent versions of each document, and
+   * returns how many were removed. `keep` is per document — a busy document
+   * never evicts another one's history.
+   *
+   * Meant for a scheduled job; `node ace collaboration:prune` is the same
+   * call from the CLI.
+   */
+  async pruneVersions({ keep, docName, dryRun }: PruneVersionsOptions): Promise<number> {
+    if (!this.config.storage) {
+      throw new Error(
+        '[@adonis-agora/collaboration] pruneVersions requires a storage backend — configure storage in config/collaboration.ts',
+      );
+    }
+    return this.config.storage.pruneVersions({
+      keep,
+      ...(docName !== undefined ? { docName } : {}),
+      ...(dryRun !== undefined ? { dryRun } : {}),
+    });
   }
 
   /** Online members of a document (across all instances, when Redis set). */

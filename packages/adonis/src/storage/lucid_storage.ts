@@ -1,5 +1,11 @@
 import type { Knex } from 'knex';
-import type { CollabComment, CollabVersion, CollaborationStorage } from '../types.js';
+import type {
+  CollabComment,
+  CollabVersion,
+  CollaborationStorage,
+  PruneVersionsOptions,
+} from '../types.js';
+import { assertPruneKeep, versionsToPrune } from './shared.js';
 
 /**
  * Minimal structural contract for the lucid connection — avoids the
@@ -9,6 +15,9 @@ import type { CollabComment, CollabVersion, CollaborationStorage } from '../type
 export interface LucidConnectionLike {
   connection(name?: string): unknown;
 }
+
+/** Ids deleted per statement by `pruneVersions` — keeps the IN (...) sane. */
+const PRUNE_BATCH_SIZE = 500;
 
 /**
  * Official Lucid storage — persists docs (binary state), versions and
@@ -84,7 +93,17 @@ export class LucidStorage implements CollaborationStorage {
       t.index(['doc_name', 'space']);
     });
 
-    await Promise.all([schema, versions, comments]);
+    // `createTableIfNotExists` skips the CREATE TABLE when the table is there
+    // but still emits its CREATE INDEX as a separate statement — which fails
+    // ("relation already exists") for an app that ran the published
+    // migrations. So only the builders for missing tables are executed; knex
+    // builders are lazy, nothing runs until they are awaited.
+    const present = await Promise.all([
+      knex.schema.hasTable('collab_documents'),
+      knex.schema.hasTable('collab_versions'),
+      knex.schema.hasTable('collab_comments'),
+    ]);
+    await Promise.all([schema, versions, comments].filter((_, index) => !present[index]));
   }
 
   async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
@@ -109,8 +128,11 @@ export class LucidStorage implements CollaborationStorage {
     if (existing) {
       await this.knex().from('collab_documents').where('doc_name', docName).update(payload);
     } else {
+      // `.table()`, not `.from()`: on a Lucid connection `from()` returns the
+      // SELECT builder, which has no `insert` — `.table()` is the insert
+      // builder on both Lucid and knex.
       await this.knex()
-        .from('collab_documents')
+        .table('collab_documents')
         .insert({
           doc_name: docName,
           ...payload,
@@ -137,7 +159,7 @@ export class LucidStorage implements CollaborationStorage {
   async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
     await this.ensure();
     await this.knex()
-      .from('collab_versions')
+      .table('collab_versions')
       .insert({
         doc_name: docName,
         id: version.id,
@@ -163,6 +185,45 @@ export class LucidStorage implements CollaborationStorage {
     // document, so an old history still lists and restores without throwing.
     if (!row.snapshot) return (await this.loadDocument(docName))?.state ?? null;
     return new Uint8Array(row.snapshot as Buffer);
+  }
+
+  async pruneVersions({ keep, docName, dryRun }: PruneVersionsOptions): Promise<number> {
+    assertPruneKeep(keep);
+    await this.ensure();
+
+    // The ids are selected with the query builder instead of a windowed
+    // DELETE: the package runs on pg/mysql/sqlite and only the builder
+    // speaks all three. `snapshot` (the big column) is never read here.
+    let query = this.knex().from('collab_versions').select('doc_name', 'id', 'seq');
+    if (docName) query = query.where('doc_name', docName);
+    const rows = (await query) as Array<{ doc_name: string; id: string; seq: number }>;
+
+    const perDocument = new Map<string, Array<{ id: string; seq: number }>>();
+    for (const row of rows) {
+      const group = perDocument.get(row.doc_name) ?? [];
+      group.push({ id: row.id, seq: row.seq });
+      perDocument.set(row.doc_name, group);
+    }
+
+    let removed = 0;
+    for (const [name, versions] of perDocument) {
+      const doomed = versionsToPrune(versions, keep);
+      if (doomed.length === 0) continue;
+      if (dryRun) {
+        removed += doomed.length;
+        continue;
+      }
+      // Batched so a long history doesn't build one enormous IN (...).
+      for (let index = 0; index < doomed.length; index += PRUNE_BATCH_SIZE) {
+        const batch = doomed.slice(index, index + PRUNE_BATCH_SIZE).map((version) => version.id);
+        removed += await this.knex()
+          .from('collab_versions')
+          .where('doc_name', name)
+          .whereIn('id', batch)
+          .delete();
+      }
+    }
+    return removed;
   }
 
   async listComments(docName: string, space?: string): Promise<CollabComment[]> {
@@ -201,7 +262,7 @@ export class LucidStorage implements CollaborationStorage {
       await this.knex().from('collab_comments').where('id', comment.id).update(payload);
     } else {
       await this.knex()
-        .from('collab_comments')
+        .table('collab_comments')
         .insert({
           id: comment.id,
           ...payload,

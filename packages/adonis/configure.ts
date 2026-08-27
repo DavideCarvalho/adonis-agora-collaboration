@@ -6,7 +6,7 @@ import { stubsRoot } from './stubs/main.js';
  *
  * 1. registers the collaboration service provider in `adonisrc.ts`;
  * 2. registers the ace commands barrel (`collaboration:init`,
- *    `make:collab-document`);
+ *    `collaboration:prune`, `make:collab-document`);
  * 3. publishes `config/collaboration.ts` (engine, path, redis, authorize,
  *    storage).
  */

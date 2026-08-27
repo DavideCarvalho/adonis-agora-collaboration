@@ -45,3 +45,32 @@ jobs:
 
       - name: Test
         run: pnpm -r test
+
+  # The unit suite runs LucidStorage's contract against the in-memory implementation, which is a
+  # hand-written reimplementation — so it can only ever prove the callers right. Two bugs lived
+  # under that gap: every insert threw (`.from()` is the select builder, not the insert one), and
+  # the lazy table bootstrap crashed on any app that had run the published migrations. This job is
+  # what keeps that class of bug from coming back.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Starts its own throwaway Postgres through testcontainers (the runner ships Docker), and
+      # creates the tables by running the published migration stubs rather than a copy of them.
+      - name: Integration tests
+        run: pnpm --filter @adonis-agora/collaboration test:integration
