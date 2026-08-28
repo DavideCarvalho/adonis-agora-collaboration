@@ -34,13 +34,12 @@ export class LucidStorage implements CollaborationStorage {
   private ready: Promise<void> | null = null;
 
   constructor(
-    private db: LucidConnectionLike,
-    /**
-     * Lucid connection name. Omitted uses the app's default connection —
-     * `db.connection(undefined)` is exactly what an unqualified query uses.
-     */
+    db?: LucidConnectionLike,
     private connection?: string,
-  ) {}
+  ) {
+    // Tests pass a real or mocked db instance; if so, bypass lazy import.
+    if (db) LucidStorage._db = db;
+  }
 
   /** Ensures the tables lazily on demand — boot doesn't touch the database. */
   private ensure(): Promise<void> {
@@ -50,13 +49,22 @@ export class LucidStorage implements CollaborationStorage {
     return this.ready;
   }
 
+  private static _db: LucidConnectionLike | null = null;
+
   /** The lucid connection is a Knex instance (QueryClientContract extends the builder). */
-  private knex(): Knex {
-    return this.db.connection(this.connection) as unknown as Knex;
+  private async knex(): Promise<Knex> {
+    if (!LucidStorage._db) {
+      // Dynamic import em vez de static: o dbFacade do Lucid é *undefined* se
+      // importado na eval do módulo (antes do provider do Lucid bootar). O
+      // import dinâmico resolve no primeiro uso, quando o app já está bootado.
+      const mod = await import('@adonisjs/lucid/services/db');
+      LucidStorage._db = mod.default as unknown as LucidConnectionLike;
+    }
+    return LucidStorage._db.connection(this.connection) as unknown as Knex;
   }
 
   private async ensureSchema(): Promise<void> {
-    const knex = this.knex();
+    const knex = await this.knex();
 
     const schema = knex.schema.createTableIfNotExists('collab_documents', (t) => {
       t.string('doc_name').primary();
@@ -108,7 +116,7 @@ export class LucidStorage implements CollaborationStorage {
 
   async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
     await this.ensure();
-    const row = await this.knex().from('collab_documents').where('doc_name', docName).first();
+    const row = await (await this.knex()).from('collab_documents').where('doc_name', docName).first();
     if (!row?.state) return null;
     return { state: new Uint8Array(row.state as Buffer) };
   }
@@ -119,19 +127,17 @@ export class LucidStorage implements CollaborationStorage {
     meta?: Record<string, unknown>,
   ): Promise<void> {
     await this.ensure();
-    const existing = await this.knex().from('collab_documents').where('doc_name', docName).first();
+    const knex = await this.knex();
+    const existing = await knex.from('collab_documents').where('doc_name', docName).first();
     const payload = {
       state: Buffer.from(state),
       meta: meta ?? null,
       updated_at: new Date(),
     };
     if (existing) {
-      await this.knex().from('collab_documents').where('doc_name', docName).update(payload);
+      await knex.from('collab_documents').where('doc_name', docName).update(payload);
     } else {
-      // `.table()`, not `.from()`: on a Lucid connection `from()` returns the
-      // SELECT builder, which has no `insert` — `.table()` is the insert
-      // builder on both Lucid and knex.
-      await this.knex()
+      await knex
         .table('collab_documents')
         .insert({
           doc_name: docName,
@@ -143,7 +149,8 @@ export class LucidStorage implements CollaborationStorage {
 
   async listVersions(docName: string): Promise<CollabVersion[]> {
     await this.ensure();
-    const rows = await this.knex()
+    const knex = await this.knex();
+    const rows = await knex
       .from('collab_versions')
       .where('doc_name', docName)
       .orderBy('seq', 'asc');
@@ -158,7 +165,7 @@ export class LucidStorage implements CollaborationStorage {
 
   async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
     await this.ensure();
-    await this.knex()
+    await (await this.knex())
       .table('collab_versions')
       .insert({
         doc_name: docName,
@@ -175,14 +182,12 @@ export class LucidStorage implements CollaborationStorage {
 
   async loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null> {
     await this.ensure();
-    const row = await this.knex()
+    const row = await (await this.knex())
       .from('collab_versions')
       .where('doc_name', docName)
       .andWhere('id', versionId)
       .first();
     if (!row) return null;
-    // Rows written before the snapshot column existed fall back to the live
-    // document, so an old history still lists and restores without throwing.
     if (!row.snapshot) return (await this.loadDocument(docName))?.state ?? null;
     return new Uint8Array(row.snapshot as Buffer);
   }
@@ -191,10 +196,8 @@ export class LucidStorage implements CollaborationStorage {
     assertPruneKeep(keep);
     await this.ensure();
 
-    // The ids are selected with the query builder instead of a windowed
-    // DELETE: the package runs on pg/mysql/sqlite and only the builder
-    // speaks all three. `snapshot` (the big column) is never read here.
-    let query = this.knex().from('collab_versions').select('doc_name', 'id', 'seq');
+    const knex = await this.knex();
+    let query = knex.from('collab_versions').select('doc_name', 'id', 'seq');
     if (docName) query = query.where('doc_name', docName);
     const rows = (await query) as Array<{ doc_name: string; id: string; seq: number }>;
 
@@ -213,10 +216,9 @@ export class LucidStorage implements CollaborationStorage {
         removed += doomed.length;
         continue;
       }
-      // Batched so a long history doesn't build one enormous IN (...).
       for (let index = 0; index < doomed.length; index += PRUNE_BATCH_SIZE) {
         const batch = doomed.slice(index, index + PRUNE_BATCH_SIZE).map((version) => version.id);
-        removed += await this.knex()
+        removed += await knex
           .from('collab_versions')
           .where('doc_name', name)
           .whereIn('id', batch)
@@ -228,7 +230,8 @@ export class LucidStorage implements CollaborationStorage {
 
   async listComments(docName: string, space?: string): Promise<CollabComment[]> {
     await this.ensure();
-    let query = this.knex().from('collab_comments').where('doc_name', docName);
+    const knex = await this.knex();
+    let query = knex.from('collab_comments').where('doc_name', docName);
     if (space) query = query.where('space', space);
     const rows = await query;
     return rows.map((row) => ({
@@ -247,7 +250,8 @@ export class LucidStorage implements CollaborationStorage {
 
   async saveComment(docName: string, comment: CollabComment): Promise<void> {
     await this.ensure();
-    const existing = await this.knex().from('collab_comments').where('id', comment.id).first();
+    const knex = await this.knex();
+    const existing = await knex.from('collab_comments').where('id', comment.id).first();
     const payload = {
       doc_name: comment.documentName,
       space: comment.space,
@@ -259,9 +263,9 @@ export class LucidStorage implements CollaborationStorage {
       updated_at: new Date(),
     };
     if (existing) {
-      await this.knex().from('collab_comments').where('id', comment.id).update(payload);
+      await knex.from('collab_comments').where('id', comment.id).update(payload);
     } else {
-      await this.knex()
+      await knex
         .table('collab_comments')
         .insert({
           id: comment.id,
@@ -274,27 +278,20 @@ export class LucidStorage implements CollaborationStorage {
 
   async deleteComment(docName: string, commentId: string): Promise<void> {
     await this.ensure();
-    await this.knex().from('collab_comments').where('id', commentId).delete();
+    await (await this.knex()).from('collab_comments').where('id', commentId).delete();
     void docName;
   }
 }
 
 /**
- * Factory para config — resolve o `db` do facade do Lucid de dentro,
- * imitando `stores.lucid({ connection })` do @adonis-agora/durable. O app
- * não precisa mais `import db from '@adonisjs/lucid/services/db'`.
+ * Factory para config — o `LucidStorage` agora resolve o fachada do Lucid
+ * LAZY (import dinâmico no primeiro `ensure()`), então o config pode chamá-lo
+ * sem se preocupar com a ordem de boot dos providers.
  *
  * @example
  * // config/collaboration.ts
  * storage: lucidStorage({ connection: 'entretextos' })
  */
-/**
- * Síncrono de propósito: chamado no topo do config (sem await). Resolve o
- * facade do Lucid via import estático — o app precisa de @adonisjs/lucid
- * instalado, que é o caso quando usa lucidStorage.
- */
-import dbFacade from '@adonisjs/lucid/services/db';
-
 export function lucidStorage(options: { connection?: string } = {}): LucidStorage {
-  return new LucidStorage(dbFacade as unknown as LucidConnectionLike, options.connection);
+  return new LucidStorage(undefined, options.connection);
 }
