@@ -217,7 +217,9 @@ rules apply.
 ```ts
 onCollaborationError(listener): () => void        // subscribe; returns unsubscribe
 setCollaborationLogger(logger | undefined): void  // the provider installs the Adonis logger
-collaborationEvents                               // the EventEmitter, on COLLAB_ERROR_EVENT
+reportCollaborationError(event): void             // report your own; never throws
+collaborationEvents                               // the EventEmitter
+COLLAB_ERROR_EVENT                                // its event name — deliberately not 'error'
 
 interface CollabErrorEvent {
   scope: 'storage' | 'authorize'
@@ -229,6 +231,13 @@ interface CollabErrorEvent {
 
 Storage failures inside the Hocuspocus hooks, and a throw from `authorize` at the handshake, are
 reported here instead of vanishing. With neither a logger nor a listener they reach `console.error`.
+
+`COLLAB_ERROR_EVENT` is not `'error'` on purpose: an `EventEmitter` with no `'error'` listener
+throws, which would turn the observability hook into a second outage.
+
+A denial and an evaluation failure stay distinct all the way to the client. On the Yjs handshake the
+former is a `CollabForbiddenError` and the latter a `CollabAuthorizationError`; on the Automerge
+socket they are close codes **4003** (final) and **4503** (retryable).
 
 ## Routes
 
@@ -287,7 +296,7 @@ CollabDocumentNameFor<'researches/:id/writing'>       // `researches/${string}/w
 
 ```tsx
 <CollaborationProvider
-  baseUrl={string}
+  baseUrl?={string}          // optional — falls back to location.origin
   getHeaders?={() => Record<string, string> | Promise<Record<string, string>>}
   createTransport?={(info, doc, docName) => CollabTransport}
   fetchImpl?={typeof fetch}
@@ -297,7 +306,13 @@ CollabDocumentNameFor<'researches/:id/writing'>       // `researches/${string}/w
 ### Hooks
 
 ```ts
-useCollabDoc({ docName }): { doc: Y.Doc; status: CollabStatus; error: Error | null }
+useCollabDoc({ docName }): {
+  doc: Y.Doc                 // stable for the provider's lifetime
+  collabDoc: CollabDoc       // the same document behind read/write/onUpdate
+  status: CollabStatus
+  synced: boolean            // the server's initial state has been applied
+  error: Error | null
+}
 
 useAutomergeDoc<T>({ docName, WebSocketImpl? }): {
   doc: A.Doc<T> | null
@@ -306,18 +321,34 @@ useAutomergeDoc<T>({ docName, WebSocketImpl? }): {
   change(fn: A.ChangeFn<T>): void
 }
 
-useAwareness({ docName }): {
+useAwareness({ docName, user? }): {
   peers: CollabPeer[]                              // everyone except you
   status: CollabStatus
   awareness: Awareness | null                      // the channel; null until connected
+  setLocalState(state: Record<string, unknown> | null): void
+  setLocalStateField(field: string, value: unknown): void
+}
+
+// `user` is your identity, published into the awareness `user` field — the
+// field every other client's `peers` reads. Without it the room is anonymous.
+interface CollabLocalUser {
+  userId?: string
+  name?: string
+  avatarUrl?: string | null
+  [key: string]: unknown
 }
 
 useCollabEditor<S>({ docName, editorId, adapter, doc? }): {
   state: S
   update(next: S): void
   status: CollabStatus
+  synced: boolean
   peers: CollabPeer[]
 }
+
+useExcalidrawSync({ doc, excalidrawAPI, editorId? }): void
+// doc: CollabDoc | Y.Doc | null — either of the two useCollabDoc returns
+// editorId defaults to 'excalidraw'; the scene is last-write-wins on one key
 
 useComments({ docName, space? }): {
   comments: CollabComment[]
@@ -364,16 +395,27 @@ interface CollabDoc {
 
 ```ts
 class DocSession {
-  constructor(docName: string, config: CollaborationClientConfig)
+  constructor(
+    docName: string,
+    config: CollaborationClientConfig,
+    options?: { registry?: DocSessionRegistry },   // the provider passes its map
+  )
   readonly doc: Y.Doc
   readonly docName: string
   get transport(): CollabTransport | undefined
   get engine(): string | undefined
   get error(): Error | null
+  get synced(): boolean          // initial state applied, not just "socket open"
+  get refCount(): number         // mounted consumers holding it open
+  get isDestroyed(): boolean
   getStatus(): CollabStatus
+  getSnapshot(): DocSessionSnapshot             // { status, error, synced }
   subscribe(listener: () => void): () => void   // also starts the session
   start(): Promise<void>                        // idempotent
-  destroy(): void
+  retain(): () => void   // hold it open; returns its own release
+  release(): void        // the last one calls stop()
+  stop(): void           // tears down the transport, KEEPS the Y.Doc
+  destroy(): void        // terminal: destroys the Y.Doc, evicts from the map
 }
 
 fetchToken(config, docName)
@@ -391,3 +433,18 @@ class CollabRestError extends Error { status: number; body: string }
 
 Transports: `HocuspocusCollabTransport`, `PartyKitCollabTransport`, `PartyServerCollabTransport`,
 and `defaultTransportFactory`.
+
+```ts
+interface CollabTransport {
+  readonly doc: Y.Doc
+  readonly awareness?: Awareness | null
+  getStatus(): CollabStatus
+  isSynced?(): boolean          // optional; the session falls back to the status
+  subscribe(listener: () => void): () => void
+  destroy(): void
+}
+```
+
+Only Hocuspocus can separate "socket open" from "initial state applied", so only it implements
+`isSynced`. For a transport that does not, `session.synced` reports `getStatus() === 'connected'` —
+never *less* informative than the status, and never more.

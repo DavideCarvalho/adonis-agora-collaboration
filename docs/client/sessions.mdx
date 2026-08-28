@@ -83,7 +83,7 @@ open; `synced` says the server's initial state has actually been applied to the 
 const { doc, status, synced, error } = useCollabDoc({ docName })
 
 const editor = useEditor({
-  extensions: [StarterKit.configure({ history: false }), Collaboration.configure({ document: doc })],
+  extensions: [StarterKit.configure({ undoRedo: false }), Collaboration.configure({ document: doc })],
   editable: true,
 })
 
@@ -157,7 +157,7 @@ Two views of one channel, for two different jobs:
 - **`peers` is a snapshot** — re-read on every awareness change, and what you render an avatar stack
   or a presence list from.
 - **`awareness` is the channel** — what an editor extension needs in order to publish the local
-  cursor and subscribe to remote ones. Tiptap's `CollaborationCursor` takes a `provider` and reads
+  cursor and subscribe to remote ones. Tiptap's `CollaborationCaret` takes a `provider` and reads
   `provider.awareness`, so `{ awareness }` is a complete provider as far as it is concerned. See
   [Tiptap collaboration](/docs/collaboration/advanced/tiptap-integration).
 

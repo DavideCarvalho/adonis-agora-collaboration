@@ -115,6 +115,16 @@ Because `authorize` is `async` and runs on every handshake, keep it cheap. One i
 fine; three joins and a permission-matrix rebuild will be felt on every reconnect. Cache in your
 own layer if it gets expensive — the library deliberately does not cache the answer for you.
 
+<Callout title="Throwing is not denying">
+If your rule *throws* — the query it makes hits a database that is down — that is not the same
+answer as `canRead: false`, and the library does not report it as one. The failure is pushed to
+[the error stream](/docs/collaboration/troubleshooting) and raised as a
+`CollabAuthorizationError` (a `4503` close code on the Automerge socket) rather than a
+`CollabForbiddenError` (`4003`). A client told "forbidden" should stop; a client told "unavailable"
+should back off and retry. Collapsing the two is what turns a blip on your side into a reconnect
+storm.
+</Callout>
+
 ## What the three permissions actually do
 
 All three are enforced by the library, on both the socket and the REST surface:
@@ -123,7 +133,12 @@ All three are enforced by the library, on both the socket and the REST surface:
 | --- | --- | --- |
 | `canRead` | the handshake is refused | `/token`, `/comments` (GET), `/versions` (GET) and `/state` (GET) answer `403` |
 | `canWrite` | the connection is made **read-only** — inbound updates are dropped, outbound sync continues | `/versions` (POST) and `/versions/restore` answer `403` |
-| `canComment` | — | `/comments` POST, PATCH and DELETE answer `403` |
+| `canComment` | — | `/comments` POST answers `403`; PATCH and DELETE need it **and** authorship |
+
+`canComment` is permission to *add* an annotation, not to silence someone else's. Resolving or
+deleting an existing comment is **author-or-elevated**: the author may always mutate their own, and
+anyone else needs `canWrite` on the document. The rule is exported as `canMutateComment` so a
+controller of your own can apply exactly the same one.
 
 `canWrite: false` binds the **connection**, not the UI. A client that is merely told it may not
 write can simply not ask, so the rule is applied where the update arrives: Hocuspocus marks the

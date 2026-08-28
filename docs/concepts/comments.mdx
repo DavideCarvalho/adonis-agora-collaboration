@@ -71,6 +71,13 @@ it defaults to `true`, so `PATCH /collaboration/comments/:id` with an empty body
 `remove` returns a boolean rather than throwing on a missing id, so a double-click on delete is not
 an error path.
 
+The manager methods themselves do no permission check — they are the storage operations. Who may
+run them is decided one layer up, and the rule is exported as `canMutateComment`: **the author may
+always resolve or delete their own comment, and anyone else needs `canWrite` on the document.**
+`canComment` is permission to *add* an annotation, not to silence someone else's, so a fellow
+commenter gets `403` on your thread and a moderating editor does not. A controller of your own
+should apply the same rule — see [Custom controllers](/docs/collaboration/advanced/controllers).
+
 Listing is sorted by `createdAt`, oldest first — the order a thread reads in.
 
 From the client:
@@ -97,9 +104,9 @@ deliberately does not, and the reasons compound:
   many threads did this reviewer open* — those are joins, and a CRDT is not a table.
 - **They must outlive the session.** A document nobody has open still has comments, and reading them
   should not mean materializing the document.
-- **They keep working when sync is down.** `useComments` is REST-backed and shares the document's
-  session only to stay aligned with its lifecycle — the WebSocket can be reconnecting and the
-  comment sidebar still loads.
+- **They keep working when sync is down.** `useComments` is REST-backed and opens no document
+  session at all — the WebSocket can be reconnecting, or absent entirely, and the comment sidebar
+  still loads.
 
 The trade is that comments are **not live**: a new comment from someone else appears when you
 `refresh()`, not the instant they post it. If you want them live, the idiomatic move is to trigger a

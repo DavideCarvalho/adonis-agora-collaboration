@@ -22,8 +22,19 @@ const { peers, status } = useAwareness({ docName })
 ```
 
 This is the layer that draws live cursors and the avatar stack. It is instant, it is free, and it
-needs zero configuration. Feed it from the editor — `CollaborationCursor` in Tiptap writes the local
-user into awareness automatically — and read `peers` to render everyone else.
+needs zero configuration. Publish your own identity through the `user` option (or `setLocalState`),
+read `peers` to render everyone else, and let the editor extension add the cursor —
+`CollaborationCaret` in Tiptap writes the local caret into the same channel:
+
+```tsx
+const { peers } = useAwareness({
+  docName,
+  user: { userId: me.id, name: me.name, avatarUrl: me.avatarUrl },
+})
+```
+
+That `user` is not optional in practice: `peers` reads it off *other* clients' awareness state, so
+a room where nobody publishes one is a row of anonymous client ids.
 
 Its limit is exactly its nature: awareness only knows about clients connected to **the same
 document room, through the same process**. Two Node instances behind a load balancer each hold their

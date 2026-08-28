@@ -31,6 +31,22 @@ Deliberately simple, and worth knowing because it explains the trade-offs:
 Full-document exchange rather than incremental deltas. Automerge compresses well, so this is fine
 for the structured documents it is meant for and unsuited to a 500-page manuscript.
 
+The handshake refuses with a close code rather than an HTTP status, and the codes are meant to be
+read:
+
+| Code | Meaning |
+| --- | --- |
+| `4000` | no `doc` in the query string |
+| `4001` | no token, or a token that does not parse |
+| `4003` | `authorize` said `canRead: false` — **final**, do not retry |
+| `4503` | `authorize` itself threw — the rule could not be evaluated, **retry with backoff** |
+| `4500` | the document could not be loaded from storage |
+
+`4003` and `4503` are deliberately different. "You may not" is an answer a client should respect;
+"we could not tell" is a transient condition, and reporting the second as the first is how a
+database blip on your side turns into a reconnect storm. Both are reported server-side through
+[the error stream](/docs/collaboration/troubleshooting) as well.
+
 ## The client hook
 
 Automerge documents get **their own hook**, not `useCollabDoc`:
@@ -60,14 +76,23 @@ function FichaEditor({ id }: { id: string }) {
 
 `change(fn)` mutates a draft, applies it locally so the UI updates immediately, and schedules the
 debounced send. `doc` is `null` until the first server payload lands — render a loading state rather
-than reaching into it.
+than reaching into it, which is the Automerge equivalent of gating on `synced`.
 
-<Callout type="warn" title="useCollabDoc throws on an Automerge document">
+<Callout type="warn" title="This hook does not reconnect">
+Unlike `useCollabDoc`, `useAutomergeDoc` opens one socket and does not rebuild it: a dropped
+connection leaves `status` on `'disconnected'` and local changes accumulate unsent until the
+component remounts. Disabling the input on a disconnect — as above — is therefore honest here, and
+it is the opposite of the advice for the Yjs path, where the session rebuilds the transport with a
+fresh token on its own.
+</Callout>
+
+<Callout type="warn" title="useCollabDoc fails on an Automerge document">
 `useCollabDoc` returns a `Y.Doc`, and an Automerge document is a fundamentally different structure —
 there is no honest way to hand one back as the other. Pointing `useCollabDoc` at a document the
-server resolves to `automerge` fails with a clear error instead of silently returning an empty
-document. Two hooks, chosen by engine — this is the one seam the library deliberately does not
-unify.
+server resolves to `automerge` puts a clear message on the hook's `error` and leaves `status` at
+`'error'`, instead of silently returning an empty document. It does not throw out of the render, so
+read `error` rather than wrapping the hook. Two hooks, chosen by engine — this is the one seam the
+library deliberately does not unify.
 </Callout>
 
 Both hooks live under the same `CollaborationProvider`, so a page with a Yjs body and an Automerge

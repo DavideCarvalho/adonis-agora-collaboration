@@ -47,22 +47,33 @@ The full walkthrough lives in [Tiptap collaboration](/docs/collaboration/advance
 the short version:
 
 ```tsx
-const { doc, status } = useCollabDoc({ docName })
+const { doc, synced } = useCollabDoc({ docName })
+const { awareness } = useAwareness({ docName, user: { userId: me.id, name: me.name } })
 
 const editor = useEditor({
   extensions: [
-    StarterKit.configure({ history: false }),          // the CRDT owns undo
+    StarterKit.configure({ undoRedo: false }),         // the CRDT owns undo
     Collaboration.configure({ document: doc }),
-    CollaborationCursor.configure({ user: { name, color } }),
+    CollaborationCaret.configure({ provider: { awareness }, user: { name, color } }),
   ],
-  editable: status === 'connected',
-})
+}, [awareness])
+
+if (!synced) return <DocumentLoading />
 ```
 
 <Callout type="warn" title="Disable the editor's own history">
 ProseMirror's undo stack does not distinguish your operations from a collaborator's, so leaving it
-enabled means Ctrl+Z can undo someone else's paragraph. `history: false` hands undo to the CRDT's
-own manager, which tracks origin.
+enabled means Ctrl+Z can undo someone else's paragraph. `undoRedo: false` hands undo to the CRDT's
+own manager, which tracks origin. The option is `history` on Tiptap 2 and `undoRedo` on Tiptap 3 —
+passing the old name to a Tiptap 3 StarterKit is accepted and does nothing.
+</Callout>
+
+<Callout type="warn" title="Gate the first paint on `synced`, not `editable` on the connection">
+`doc` is returned before the server's state arrives, so something has to hold the first render back
+— that is what `synced` is for. `editable: status === 'connected'` does not do that job:
+`'connected'` says the socket is open, not that the state was applied. It also breaks a working
+editor, turning it read-only on every dropped WebSocket with nothing on screen to say why. See
+[Sessions](/docs/collaboration/client/sessions).
 </Callout>
 
 ## Canvases
@@ -71,12 +82,25 @@ Excalidraw and tldraw both serialize to a scene object, and both are mirrored in
 an adapter — so the same `useCollabEditor` hook drives either:
 
 ```tsx
-const { state, update, status, peers } = useCollabEditor({
+const { state, update, synced, peers } = useCollabEditor({
   docName: 'whiteboards/1',
   editorId: 'excalidraw',
   adapter: createExcalidrawAdapter(),
 })
 ```
+
+<Callout type="warn" title="Canvas mirroring is last-write-wins over the whole scene">
+This is the one place in the library where "the CRDT merges it" is not the whole story. The scene
+lives under a **single key** (`Y.Map[editorId].value`) holding the entire `elements` array, so every
+change writes the whole array. Yjs converges — but on that one value, so two people drawing at the
+same instant produce two whole-scene writes and the later one replaces the earlier: the other
+person's stroke is gone, with no conflict and no error. There is no element-level merge here.
+
+It is usually livable — edits appear, people work in different regions, and the peer cursors keep
+them apart — and it is not something you can tune. If per-item concurrency actually matters, model
+each element as its own document key and write a `CollabEditorAdapter` that does it. Rich text is
+different: Tiptap binds to a `Y.XmlFragment` and does get real character-level merging.
+</Callout>
 
 See [Editors](/docs/collaboration/client/editors).
 
@@ -107,8 +131,10 @@ things worth knowing about the edges:
 Yjs has no built-in history, so the driver adds one: `createVersion` stores the **full encoded
 state** as a snapshot, and `restoreVersion` applies that snapshot's content back into the live
 document inside a transaction — so every connected client sees the restore arrive as an ordinary
-edit. `diffVersions` materializes both snapshots, extracts the text and reports
-`{ added, removed }` by line. See [Versions](/docs/collaboration/concepts/versions).
+edit. Before it does, it writes the state it is about to replace into the history as a version
+labelled `restored from #<seq>` and attributed to `restoredBy`, so the restore is itself undoable.
+`diffVersions` materializes both snapshots, extracts the text and reports `{ added, removed }` by
+line. See [Versions](/docs/collaboration/concepts/versions).
 
 ## Reading a document server-side
 

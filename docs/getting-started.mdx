@@ -86,7 +86,8 @@ That `authorize` is a placeholder — the next step replaces it with something r
 
 <Step title="Authorize a document">
 
-`authorize` runs on **every** WebSocket handshake and **every** REST token issue. It receives the
+`authorize` runs on **every** WebSocket handshake and on **every** REST request that names a
+document — the token issue, the comment and version endpoints, the state read. It receives the
 connection context (at minimum a `userId`) and the document name, and answers three questions:
 
 | Field | Question | What `false` does |
@@ -152,8 +153,10 @@ closed. That is the correct default, and it is also the most common cause of a c
 <Step title="Mount the client provider">
 
 `@adonis-agora/collaboration-client` keeps one session per document name — one `Y.Doc`, one
-transport, one reconnect loop — inside a provider. Mount it once, above every component that
-touches a shared document:
+transport, one reconnect loop — inside a provider. Sessions are reference counted: the socket opens
+with the first hook that mounts and closes when the last one unmounts, while the `Y.Doc` stays in
+the provider's map, so navigating back resumes on the document you left. Mount the provider once,
+in the layout rather than the page — a provider that remounts on navigation throws that map away:
 
 ```tsx title="app/pages/researches/writing.tsx"
 import { CollaborationProvider } from '@adonis-agora/collaboration-client'
@@ -167,9 +170,10 @@ export default function WritingPage({ research }: { research: { id: string } }) 
 }
 ```
 
-Same-origin apps (Inertia, a monolith) need nothing else — the session cookie rides along and the
-token endpoint resolves the user through your auth middleware. A separate frontend origin adds
-`getHeaders`:
+`baseUrl` is optional and falls back to `location.origin`, so a same-origin app can leave it out
+entirely. Those apps (Inertia, a monolith) need nothing else — the session cookie rides along and
+the token endpoint resolves the user through your auth middleware. A separate frontend origin needs
+a real `baseUrl` and adds `getHeaders`:
 
 ```tsx
 <CollaborationProvider
@@ -188,25 +192,28 @@ remounting the provider.
 ```tsx title="app/components/writing_editor.tsx"
 import { useAwareness, useCollabDoc } from '@adonis-agora/collaboration-client'
 import Collaboration from '@tiptap/extension-collaboration'
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
+import CollaborationCaret from '@tiptap/extension-collaboration-caret'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 
 export function WritingEditor({ researchId }: { researchId: string }) {
   const docName = `researches/${researchId}/writing`
-  const { doc, status, error } = useCollabDoc({ docName })
-  const { peers, awareness } = useAwareness({ docName })
+  const { doc, synced, error } = useCollabDoc({ docName })
+  const { peers, awareness } = useAwareness({
+    docName,
+    user: { userId: currentUser.id, name: currentUser.name },
+  })
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ history: false }), // the CRDT owns undo/redo
+      StarterKit.configure({ undoRedo: false }), // the CRDT owns undo/redo
       Collaboration.configure({ document: doc }),
-      CollaborationCursor.configure({ provider: { awareness }, user: currentUser }),
+      CollaborationCaret.configure({ provider: { awareness }, user: currentUser }),
     ],
-    editable: status === 'connected',
   }, [awareness])   // the channel is rebuilt on reconnect
 
   if (error) return <p>Could not open this document: {error.message}</p>
+  if (!synced) return <p>Loading the document…</p>
 
   return (
     <>
@@ -217,13 +224,28 @@ export function WritingEditor({ researchId }: { researchId: string }) {
 }
 ```
 
-Three details worth internalizing. `history: false` on StarterKit is not optional — ProseMirror's
-own undo stack does not know about remote operations, so it will happily undo someone else's
-paragraph; the CRDT's undo manager is the one that understands "mine". `editable` stays `false`
-until the status is `connected`, so local typing cannot race the initial sync. And `useAwareness`
-hands back the awareness channel itself alongside `peers`, which is what `CollaborationCursor` needs
-to publish the local caret — keyed on `awareness`, because that channel is rebuilt on every
-reconnect.
+Four details worth internalizing.
+
+`undoRedo: false` on StarterKit is not optional — ProseMirror's own undo stack does not know about
+remote operations, so it will happily undo someone else's paragraph; the CRDT's undo manager is the
+one that understands "mine". (On Tiptap 2 that option was called `history`; on Tiptap 3 the key
+`history` does nothing at all, which is the quiet way to end up with two undo stacks.)
+
+`synced` gates the **first paint**, not `editable`. `useCollabDoc` hands the `Y.Doc` back
+immediately and connects in the background, so without a gate the editor mounts on a document that
+is briefly empty and anything typed into it merges with the server's state when it lands. `synced`
+is `true` once that initial state has actually been applied. Do **not** write
+`editable: status === 'connected'`: `'connected'` only means the socket is open — it does not close
+that window — and it makes a four-second network blip turn the editor read-only mid-sentence with
+no explanation. Yjs handles offline edits; let people keep typing and show the connection state
+next to the title instead.
+
+`useAwareness` hands back the awareness channel itself alongside `peers`, which is what
+`CollaborationCaret` needs to publish the local caret — keyed on `awareness`, because that channel
+is rebuilt on every reconnect.
+
+And pass `user` to `useAwareness`. `peers` is built from the `user` field of everyone else's
+awareness state, so if nobody publishes one, every tab renders a room full of anonymous client ids.
 
 Open the page in two tabs. Type in one. It appears in the other, and both survive a reload.
 
@@ -247,7 +269,9 @@ After that first session, four things exist:
 
 - **Type your document names.** `node ace make:collab-document researches/writing` generates the
   shared types, and the [typed registry](/docs/collaboration/codegen/documents-registry) turns every
-  document name in the app into a union.
+  document name in the app into a union. If you declared your documents inline in
+  `config/collaboration.ts` instead — as above — the registry has nothing to scan; derive the union
+  from the config with `InferCollabDocumentNames<typeof collaborationConfig>`.
 - **Add comments and history.** `useComments` and `useVersions` are REST-backed hooks that work
   even while the WebSocket is down — see [Client hooks](/docs/collaboration/client).
 - **Go multi-instance.** Set `redisUrl` so `listPresence` aggregates across every Node process, and

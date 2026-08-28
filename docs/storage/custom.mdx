@@ -44,6 +44,14 @@ that fail quietly rather than loudly:
    counting without deleting, and return the number removed — that count is what the ace command
    prints.
 
+<Callout title="Throw — do not swallow">
+When a method cannot do its job, reject. The driver wraps every save, reports it through
+`onCollaborationError` (`scope: 'storage'`, with the operation and the document name) and rethrows,
+so a real failure reaches your logger and your alerting. A backend that catches its own errors and
+returns quietly reinstates exactly the bug that seam exists to close: an application whose documents
+never persist and whose sockets look perfectly healthy.
+</Callout>
+
 <Callout title="No transactions, deliberately">
 The interface has no transaction boundary because the operations do not need one: a document save is
 a single row, and a version is written after the bytes it snapshots already exist. Keep your

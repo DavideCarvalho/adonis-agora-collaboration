@@ -47,6 +47,45 @@ routes: {
 }
 ```
 
+## Coming back to the page gives a blank editor stuck on `connecting`
+
+Fixed in 0.10.0 — upgrade. A session used to be destroyed in `useCollabDoc`'s effect cleanup while
+the provider's map kept it, so an Inertia navigation back to the page (or a React StrictMode
+remount) handed the component the destroyed session, whose `start()` short-circuited on its cached
+promise. No error, no reconnect, an empty document.
+
+Sessions are [reference counted](/docs/collaboration/client/sessions) now: the last unmount tears
+down the transport and keeps the `Y.Doc`. If you see this after upgrading, look for your own
+`session.destroy()` in a component — `destroy()` is terminal by design and does not belong in an
+effect cleanup.
+
+## The editor goes read-only whenever the network hiccups
+
+Something is gating `editable` on the connection — `editable: status === 'connected'` is the usual
+line. Remove it. `'connected'` means the socket is open, not that the document arrived, so it never
+solved the empty-document problem it was written for, and a four-second blip silently locks the
+editor mid-sentence.
+
+Gate the **initial render** on `synced` instead and leave `editable` alone; use `canWrite` from your
+`authorize` result for a genuinely read-only user. See
+[Sessions](/docs/collaboration/client/sessions).
+
+## Everyone in the avatar stack is anonymous
+
+Nobody is publishing an identity. `peers` is built from the `user` field of the *other* clients'
+awareness state, so if no one sets it, every client sees a room of bare `clientId`s. Pass `user` to
+`useAwareness` (or call `setLocalState`) in every tab:
+
+```tsx
+const { peers } = useAwareness({
+  docName,
+  user: { userId: me.id, name: me.name, avatarUrl: me.avatarUrl },
+})
+```
+
+Whatever you last published is re-applied after a reconnect, so you do not vanish from other
+people's lists on a dropped socket.
+
 ## Edits from another user never arrive
 
 The document is open in more than one process. See
@@ -82,9 +121,11 @@ await storage.saveDocument('doc/1', bytesB)
 assert.deepEqual(await storage.loadVersionSnapshot('doc/1', version.id), bytesA) // not bytesB
 ```
 
-## `useCollabDoc` throws about the engine
+## `useCollabDoc` reports an engine error
 
-The server resolved this document to `automerge`, which cannot back a `Y.Doc`. Use
+The server resolved this document to `automerge`, which cannot back a `Y.Doc`. The session does not
+throw — it surfaces the failure on the hook's `error` and leaves `status` at `'error'`, so read
+`error` rather than wrapping the hook in a `try`. Use
 [`useAutomergeDoc`](/docs/collaboration/engines/automerge) — or fix the routing if the document was
 meant to be Yjs. Check what the server actually decided:
 
@@ -126,11 +167,23 @@ onCollaborationError(({ scope, operation, docName, error }) => {
 With neither a logger nor a listener the failure still reaches `console.error` — an unobserved
 outage is the one outcome this does not produce.
 
+Two distinctions worth knowing when you read those events. A denial and an outage are different
+things: `authorize` returning `canRead: false` is a `CollabForbiddenError`, while `authorize`
+*throwing* — the database it queries is down — is a `CollabAuthorizationError` and is reported here
+under `scope: 'authorize'`. And on the Automerge driver the two reach the browser as different
+WebSocket close codes: **4003** for a denial (final; do not retry) and **4503** for "could not
+evaluate the rule" (transient; back off and retry). Collapsing them is how an app-side database blip
+becomes a reconnect storm.
+
 ## Undo removes someone else's text
 
-ProseMirror's history is still enabled. `StarterKit.configure({ history: false })` — see
+ProseMirror's history is still enabled. `StarterKit.configure({ undoRedo: false })` — see
 [Tiptap collaboration](/docs/collaboration/advanced/tiptap-integration). It only reproduces with two
 people in the document, which is why it usually reaches production.
+
+If you wrote `history: false` and nothing changed: that is the Tiptap 2 name. Tiptap 3 renamed the
+StarterKit option to `undoRedo`, and an unknown key is ignored rather than rejected — so the undo
+extension stays on and the collision looks unfixable.
 
 ## Constant disconnect/reconnect cycling
 

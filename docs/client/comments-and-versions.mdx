@@ -52,6 +52,11 @@ The three write operations differ in how the list updates, and the difference is
 So `create` costs a round trip and `resolve`/`remove` feel instant. If you need
 `create` to feel instant too, render an optimistic placeholder and let the refetch replace it.
 
+`resolve` and `remove` are **author-or-elevated** on the server: you may always mutate your own
+comment, and mutating someone else's needs `canWrite` on the document — `canComment` alone answers
+`403`. Since both update the local list optimistically, a rejection leaves the sidebar briefly
+showing a change that did not happen; `refresh()` in the `catch` puts it back.
+
 A comment anchor is yours to build from your editor's selection:
 
 ```tsx
@@ -88,8 +93,9 @@ const version = await create('before review')  // label is optional
 await restore(versions[0].id)
 ```
 
-Both writes refetch, because both change the list — `create` adds a row with a server-assigned `seq`,
-and `restore` is worth re-reading the history after.
+Both writes refetch, because both change the list. `create` adds a row with a server-assigned `seq`;
+`restore` adds one too — the state it replaced, saved as `restored from #<seq>` before the old
+content is applied.
 
 Render `seq` rather than `id`: it is the friendly 1, 2, 3… the library maintains for exactly this.
 
@@ -106,20 +112,20 @@ Render `seq` rather than `id`: it is the friendly 1, 2, 3… the library maintai
 
 <Callout type="warn" title="Restoring is immediate and visible to everyone">
 `restore` applies the old content to the **live** document, so every connected client sees it
-happen — including someone mid-sentence. Confirm before calling it, and consider snapshotting the
-current state first so the restore is itself undoable:
+happen — including someone mid-sentence. Put a confirmation in front of the button.
 
-```tsx
-await create('before restore')
-await restore(versionId)
-```
+You do not need to snapshot first: `restoreVersion` writes the state it is about to replace into
+the history itself, labelled `restored from #<seq>` and attributed to the caller, so the restore is
+already undoable. Call `create('before restore')` beforehand only when you want your own label on
+that checkpoint.
 </Callout>
 
 ## They work when sync does not
 
-Both hooks are REST-backed. They touch the session only to stay aligned with the document's
-lifecycle — they do not need the WebSocket. A reconnecting editor still renders its comment sidebar
-and its history, which is usually exactly what you want on a flaky connection.
+Both hooks are REST-backed, and that is all they are: neither one opens a document session or holds
+a `Y.Doc`. They take the document name, they call the routes, and they never touch the WebSocket. A
+reconnecting editor still renders its comment sidebar and its history — and so does a page that
+never mounts an editor at all, which is what makes a comment count in a document list cheap.
 
 The flip side: they are **not live**. Someone else's new comment shows up when you `refresh()`.
 Trigger it from whatever signal you already have — a poll, an SSE stream, a flag in the shared
@@ -154,3 +160,8 @@ try {
   }
 }
 ```
+
+On `resolve` and `remove`, `403` means something narrower — the comment is someone else's and you
+do not have `canWrite` — and `404` means the id is not in this document. Both are worth their own
+message; a generic "something went wrong" on a permission answer is the kind of error people file
+a bug about.

@@ -10,9 +10,9 @@ The defaults cover the common path: the provider mounts ten routes, the hooks co
 write `authorize`. Two situations reach past that.
 
 **You need the HTTP surface to be yours** — a versioned API, response shapes a frontend already
-depends on, guards that differ per route, or an authorization check on the comment endpoints that
-the built-ins do not make. The library keeps owning the hard parts (sync, storage, versions,
-comments) and hands you the controllers.
+depends on, guards that differ per route, or a rule of your own layered on top of the library's.
+The library keeps owning the hard parts (sync, storage, versions, comments) and hands you the
+controllers — and, with them, the permission checks it was making for you.
 
 **You are binding an editor with its own CRDT integration** — Tiptap, ProseMirror, CodeMirror.
 Those do not go through an adapter; they bind to the shared document directly, and the wiring has a

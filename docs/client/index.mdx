@@ -1,6 +1,6 @@
 ---
 title: Client hooks
-description: The React package — the provider and its config, the six hooks and which one to reach for, why the client never hard-codes an engine, and how sessions are shared.
+description: The React package — the provider and its config, the hooks and which one to reach for, why the client never hard-codes an engine, and how sessions are reference counted.
 icon: Braces
 ---
 
@@ -52,14 +52,16 @@ every route change starts from scratch. Put it in the layout.
 | --- | --- | --- |
 | `useCollabDoc` | the shared `Y.Doc` (and its `collabDoc` view) plus `status`, `synced` and `error` | WebSocket |
 | `useAutomergeDoc` | the Automerge document plus `change(fn)` | WebSocket |
-| `useCollabEditor` | an editor-agnostic `{ state, update }` view, plus peers | WebSocket |
+| `useCollabEditor` | an editor-agnostic `{ state, update }` view, plus `synced` and peers | WebSocket |
 | `useAwareness` | `peers` — everyone else in the room — plus `setLocalState` to publish yourself | WebSocket |
+| `useExcalidrawSync` | nothing — it wires a `Y.Doc` (or a `collabDoc`) to Excalidraw's imperative API | WebSocket |
 | `useComments` | `comments`, `create`, `resolve`, `remove`, `refresh` | REST |
 | `useVersions` | `versions`, `create`, `restore`, `refresh` | REST |
 
 Two things follow from that last column. The REST-backed hooks **keep working while the socket is
-down** — a reconnecting editor still shows its comment sidebar — and they are **not live**: new
-comments appear on `refresh()`, not the instant someone else posts one.
+down** — they open no session at all, so a page with no editor on it can list a document's comments
+— and they are **not live**: new comments appear on `refresh()`, not the instant someone else posts
+one.
 
 ## Picking a document hook
 
@@ -76,10 +78,11 @@ where the editor's own extension does the binding. `useCollabEditor` is a level 
 a whole scene in and out of one document key, so the component only ever sees
 `{ state, update }`. See [Editors](/docs/collaboration/client/editors).
 
-<Callout type="warn" title="useCollabDoc throws on an Automerge document">
+<Callout type="warn" title="useCollabDoc fails on an Automerge document">
 An Automerge document cannot back a `Y.Doc`, so there is no honest way to return one. Pointing
-`useCollabDoc` at a document the server resolves to `automerge` fails with a clear error rather than
-handing back an empty document that never syncs. See
+`useCollabDoc` at a document the server resolves to `automerge` surfaces a clear message on the
+hook's `error` — it does not throw out of the render, so check `error`, do not wrap the hook — rather
+than handing back an empty document that never syncs. See
 [Automerge](/docs/collaboration/engines/automerge).
 </Callout>
 
@@ -88,7 +91,8 @@ handing back an empty document that never syncs. See
 Every hook is built on exported pieces you can use directly when a hook does not fit — a
 non-React frontend, a script, a test:
 
-- `DocSession` — the token fetch, transport and reconnect loop for one document.
+- `DocSession` — the token fetch, transport and reconnect loop for one document, plus the
+  `retain`/`release`/`stop`/`destroy` lifecycle the hooks drive for you.
 - `fetchToken`, `listComments`, `createComment`, `resolveComment`, `deleteComment`,
   `listVersions`, `createVersion`, `restoreVersion` — the REST client, plus `CollabRestError`.
 - `HocuspocusCollabTransport`, `PartyKitCollabTransport`, `PartyServerCollabTransport` and

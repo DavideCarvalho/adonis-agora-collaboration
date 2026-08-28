@@ -1,6 +1,6 @@
 ---
 title: Custom controllers
-description: Take over the HTTP surface without losing the library's token semantics — the three levels of control, a complete working controller, and the authorization the built-in routes do not do for you.
+description: Take over the HTTP surface without losing the library's token semantics — the three levels of control, a complete working controller, and the authorization you take over along with it.
 icon: Route
 ---
 
@@ -56,7 +56,8 @@ it through the manager, from `config/collaboration.ts`.
 ## Level three — write the controllers
 
 Now you own the handlers. The library still owns sync, storage, versions and comments; you own the
-HTTP shape.
+HTTP shape — including the permission checks, which stop being applied for you the moment the
+built-in routes are off.
 
 ```ts title="config/collaboration.ts"
 routes: { enabled: false }
@@ -68,6 +69,7 @@ import type { HttpContext } from '@adonisjs/core/http'
 import {
   CollabForbiddenError,
   CollaborationManager,
+  canMutateComment,
   issueToken,
 } from '@adonis-agora/collaboration'
 import app from '@adonisjs/core/services/app'
@@ -99,7 +101,7 @@ export default class CollaborationController {
     }
   }
 
-  /** Comments — with the permission check the built-in routes do not make. */
+  /** Comments — reproducing, by hand, the check the built-in route already makes. */
   async listComments({ request, response, auth }: HttpContext) {
     const { doc, space } = request.qs() as { doc?: string; space?: string }
     if (!doc) return response.badRequest({ error: 'doc is required' })
@@ -127,6 +129,27 @@ export default class CollaborationController {
     })
   }
 
+  /**
+   * Resolving or deleting someone else's comment is not `canComment`.
+   * `canMutateComment` is the library's own rule, exported so a controller
+   * enforces exactly what the built-in route does.
+   */
+  async resolveComment({ request, response, params, auth }: HttpContext) {
+    const docName = request.qs().doc as string
+    const userId = String(auth.user!.id)
+    const permission = await this.collaboration.authorize({ userId }, docName)
+    if (!permission.canComment) return response.forbidden({ error: 'commenting is not allowed' })
+
+    const comments = await this.collaboration.comments.list(docName)
+    const comment = comments.find((entry) => entry.id === params.id)
+    if (!comment) return response.notFound({ error: 'comment not found' })
+    if (!canMutateComment({ comment, userId, permission })) {
+      return response.forbidden({ error: 'not your comment' })
+    }
+
+    return this.collaboration.comments.resolve(docName, params.id, request.body().resolved ?? true)
+  }
+
   async createVersion({ request, auth }: HttpContext) {
     const { docName, label } = request.body()
     return this.collaboration.createVersion({
@@ -150,6 +173,7 @@ router
     router.get('/token', [Collaboration, 'token'])
     router.get('/comments', [Collaboration, 'listComments'])
     router.post('/comments', [Collaboration, 'createComment'])
+    router.patch('/comments/:id', [Collaboration, 'resolveComment'])
     router.post('/versions', [Collaboration, 'createVersion'])
     router.get('/presence', [Collaboration, 'presence'])
   })
@@ -171,12 +195,23 @@ raw `config.authorize` silently skips every per-document rule.
 it is, it can lie about. The built-in routes attribute a comment to the authenticated caller and
 ignore a body-supplied `userId`; a controller of your own should do the same.
 
+**Reuse `canMutateComment` for comment mutations.** `canComment` is permission to add a comment, not
+to resolve or delete someone else's — the rule is author-or-`canWrite`, and it is exported precisely
+so a controller does not have to re-derive it and get it subtly wrong. Checking only `canComment`
+there is the bug the built-in routes had before 0.10.0.
+
+**`issueToken` refuses without a rule.** Pass it an `authorize` or it throws `CollabForbiddenError`
+rather than minting: an absent rule is a misconfiguration, not a grant. That is why the example
+above passes the manager's.
+
 <Callout title="The built-in routes already guard themselves">
-Every built-in route resolves the caller and checks the matching permission — `canRead` to read,
-`canWrite` for versions, `canComment` for comments — before touching anything. See
+Every built-in route resolves the caller and checks the matching permission before touching
+anything — `canRead` to read, `canWrite` for versions, `canComment` to add a comment, and
+author-or-`canWrite` to resolve or delete one. See
 [Authorization](/docs/collaboration/concepts/authorization). The controller above reproduces that by
 hand, which earns its keep when you need a different response shape or an extra rule, and is pure
-duplication when you do not. Reach for level three for the surface, not for the guard.
+duplication when you do not. Reach for level three for the surface, not for the guard — and if you
+do, reproduce all four rules, not the three that are obvious.
 </Callout>
 
 ## What you keep either way
@@ -189,7 +224,7 @@ with `baseUrl`, or keep the paths and change only the guards.
 ## The trade
 
 **Take control when** you need per-route guards, a versioned API, a response shape a frontend
-already depends on, or an authorization check the built-ins do not make.
+already depends on, or a rule of your own on top of the library's.
 
 **Stay with the defaults when** the built-in routes fit. They are ordinary routes: Tuyau types
 them, `routes.middleware` protects them, and `routes.prefix` moves them. Every controller you write

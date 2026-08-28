@@ -1,13 +1,13 @@
 ---
 title: Testing
-description: Prove the parts that actually break — that authorize denies, that a version snapshot is the version's, and that the client reconnects — using in-memory storage, fake transports and no server.
+description: Prove the parts that actually break — that authorize denies, that a version snapshot is the version's, that the client survives a remount, and that a storage failure is reported — using in-memory storage, fake transports and no server.
 icon: FlaskConical
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
 Real-time code has an unusual test profile: the sync engine is somebody else's well-tested library,
-and the bugs are almost always in the seams around it. Three things are worth your test budget, and
+and the bugs are almost always in the seams around it. Four things are worth your test budget, and
 none of them need a WebSocket.
 
 ## 1. That `authorize` denies
@@ -115,19 +115,25 @@ import { CollaborationProvider } from '@adonis-agora/collaboration-client'
 import * as Y from 'yjs'
 
 class FakeTransport {
-  status: 'connecting' | 'connected' | 'disconnected' = 'connected'
+  status: 'connecting' | 'connected' | 'disconnected' | 'error' = 'connecting'
+  synced = false
   awareness = null
   #listeners = new Set<() => void>()
 
   constructor(readonly doc: Y.Doc) {}
 
   getStatus() { return this.status }
+  // Optional on the interface — implement it and your test can hold the
+  // component in its pre-sync state, which is the one most UIs get wrong.
+  // A transport without it reports `connected` as synced.
+  isSynced() { return this.synced }
   subscribe(listener: () => void) { this.#listeners.add(listener); return () => this.#listeners.delete(listener) }
   destroy() {}
 
   /** Drive the states the UI has to handle. */
-  emit(status: typeof this.status) {
+  emit(status: typeof this.status, synced = this.synced) {
     this.status = status
+    this.synced = synced
     for (const listener of this.#listeners) listener()
   }
 }
@@ -148,9 +154,28 @@ function renderEditor() {
 }
 ```
 
-With that in place you can assert the things that are genuinely easy to get wrong: the editor is
-read-only while `connecting`, an error renders a message instead of a blank page, and a
-`disconnected` transition shows the reconnecting state rather than silently freezing.
+With that in place you can assert the things that are genuinely easy to get wrong: nothing paints
+the document until `synced`, an error renders a message instead of a blank page, and a
+`disconnected` transition shows the reconnecting state **without** locking the editor — a dropped
+socket must not take the writer's keyboard away.
+
+```tsx
+const transport = /* the FakeTransport your factory handed out */
+
+transport.emit('connected', false)   // socket open, state not applied yet
+// → still the loading state
+
+transport.emit('connected', true)
+// → the document renders
+
+transport.emit('disconnected')
+// → a reconnecting indicator, and the editor is STILL editable
+```
+
+The other lifecycle worth a test is the remount. Unmount the component and render it again: the
+provider hands back the same session and the same `Y.Doc`, so whatever was typed is still there.
+That is the reference count doing its job — a test that fails here is the class of bug where
+navigating back gave people a blank editor.
 
 REST-backed hooks need only `fetchImpl`:
 
@@ -160,6 +185,29 @@ test('renders the comment sidebar', async () => {
   // …assert the sidebar renders it
 })
 ```
+
+## 4. That a failure is observable
+
+Worth a few lines because the failure it guards against is invisible by construction: storage errors
+happen inside socket hooks that swallow throws. `onCollaborationError` is the seam, and it is
+subscribable from a test:
+
+```ts
+import { onCollaborationError } from '@adonis-agora/collaboration'
+
+test('a storage outage is reported, not swallowed', async ({ assert }) => {
+  const seen: string[] = []
+  const off = onCollaborationError((event) => seen.push(`${event.scope}.${event.operation}`))
+
+  // …drive a save against a storage whose saveDocument rejects…
+
+  off()
+  assert.include(seen, 'storage.saveDocument')
+})
+```
+
+Break it on purpose first: a listener that never fires passes this test just as happily as one that
+fires correctly.
 
 ## What not to test
 
