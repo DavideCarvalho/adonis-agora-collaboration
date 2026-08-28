@@ -1,6 +1,6 @@
 {
   "name": "@adonis-agora/collaboration-client",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Client-side React hooks for @adonis-agora/collaboration — collaborative docs, presence, comments and versions. Part of the Agora ecosystem.",
   "license": "MIT",
   "repository": {
