@@ -3,8 +3,14 @@ import { CollaborationProvider, useCollabDoc } from '../index.js';
 import { useExcalidrawSync } from '../hooks/use_excalidraw_sync.js';
 import { YjsCollabDoc } from '../docs/index.js';
 
-// CSS do Excalidraw — bundler (Vite) resolve para o pacote instalado no app.
-import '@excalidraw/excalidraw/index.css';
+// O CSS do Excalidraw precisa ser importado pelo APP HOST, não por esta
+// lib — bundlers (Vite, rolldown) não conseguem resolver o subpath
+// './index.css' no campo `exports` do `@excalidraw/excalidraw` quando
+// o import vem de um `node_modules` aninhado (peer dep), e forçar
+// o import aqui quebra a build com `Package subpath './index.css' is
+// not defined`. O app que usa o `ExcalidrawBoard` deve importar
+// `@excalidraw/excalidraw/index.css` direto no entrypoint (e.g. na
+// `whiteboard_canvas.tsx` ou na página de lousa).
 
 const ExcalidrawLazy = lazy(async () => {
   const mod = await import('@excalidraw/excalidraw');
