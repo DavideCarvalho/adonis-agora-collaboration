@@ -97,6 +97,17 @@ export class YjsDriver implements CollaborationDriver {
         await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
       },
 
+      // CRITICAL: when the last client disconnects (F5 / close tab / nav away),
+      // Hocuspocus's default onClose path (server line 1382) only flushes the
+      // debouncer IF there's a pending save — otherwise it calls unloadDocument
+      // and silently destroys the Y.Doc. Result: edits made between the last
+      // onStoreDocument and the disconnect are lost. We hook beforeUnloadDocument
+      // to persist synchronously before the doc is destroyed, regardless of
+      // debouncer state. This makes F5 reliable.
+      async beforeUnloadDocument({ documentName, document }) {
+        await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+      },
+
       debounce: options.debounce ?? 2000,
     });
   }

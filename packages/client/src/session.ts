@@ -9,6 +9,16 @@ import type {
 } from './types.js';
 
 const MAX_RECONNECT_DELAY_MS = 15_000;
+/**
+ * Circuit breaker: depois de MAX_RECONNECT_ATTEMPTS falhas consecutivas no
+ * fetchToken (e.g. banco sem as tabelas esperadas, auth quebrada), paramos
+ * de tentar e marcamos o status como 'error'. Sem isso, o client fica
+ * num loop infinito de retry e cada tentativa dispara updates no Y.Doc
+ * que o Tiptap `Collaboration` extension escuta — em setups que ligam
+ * o editor com `forceUpdate` na mudança, isso vira React error #185
+ * (Maximum update depth exceeded) e trava a página.
+ */
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 /**
  * Session for a single document: fetches the ephemeral token, creates the
@@ -132,6 +142,13 @@ export class DocSession {
    */
   #scheduleReconnect(): void {
     if (this.#reconnectTimer || this.#destroyed) return;
+    if (this.#attempt >= MAX_RECONNECT_ATTEMPTS) {
+      this.#setStatus(
+        'error',
+        new Error(`reconnect: exceeded ${MAX_RECONNECT_ATTEMPTS} attempts`),
+      );
+      return;
+    }
 
     const delay = Math.min(1000 * 2 ** this.#attempt, MAX_RECONNECT_DELAY_MS);
     this.#attempt += 1;

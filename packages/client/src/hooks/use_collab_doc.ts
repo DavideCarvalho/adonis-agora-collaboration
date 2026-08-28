@@ -32,12 +32,18 @@ export function useCollabDoc(options: UseCollabDocOptions): UseCollabDocResult {
     () => 'connecting' as CollabStatus,
   );
 
-  // Garante start mesmo sem re-render subsequente; sessão é cacheada no
-  // provider, então este efeito é barato em re-montagens.
+  // Garante start no mount. No cleanup destruímos a sessão: o Hocuspocus
+  // Provider enfileira callbacks (requestIdleCallback, setTimeout) que
+  // tentam acessar o Y.Doc e o awareness — se o componente re-monta (React
+  // 18 StrictMode, navegação), o `doc` antigo pode estar destruído e o
+  // callback quebra com `Cannot read properties of undefined (reading
+  // 'startTime')`, que dispara o re-render loop do Tiptap Collaboration
+  // (React #185). Destruir a sessão garante que timers e listeners são
+  // limpos junto com o doc.
   useEffect(() => {
     void session.start();
     return () => {
-      // Sem destroy aqui: a sessão sobrevive ao unmount do componente.
+      session.destroy();
     };
   }, [session]);
 
