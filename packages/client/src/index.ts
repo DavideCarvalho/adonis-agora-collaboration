@@ -37,6 +37,10 @@ export type {
 } from './types.js';
 export { useAutomergeDoc } from './hooks/use_automerge_doc.js';
 export type { UseAutomergeDocResult } from './hooks/use_automerge_doc.js';
+export { useExcalidrawSync } from './hooks/use_excalidraw_sync.js';
+export type { UseExcalidrawSyncOptions, ExcalidrawAPIHandle } from './hooks/use_excalidraw_sync.js';
+export { ExcalidrawBoard } from './components/excalidraw_board.js';
+export type { ExcalidrawBoardProps } from './components/excalidraw_board.js';
 export {
   createExcalidrawAdapter,
   createTldrawAdapter,
