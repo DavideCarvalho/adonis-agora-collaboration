@@ -116,7 +116,10 @@ export class LucidStorage implements CollaborationStorage {
 
   async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
     await this.ensure();
-    const row = await (await this.knex()).from('collab_documents').where('doc_name', docName).first();
+    const row = await (await this.knex())
+      .from('collab_documents')
+      .where('doc_name', docName)
+      .first();
     if (!row?.state) return null;
     return { state: new Uint8Array(row.state as Buffer) };
   }
@@ -137,13 +140,11 @@ export class LucidStorage implements CollaborationStorage {
     if (existing) {
       await knex.from('collab_documents').where('doc_name', docName).update(payload);
     } else {
-      await knex
-        .table('collab_documents')
-        .insert({
-          doc_name: docName,
-          ...payload,
-          created_at: new Date(),
-        });
+      await knex.table('collab_documents').insert({
+        doc_name: docName,
+        ...payload,
+        created_at: new Date(),
+      });
     }
   }
 
@@ -265,13 +266,11 @@ export class LucidStorage implements CollaborationStorage {
     if (existing) {
       await knex.from('collab_comments').where('id', comment.id).update(payload);
     } else {
-      await knex
-        .table('collab_comments')
-        .insert({
-          id: comment.id,
-          ...payload,
-          created_at: new Date(comment.createdAt),
-        });
+      await knex.table('collab_comments').insert({
+        id: comment.id,
+        ...payload,
+        created_at: new Date(comment.createdAt),
+      });
     }
     void docName;
   }

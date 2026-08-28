@@ -1,11 +1,9 @@
 import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
-import type * as Y from 'yjs';
-import { getOrCreateSession, useCollaborationContext } from '../context.js';
-import { YjsCollabDoc } from '../docs/index.js';
 import type { CollabDoc } from '../docs/types.js';
 import type { CollabEditorAdapter } from '../editors/types.js';
 import type { CollabPeer, CollabStatus } from '../types.js';
 import { useAwareness } from './use_awareness.js';
+import { useCollabDoc } from './use_collab_doc.js';
 
 export interface UseCollabEditorOptions<S> {
   docName: string;
@@ -25,6 +23,8 @@ export interface UseCollabEditorResult<S> {
   /** Writes the next scene into the shared doc. */
   update(next: S): void;
   status: CollabStatus;
+  /** True once the server's initial state has been applied to the doc. */
+  synced: boolean;
   peers: CollabPeer[];
 }
 
@@ -43,35 +43,48 @@ export interface UseCollabEditorResult<S> {
  *   adapter: createExcalidrawAdapter(),
  * })
  * ```
+ *
+ * Scene writes are whole-scene replacement (last-write-wins over the whole
+ * key), not per-element merging — see the Editors docs.
  */
 export function useCollabEditor<S>(options: UseCollabEditorOptions<S>): UseCollabEditorResult<S> {
   const { docName, editorId, adapter, doc } = options;
-  const context = useCollaborationContext();
-  const session = getOrCreateSession(context, docName);
-  const collabDoc = doc ?? new YjsCollabDoc(session.doc);
-  const { peers, status } = useAwareness({ docName });
+  const { collabDoc: sessionDoc, status, synced } = useCollabDoc({ docName });
+  const { peers } = useAwareness({ docName });
 
-  // Reactivity: any Yjs update re-renders and re-reads the adapter state.
+  // Memoized: building the wrapper in the render body gave `subscribe` a new
+  // identity on every render, so useSyncExternalStore tore down and re-added
+  // the Y.Doc 'update' listener each time.
+  const collabDoc = useMemo(() => doc ?? sessionDoc, [doc, sessionDoc]);
+  const view = useMemo(() => adapter.create(collabDoc, editorId), [adapter, collabDoc, editorId]);
+
+  // Reactivity: any document update bumps a version and re-reads the adapter
+  // state. The scene is a freshly built object on every read, so the snapshot
+  // is cached by version — the old cache key was `JSON.stringify(scene)`,
+  // which serialized the whole board on every stroke just to decide whether
+  // anything changed.
+  const versionRef = useRef(0);
   const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      return collabDoc.onUpdate(onStoreChange);
-    },
+    (onStoreChange: () => void) =>
+      collabDoc.onUpdate(() => {
+        versionRef.current += 1;
+        onStoreChange();
+      }),
     [collabDoc],
   );
 
-  // Adapter view + stable snapshot: scenes are freshly built objects, so we
-  // cache by serialized equality to keep useSyncExternalStore from looping.
-  const view = useMemo(() => adapter.create(collabDoc, editorId), [adapter, collabDoc, editorId]);
-  const cacheRef = useRef<{ key: string; value: S } | undefined>(undefined);
+  const cacheRef = useRef<{ version: number; view: unknown; value: S } | undefined>(undefined);
   const getSnapshot = useCallback((): S => {
+    const cached = cacheRef.current;
+    if (cached && cached.version === versionRef.current && cached.view === view) {
+      return cached.value;
+    }
     const next = view.state;
-    const key = JSON.stringify(next);
-    if (cacheRef.current?.key === key) return cacheRef.current.value;
-    cacheRef.current = { key, value: next };
+    cacheRef.current = { version: versionRef.current, view, value: next };
     return next;
   }, [view]);
 
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
-  return { state, update: view.update, status, peers };
+  return { state, update: view.update, status, synced, peers };
 }

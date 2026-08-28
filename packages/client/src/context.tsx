@@ -15,8 +15,13 @@ export interface CollaborationProviderProps extends CollaborationClientConfig {
 }
 
 /**
- * Provider raiz. Uma sessão (Y.Doc + transporte) por docName — sobrevive a
- * unmount de componentes individuais e é destruída junto com o provider.
+ * Provider raiz. Uma sessão (Y.Doc + transporte) por docName.
+ *
+ * As sessões são **contadas por referência**: o socket abre no primeiro hook
+ * que monta e fecha quando o último desmonta, mas o `Y.Doc` continua vivo no
+ * mapa do provider — voltar para a página reconecta sobre o mesmo documento
+ * em vez de recomeçar do zero. O mapa (e com ele os documentos) morre junto
+ * com o provider.
  *
  * ```tsx
  * <CollaborationProvider baseUrl="https://api.app" getHeaders={() => ({ cookie: ... })}>
@@ -53,15 +58,24 @@ export function useCollaborationContext(): CollaborationContextValue {
   return context;
 }
 
-/** Pega ou cria a sessão do documento (1 Y.Doc por docName). */
+/**
+ * Pega ou cria a sessão do documento (1 Y.Doc por docName).
+ *
+ * Uma sessão já destruída nunca é devolvida: `destroy()` se auto-remove do
+ * mapa e, se por algum caminho sobrar um cadáver aqui, ele é substituído por
+ * uma sessão nova — senão o consumidor recebe um editor morto que não
+ * reconecta (o `start()` curto-circuita no `#startPromise` antigo).
+ */
 export function getOrCreateSession(
   context: CollaborationContextValue,
   docName: string,
 ): DocSession {
-  let session = context.sessions.get(docName);
-  if (!session) {
-    session = new DocSession(docName, context.getConfig());
-    context.sessions.set(docName, session);
-  }
+  const existing = context.sessions.get(docName);
+  if (existing && !existing.isDestroyed) return existing;
+
+  const session = new DocSession(docName, context.getConfig(), {
+    registry: context.sessions,
+  });
+  context.sessions.set(docName, session);
   return session;
 }

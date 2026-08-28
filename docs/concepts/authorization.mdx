@@ -39,6 +39,16 @@ trust a string, and checking only at the socket would let the token endpoint han
 anyone. The seam is only a seam if both sides of it are closed.
 </Callout>
 
+<Callout type="warn" title="Once per connection, not continuously">
+`authorize` runs at the handshake and on each REST request — and nowhere else. **Nothing
+re-evaluates it for a socket that is already open.** Revoking a user's access does not disconnect
+them; they keep syncing that document until they close the tab, and are refused on their next
+connection.
+
+If a revocation has to bite immediately, the app has to make it bite: close the connection from
+your side, or force the document to reload. Do not plan around the rule noticing on its own.
+</Callout>
+
 ## Fail-closed, by construction
 
 `authorize` resolution has three steps and a floor:

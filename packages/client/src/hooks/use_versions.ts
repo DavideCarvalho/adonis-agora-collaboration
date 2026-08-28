@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getOrCreateSession, useCollaborationContext } from '../context.js';
+import { useCollaborationContext } from '../context.js';
 import {
   createVersion as apiCreateVersion,
   restoreVersion as apiRestoreVersion,
@@ -31,7 +31,7 @@ export function useVersions(options: UseVersionsOptions): UseVersionsResult {
   const { docName } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
-  void getOrCreateSession(context, docName);
+  // Versões são REST puro — sem sessão/Y.Doc criados no corpo do render.
 
   const [versions, setVersions] = useState<CollabVersion[]>([]);
   const [loading, setLoading] = useState(true);

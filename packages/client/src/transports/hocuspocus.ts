@@ -14,6 +14,7 @@ export class HocuspocusCollabTransport implements CollabTransport {
   readonly doc: Y.Doc;
   private provider: HocuspocusProvider;
   private status: import('../types.js').CollabStatus = 'connecting';
+  private synced = false;
   private listeners = new Set<StatusListener>();
 
   constructor(info: CollabTokenInfo, doc: Y.Doc, docName: string) {
@@ -39,8 +40,26 @@ export class HocuspocusCollabTransport implements CollabTransport {
           : status === 'disconnected'
             ? 'disconnected'
             : 'connecting';
-      for (const listener of this.listeners) listener();
+      // A dropped socket un-syncs the document: the next connection has to
+      // replay the initial sync before the local state is authoritative
+      // again. Without this, `synced` would latch true forever after the
+      // first handshake and gating `editable` on it would be a lie.
+      if (this.status !== 'connected') this.synced = false;
+      this.emit();
     });
+
+    // 'connected' means the socket is open; 'synced' means the server's
+    // initial state has actually been applied to the Y.Doc. Gating an editor
+    // on the former shows an empty document for a beat and then merges the
+    // user's keystrokes into the incoming state.
+    this.provider.on('synced', ({ state }: { state: boolean }) => {
+      this.synced = state;
+      this.emit();
+    });
+  }
+
+  private emit(): void {
+    for (const listener of this.listeners) listener();
   }
 
   get awareness() {
@@ -49,6 +68,10 @@ export class HocuspocusCollabTransport implements CollabTransport {
 
   getStatus(): import('../types.js').CollabStatus {
     return this.status;
+  }
+
+  isSynced(): boolean {
+    return this.synced;
   }
 
   subscribe(listener: StatusListener): () => void {

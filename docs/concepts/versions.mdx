@@ -57,20 +57,27 @@ Three consequences worth planning for:
 - **Everyone sees it immediately.** No refresh, no stale tab. Someone mid-sentence watches the
   paragraph change under their cursor.
 - **It is not destructive to the history.** The restore is a new state on top of the existing
-  document, so the versions you already created still exist and still restore. There is no "the
-  future was deleted".
+  document, so the versions you already created still exist and still restore — and the state the
+  restore replaced becomes a version of its own. There is no "the future was deleted".
 - **It is not transactional against concurrent typing.** An edit landing in the same instant merges
   with the restored content, because that is what the CRDT does. In practice: put a confirmation in
   front of the button, and tell the room it is happening.
 
-<Callout title="Snapshot first, restore second">
-The idiomatic move before restoring is to create a version of the *current* state, so the restore
-itself is undoable:
+<Callout title="The snapshot is taken for you">
+`restoreVersion` writes the state it is about to replace into the history first, as a new version
+labelled `restored from #<seq>` and attributed to `restoredBy` — so a restore is itself undoable,
+and the history records who ran it. (Before 0.10.0 `restoredBy` was discarded and nothing recorded
+the replaced state, which made restore the one operation in a version history you could not undo.)
 
 ```ts
-await manager.createVersion({ docName, createdBy: user.id, label: 'before restore' })
 await manager.restoreVersion({ docName, versionId, restoredBy: user.id })
+
+await manager.listVersions({ docName })
+// → [ …, { seq: 7, label: 'restored from #3 (before review)', createdBy: user.id } ]
 ```
+
+An explicit `createVersion` beforehand is still worth it when you want your own label on the
+checkpoint.
 </Callout>
 
 ## How each engine answers

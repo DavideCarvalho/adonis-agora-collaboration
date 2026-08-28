@@ -99,15 +99,38 @@ export interface IssuedToken {
 
 /** Thrown when authorize() denies read access for the document. */
 export class CollabForbiddenError extends Error {
-  constructor(docName: string) {
-    super(`no access to document "${docName}"`);
+  constructor(docName: string, message?: string) {
+    super(message ?? `no access to document "${docName}"`);
     this.name = 'CollabForbiddenError';
   }
 }
 
 /**
+ * Thrown when the permission rule itself could not be evaluated — a broken
+ * `authorize`, or a database the rule needs and cannot reach.
+ *
+ * Distinct from {@link CollabForbiddenError} on purpose: "you may not" is a
+ * final answer a client should respect, while "we could not tell" is a
+ * transient condition it may retry. Collapsing the two is what turns an app's
+ * database blip into an unbounded reconnect storm.
+ */
+export class CollabAuthorizationError extends Error {
+  constructor(
+    readonly docName: string,
+    override readonly cause?: unknown,
+  ) {
+    super(`could not evaluate access to document "${docName}"`);
+    this.name = 'CollabAuthorizationError';
+  }
+}
+
+/**
  * Issues an ephemeral credential for `docName`, enforcing the permission
- * seam via `authorize` when one is provided.
+ * seam via `authorize`.
+ *
+ * **Fails closed without a rule.** Skipping the check when `authorize` is
+ * absent handed any authenticated caller a token for any document; an absent
+ * rule is a misconfiguration, not a grant.
  */
 export async function issueToken(
   config: TokenIssuerConfig,
@@ -120,11 +143,14 @@ export async function issueToken(
     ...(user.name ? { user: { name: user.name } } : {}),
   };
 
-  let permission: CollabPermission | undefined;
-  if (authorize) {
-    permission = await authorize(ctx, docName);
-    if (!permission.canRead) throw new CollabForbiddenError(docName);
+  if (!authorize) {
+    throw new CollabForbiddenError(
+      docName,
+      `no authorize rule configured — refusing to issue a token for "${docName}". Set authorize in config/collaboration.ts, or pass one to collaborationRoutes().`,
+    );
   }
+  const permission: CollabPermission = await authorize(ctx, docName);
+  if (!permission.canRead) throw new CollabForbiddenError(docName);
 
   if (config.engine === 'partykit') {
     if (!config.partykit?.jwtSecret) {

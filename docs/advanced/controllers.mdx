@@ -37,16 +37,21 @@ import router from '@adonisjs/core/services/router'
 import { collaborationRoutes } from '@adonis-agora/collaboration'
 import { middleware } from '#start/kernel'
 
-router.group(async () => {
-  await collaborationRoutes(router, {
+router.group(() => {
+  collaborationRoutes(router, {
     prefix: '/collab',
     middleware: [middleware.auth()],
   })
 }).prefix('/api/v2')
 ```
 
+`collaborationRoutes` is synchronous precisely so this works: a `RouteGroup` closes as soon as its
+callback returns, so an `async` callback with an `await` before the registration would land the
+routes *outside* the group and outside your middleware.
+
 The provider still boots the manager and attaches the WebSocket — only the route registration is
-skipped.
+skipped. The permission rule is unchanged either way: with no `authorize` option the routes resolve
+it through the manager, from `config/collaboration.ts`.
 
 ## Level three — write the controllers
 

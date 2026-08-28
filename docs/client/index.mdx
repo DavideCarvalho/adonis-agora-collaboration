@@ -30,29 +30,30 @@ import { CollaborationProvider } from '@adonis-agora/collaboration-client'
 
 | Prop | Purpose |
 | --- | --- |
-| `baseUrl` | your Adonis origin. Falls back to `location.origin`, so a same-origin app can pass it and forget it |
+| `baseUrl` | your Adonis origin. **Optional** — falls back to `location.origin`, so a same-origin app can leave it out entirely |
 | `getHeaders` | called **per request** — return the auth headers your API needs. A function, so a rotating token is picked up without a remount |
 | `createTransport` | override the transport factory — tests, or an engine of your own |
 | `fetchImpl` | override `fetch` — tests and SSR |
 
 The provider's real job is holding the **session map**: one `DocSession` per document name, each
-owning a `Y.Doc`, a transport and a reconnect loop. Sessions are created on demand and **survive
-individual components unmounting** — navigating away from an editor and back does not tear down and
-rebuild the connection. See [Sessions](/docs/collaboration/client/sessions).
+owning a `Y.Doc`, a transport and a reconnect loop. Sessions are created on demand and
+**reference counted** — the socket opens with the first hook that mounts and closes when the last
+one unmounts, while the `Y.Doc` stays in the map, so navigating back resumes on the document you
+left instead of starting from an empty one. See [Sessions](/docs/collaboration/client/sessions).
 
 <Callout title="Mount it above the router, not inside a page">
-A provider that remounts on navigation destroys every session it owns, which turns a route change
-into a full reconnect. Put it in the layout.
+A provider that remounts on navigation throws its whole session map away — documents included — so
+every route change starts from scratch. Put it in the layout.
 </Callout>
 
 ## The hooks
 
 | Hook | Returns | Backed by |
 | --- | --- | --- |
-| `useCollabDoc` | the shared `Y.Doc` plus `status` and `error` | WebSocket |
+| `useCollabDoc` | the shared `Y.Doc` (and its `collabDoc` view) plus `status`, `synced` and `error` | WebSocket |
 | `useAutomergeDoc` | the Automerge document plus `change(fn)` | WebSocket |
 | `useCollabEditor` | an editor-agnostic `{ state, update }` view, plus peers | WebSocket |
-| `useAwareness` | `peers` — everyone else in the room | WebSocket |
+| `useAwareness` | `peers` — everyone else in the room — plus `setLocalState` to publish yourself | WebSocket |
 | `useComments` | `comments`, `create`, `resolve`, `remove`, `refresh` | REST |
 | `useVersions` | `versions`, `create`, `restore`, `refresh` | REST |
 

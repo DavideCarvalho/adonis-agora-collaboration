@@ -7,6 +7,7 @@ export {
 } from './drivers/partykit/partykit_driver.js';
 export {
   buildWsUrl,
+  CollabAuthorizationError,
   CollabForbiddenError,
   issueToken,
   parseLegacyToken,
@@ -16,6 +17,15 @@ export {
   type IssuedToken,
   type TokenIssuerConfig,
 } from './auth/token.js';
+export {
+  COLLAB_ERROR_EVENT,
+  collaborationEvents,
+  onCollaborationError,
+  reportCollaborationError,
+  setCollaborationLogger,
+  type CollabErrorEvent,
+  type CollabLogger,
+} from './observability.js';
 export { LucidStorage, lucidStorage } from './storage/lucid_storage.js';
 export {
   PresenceService,
@@ -27,9 +37,16 @@ export { InMemoryCollaborationStorage } from './storage/in_memory_storage.js';
 export { FileSystemStorage } from './storage/file_system_storage.js';
 export {
   defineConfig,
+  type CollabDocumentNameFor,
   type CollaborationAppConfig,
+  type InferCollabDocumentNames,
 } from './define_config.js';
-export { collaborationRoutes, defaultResolveUser, secretsMatch } from './routes.js';
+export {
+  canMutateComment,
+  collaborationRoutes,
+  defaultResolveUser,
+  secretsMatch,
+} from './routes.js';
 export type {
   CollabHttpContext,
   CollabManagerLike,

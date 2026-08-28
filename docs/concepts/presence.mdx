@@ -36,8 +36,9 @@ anyone in it right now*, from anywhere. Locking a resource, deciding whether to 
 "someone edited your document" notification, showing an occupancy badge in a list — none of those
 can be answered from one browser's awareness state.
 
-Set `redisUrl` and the provider spins up a Redis-backed presence store. The driver records a join on
-connect and a leave on disconnect, and the manager aggregates:
+Set `redisUrl` and the provider spins up a Redis-backed presence store, hands it to the manager, and
+the manager hands it to the driver — the driver records a join on connect and a leave on disconnect,
+and the manager aggregates:
 
 ```ts title="config/collaboration.ts"
 export default defineConfig({
@@ -92,9 +93,9 @@ routes: {
 Without a `name`, `listPresence` gives you ids and your UI has to resolve them itself — a query per
 render of a list that was supposed to be cheap. Set it once, here.
 
-<Callout type="warn" title="One roster entry per document, not per user">
-The server-side roster currently tracks a single user per document connection, so a document with
-several simultaneous editors reports fewer people than are actually in it, and a disconnect can
-clear the wrong entry. Use `listPresence` for the *is anyone in here* question — which it answers
-correctly — and `useAwareness` when you need the accurate list of who.
+<Callout title="One roster entry per user, per document">
+The roster is keyed by connection: every socket is tracked separately, so a document with several
+simultaneous editors lists all of them, and a user with two tabs open leaves the roster only when
+their last socket closes. (Before 0.10.0 it was one slot per *document*, which under-reported the
+room and could evict the wrong person on disconnect.)
 </Callout>

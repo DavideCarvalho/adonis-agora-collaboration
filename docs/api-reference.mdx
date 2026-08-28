@@ -44,7 +44,7 @@ defineConfig({
 | `routes.enabled` | `true` | `false` skips auto-registration; call `collaborationRoutes` yourself |
 | `routes.prefix` | `'/collaboration'` | |
 | `routes.middleware` | `[]` | applied to the whole group |
-| `routes.resolveUser` | `ctx.auth.user` | throws a `401` when there is no user |
+| `routes.resolveUser` | `ctx.auth.check()` then `ctx.auth.user` | throws a `401` when there is no user |
 
 ### `PartyKitConfig`
 
@@ -104,7 +104,7 @@ clear message if it is read too early.
 | `getDocumentText({ docName })` | `Promise<string>` — plain text; `''` when it is not a text layout |
 | `createVersion({ docName, createdBy, label? })` | `Promise<CollabVersion>` |
 | `listVersions({ docName })` | `Promise<CollabVersion[]>` |
-| `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live |
+| `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live; first snapshots the replaced state as a new `restored from #<seq>` version, attributed to `restoredBy` |
 | `diffVersions({ docName, aId, bId })` | `Promise<{ added: number; removed: number }>` |
 | `pruneVersions({ keep, docName?, dryRun? })` | `Promise<number>` — versions deleted; `keep` is per document |
 | `persistDocument({ docName, state })` | `Promise<void>` — throws without configured storage |
@@ -203,12 +203,32 @@ signPartyKitToken(payload, secret, expiresInSeconds?): string
 verifyPartyKitToken(token, secret): { userId; docName; exp } | null
 parseLegacyToken(token): CollabConnectionContext | null
 
-class CollabForbiddenError extends Error   // authorize denied canRead
-class CollabUnauthorizedError extends Error // no user resolved
+class CollabForbiddenError extends Error       // authorize denied canRead
+class CollabAuthorizationError extends Error   // authorize itself threw — retryable, not a denial
+class CollabUnauthorizedError extends Error    // no user resolved
 ```
 
-`issueToken` enforces `canRead` when an `authorize` is passed — pass the **manager's**, not your
-config's, so per-document rules apply.
+`issueToken` **requires** an `authorize` and throws `CollabForbiddenError` without one: an absent
+rule is a misconfiguration, not a grant. Pass the **manager's**, not your config's, so per-document
+rules apply.
+
+## Observability
+
+```ts
+onCollaborationError(listener): () => void        // subscribe; returns unsubscribe
+setCollaborationLogger(logger | undefined): void  // the provider installs the Adonis logger
+collaborationEvents                               // the EventEmitter, on COLLAB_ERROR_EVENT
+
+interface CollabErrorEvent {
+  scope: 'storage' | 'authorize'
+  operation: string      // e.g. 'saveDocument', 'onAuthenticate'
+  docName?: string
+  error: unknown
+}
+```
+
+Storage failures inside the Hocuspocus hooks, and a throw from `authorize` at the handshake, are
+reported here instead of vanishing. With neither a logger nor a listener they reach `console.error`.
 
 ## Routes
 
@@ -222,23 +242,37 @@ collaborationRoutes(router, {
   engine?: string
   path?: string
   partykit?: { roomHost?; jwtSecret?; party? }
-}): Promise<void>
+}): void
 ```
+
+Synchronous, so it composes inside `router.group()`. Omit `authorize` and the routes resolve the
+rule through the manager — the same one the handshake uses — and deny when nothing declares one.
 
 | Method | Path | Body / query |
 | --- | --- | --- |
 | `GET` | `/token` | `?doc=` |
 | `GET` | `/comments` | `?doc=&space=` |
-| `POST` | `/comments` | `{ docName, space, anchor, body, userId, authorName? }` |
-| `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) |
-| `DELETE` | `/comments/:id` | `?doc=` |
+| `POST` | `/comments` | `{ docName, space, anchor, body, authorName? }` — author is the caller |
+| `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) — author or `canWrite` |
+| `DELETE` | `/comments/:id` | `?doc=` — author or `canWrite` |
 | `GET` | `/versions` | `?doc=` |
-| `POST` | `/versions` | `{ docName, label?, userId? }` |
+| `POST` | `/versions` | `{ docName, label? }` — `createdBy` is the caller |
 | `POST` | `/versions/restore` | `{ docName, versionId }` → `204` |
 | `GET` | `/state` | `?doc=` → `application/octet-stream` |
 | `POST` | `/state` | `?doc=` · raw body · `x-collab-worker-secret` |
 
-Also exported: `defaultResolveUser`, `secretsMatch(received, expected)`.
+Also exported: `defaultResolveUser` (authenticates via `ctx.auth.check()` before reading the user),
+`canMutateComment({ comment, userId, permission })` and `secretsMatch(received, expected)`.
+
+## Document-name types
+
+```ts
+InferCollabDocumentNames<typeof collaborationConfig>  // union of declared patterns
+CollabDocumentNameFor<'researches/:id/writing'>       // `researches/${string}/writing`
+```
+
+`defineConfig` is generic, so the literal keys of `documents` survive into the config's type. See
+[Typed registry](/docs/collaboration/codegen/documents-registry).
 
 ## Ace commands
 

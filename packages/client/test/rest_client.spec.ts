@@ -85,6 +85,32 @@ describe('resolveBaseUrl (same-origin default)', () => {
     expect(resolveBaseUrl({ baseUrl: 'https://api.app/' })).toBe('https://api.app');
   });
 
+  /**
+   * `baseUrl` was declared required on `CollaborationClientConfig` while
+   * `resolveBaseUrl` had always fallen back to `location.origin` — so the
+   * same-origin setup the docs advertise ("pass it and forget it") did not
+   * typecheck and had to be worked around with a cast.
+   */
+  it('a config with no baseUrl is valid and resolves against location.origin', async () => {
+    const original = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      value: { origin: 'https://app.example' },
+      configurable: true,
+    });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json({ token: 't', wsUrl: '/collaboration', engine: 'yjs' }));
+    const sameOrigin: CollaborationClientConfig = { fetchImpl: fetchMock as typeof fetch };
+
+    await fetchToken(sameOrigin, 'docs/1');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://app.example/collaboration/token?doc=docs%2F1',
+    );
+
+    Object.defineProperty(globalThis, 'location', { value: original, configurable: true });
+  });
+
   it('falls back to the current origin when omitted', () => {
     const original = globalThis.location;
     Object.defineProperty(globalThis, 'location', {

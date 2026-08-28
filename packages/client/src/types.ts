@@ -57,6 +57,14 @@ export interface CollabTransport {
   /** Hocuspocus expõe Awareness | null; partykit sempre não-null. */
   readonly awareness?: AwarenessProtocol.Awareness | null;
   getStatus(): CollabStatus;
+  /**
+   * True once the server's initial state has been applied to the doc.
+   *
+   * Optional: `getStatus() === 'connected'` only says the socket is open.
+   * Transports that can tell the two apart (Hocuspocus) implement this;
+   * for the others the session falls back to the status.
+   */
+  isSynced?(): boolean;
   /** Assina mudanças de status; retorna unsubscribe. */
   subscribe(listener: () => void): () => void;
   destroy(): void;
@@ -71,8 +79,11 @@ export type TransportFactory = (
 
 /** Config global do client (props do <CollaborationProvider>). */
 export interface CollaborationClientConfig {
-  /** Base URL do server Adonis (ex.: https://api.app). */
-  baseUrl: string;
+  /**
+   * Base URL do server Adonis (ex.: https://api.app). Opcional: quando
+   * omitida o client usa `location.origin`, que é o caso same-origin.
+   */
+  baseUrl?: string | undefined;
   /**
    * Headers anexados às chamadas REST (ex.: cookie/token de sessão).
    * Função pra suportar tokens que rotacionam.

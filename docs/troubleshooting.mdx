@@ -103,9 +103,28 @@ question can be answered from the browser.
 
 ## The presence roster shows fewer people than are in the document
 
-The server-side roster tracks one entry per document connection, so several simultaneous editors
-collapse into one and a disconnect can clear the wrong entry. Use `listPresence` for *is anyone in
-here* and `useAwareness` for the accurate list of who.
+Upgrade to 0.10.0 or later. Two separate defects produced this: the presence store the provider
+built from `redisUrl` was never passed down to the driver (so join/leave were dead code and
+`listPresence` returned `[]` forever), and the driver's bookkeeping held one slot per *document*
+rather than per connection, so a second editor overwrote the first and a disconnect could evict the
+wrong person. Both are fixed; the roster is keyed by socket.
+
+## A save failed and nothing said so
+
+Nothing swallows it any more, but you have to be listening. Storage and `authorize` failures go to
+the Adonis logger when the provider could resolve one, and are always emitted as an event:
+
+```ts title="start/collaboration_observability.ts"
+import { onCollaborationError } from '@adonis-agora/collaboration'
+
+onCollaborationError(({ scope, operation, docName, error }) => {
+  // scope: 'storage' | 'authorize'
+  reportToSentry(error, { scope, operation, docName })
+})
+```
+
+With neither a logger nor a listener the failure still reaches `console.error` — an unobserved
+outage is the one outcome this does not produce.
 
 ## Undo removes someone else's text
 

@@ -7,6 +7,7 @@ import {
   type CollabRoutesRuntime,
   CollabUnauthorizedError,
 } from './http/types.js';
+import type { CollabPermission } from './types.js';
 
 /**
  * Built-in REST endpoints for the collaboration package.
@@ -14,61 +15,87 @@ import {
  * Two usage modes:
  *
  * 1. **Automatic (default)** — the service provider registers these routes
- *    during boot. Disable with `routes: { enabled: false }` in
- *    `config/collaboration.ts`.
+ *    during `boot()`, before the router commits. Disable with
+ *    `routes: { enabled: false }` in `config/collaboration.ts`.
  *
  * 2. **Manual** — call `collaborationRoutes(router)` inside
- *    `start/routes.ts` and apply any middleware you want:
+ *    `start/routes.ts` and apply any middleware you want. The call is
+ *    **synchronous**, so it composes inside a `router.group()`:
  *
  * ```ts
  * import router from '@adonisjs/core/services/router'
  * import { collaborationRoutes } from '@adonis-agora/collaboration'
  *
- * collaborationRoutes(router, {
- *   middleware: [authMiddleware],
- *   resolveUser: (ctx) => ({ id: String(ctx.auth.user!.id) }),
- * })
+ * router.group(() => {
+ *   collaborationRoutes(router)
+ * }).use(middleware.auth())
  * ```
+ *
+ * Either way the permission rule is the same one the WebSocket handshake
+ * runs: without an explicit `authorize` option the routes resolve it from
+ * the manager (and therefore from `config/collaboration.ts`), and fall back
+ * to denying rather than to skipping the check.
  *
  * docName always travels via query/body (never a path param): document
  * names contain slashes (e.g. `researches/42/writing`).
  */
 
-/** Resolved runtime snapshot captured by the handler closures. */
-interface Runtime {
+/** Engine-shaped settings, resolved lazily at request time. */
+interface RuntimeSettings {
   engine: string;
   path: string;
   partykit: { roomHost?: string; jwtSecret?: string; party?: string };
+}
+
+/** Resolved runtime captured by the handler closures. */
+interface Runtime {
+  settings(): Promise<RuntimeSettings>;
   manager(): Promise<CollabManagerLike>;
+  /**
+   * Always present. When the caller supplies none, this resolves the app's
+   * rule through the manager; with no rule anywhere it denies. There is no
+   * "no authorize" state a handler can accidentally treat as "no check".
+   */
+  authorize: AuthorizeFn;
+}
+
+/** The permission granted when nothing anywhere declares a rule. */
+const DENY_ALL: CollabPermission = { canRead: false, canWrite: false, canComment: false };
+
+/** Shape of `config/collaboration.ts` as far as these routes care. */
+interface AppConfigShape {
+  engine?: string;
+  path?: string;
+  partykit?: { roomHost?: string; jwtSecret?: string; party?: string };
   authorize?: AuthorizeFn;
 }
 
-let cachedAppConfig: Record<string, unknown> | undefined;
+let cachedAppConfig: AppConfigShape | undefined;
 
-async function readAppConfig(): Promise<Record<string, unknown>> {
+async function readAppConfig(): Promise<AppConfigShape> {
   if (cachedAppConfig) return cachedAppConfig;
   try {
     // Dynamic + optional: unavailable in plain unit tests.
     const app = (await import('@adonisjs/core/services/app')).default as unknown as {
       config: { get(name: string, fallback: unknown): unknown };
     };
-    cachedAppConfig = app.config.get('collaboration', {}) as Record<string, unknown>;
+    cachedAppConfig = app.config.get('collaboration', {}) as AppConfigShape;
   } catch {
     cachedAppConfig = {};
   }
   return cachedAppConfig;
 }
 
-async function resolveRuntime(
+/**
+ * Builds the runtime **synchronously** — every value that needs the booted
+ * app is read on first request instead of at registration time. That is what
+ * lets `collaborationRoutes` stay synchronous and therefore composable inside
+ * `router.group()`.
+ */
+function resolveRuntime(
   options: CollabRoutesRuntime,
   managerFallback?: () => Promise<CollabManagerLike>,
-): Promise<Runtime> {
-  const appConfig = (await readAppConfig()) as {
-    engine?: string;
-    path?: string;
-    partykit?: { roomHost?: string; jwtSecret?: string; party?: string };
-  };
-
+): Runtime {
   const managerFn = (): Promise<CollabManagerLike> => {
     const provided = options.manager;
     if (provided) {
@@ -83,17 +110,36 @@ async function resolveRuntime(
     );
   };
 
-  const appPartykit = appConfig.partykit as
-    | { roomHost?: string; jwtSecret?: string; party?: string }
-    | undefined;
-
-  return {
-    engine: options.engine ?? appConfig.engine ?? 'yjs',
-    path: options.path ?? appConfig.path ?? '/collaboration',
-    partykit: options.partykit ?? appPartykit ?? {},
-    manager: managerFn,
-    ...(options.authorize ? { authorize: options.authorize } : {}),
+  const settings = async (): Promise<RuntimeSettings> => {
+    const appConfig = await readAppConfig();
+    return {
+      engine: options.engine ?? appConfig.engine ?? 'yjs',
+      path: options.path ?? appConfig.path ?? '/collaboration',
+      partykit: options.partykit ?? appConfig.partykit ?? {},
+    };
   };
+
+  /**
+   * The asymmetry this closes: `authorize` used to be read from `options`
+   * only, so manual mode had none — and one code path then denied everything
+   * while another skipped the check entirely. There is exactly one resolution
+   * order now, and its last step is a denial.
+   */
+  const authorize: AuthorizeFn =
+    options.authorize ??
+    (async (ctx, docName) => {
+      const manager = await managerFn().catch(() => undefined);
+      if (manager && typeof manager.authorize === 'function') {
+        return manager.authorize(ctx, docName);
+      }
+      const appConfig = await readAppConfig();
+      if (typeof appConfig.authorize === 'function') {
+        return appConfig.authorize(ctx, docName);
+      }
+      return DENY_ALL;
+    });
+
+  return { settings, manager: managerFn, authorize };
 }
 
 /** Timing-safe comparison for shared secrets. */
@@ -105,6 +151,33 @@ export function secretsMatch(received: string | undefined, expected: string | un
 }
 
 /* ───────────────────────────── permissions ───────────────────────────── */
+
+/**
+ * Who may resolve or delete an existing comment.
+ *
+ * `canComment` is permission to *add* an annotation — it is not permission to
+ * silence someone else's. The rule, stated once so it can be tested once:
+ *
+ *  - the **author** may always resolve or delete their own comment;
+ *  - anyone else needs the elevated capability on the document (`canWrite`) —
+ *    an editor moderating a thread, not a fellow commenter.
+ */
+export function canMutateComment(input: {
+  comment: { userId?: string | null } | null | undefined;
+  userId: string;
+  permission: CollabPermission;
+}): boolean {
+  if (!input.comment) return false;
+  if (input.comment.userId != null && String(input.comment.userId) === input.userId) return true;
+  return input.permission.canWrite === true;
+}
+
+/** Successful guard outcome: who is calling, on what, with which permission. */
+interface Allowed {
+  user: CollabRouteUser;
+  docName: string;
+  permission: CollabPermission;
+}
 
 /**
  * Resolve the caller and the permission they hold on `docName` — the same
@@ -121,7 +194,7 @@ async function guard(
   userResolver: NonNullable<CollabRoutesRuntime['resolveUser']>,
   docName: string | undefined,
   capability: 'canRead' | 'canWrite' | 'canComment',
-): Promise<{ user: CollabRouteUser; docName: string } | { denied: unknown }> {
+): Promise<Allowed | { denied: unknown }> {
   if (!docName) {
     return { denied: ctx.response.status(400).json({ error: 'a document name is required' }) };
   }
@@ -139,14 +212,10 @@ async function guard(
     return { denied: ctx.response.status(401).json({ error: 'unauthenticated' }) };
   }
 
-  // No authorize configured at all means the app has not written a rule yet —
-  // fail closed rather than serving every document to every caller.
-  const permission = runtime.authorize
-    ? await runtime.authorize(
-        { userId: user.id, ...(user.name ? { user: { name: user.name } } : {}) },
-        docName,
-      )
-    : { canRead: false, canWrite: false, canComment: false };
+  const permission = await runtime.authorize(
+    { userId: user.id, ...(user.name ? { user: { name: user.name } } : {}) },
+    docName,
+  );
 
   if (!permission[capability]) {
     return {
@@ -156,7 +225,7 @@ async function guard(
     };
   }
 
-  return { user, docName };
+  return { user, docName, permission };
 }
 
 function isDenied(result: object): result is { denied: unknown } {
@@ -189,10 +258,11 @@ async function handleToken(
   }
 
   try {
+    const settings = await runtime.settings();
     const manager = await runtime.manager();
-    const engine = manager.engineFor ? await manager.engineFor({ docName }) : runtime.engine;
+    const engine = manager.engineFor ? await manager.engineFor({ docName }) : settings.engine;
     return await issueToken(
-      { engine, path: runtime.path, partykit: runtime.partykit },
+      { engine, path: settings.path, partykit: settings.partykit },
       user,
       docName,
       runtime.authorize,
@@ -245,6 +315,32 @@ async function handleCreateComment(
   });
 }
 
+/**
+ * Loads the comment being mutated and checks {@link canMutateComment}.
+ * Returns the response to send when the mutation must not happen.
+ */
+async function guardCommentMutation(
+  ctx: CollabHttpContext,
+  manager: CollabManagerLike,
+  allowed: Allowed,
+  commentId: string,
+): Promise<{ denied: unknown } | { ok: true }> {
+  const comments = (await manager.comments.list(allowed.docName)) as Array<{
+    id?: string;
+    userId?: string | null;
+  }>;
+  const comment = comments.find((entry) => entry?.id === commentId);
+
+  if (!comment) {
+    return { denied: ctx.response.status(404).json({ error: 'comment not found' }) };
+  }
+  if (!canMutateComment({ comment, userId: allowed.user.id, permission: allowed.permission })) {
+    const error = 'only the comment author, or someone who can write the document, may do that';
+    return { denied: ctx.response.status(403).json({ error }) };
+  }
+  return { ok: true };
+}
+
 async function handleResolveComment(
   ctx: CollabHttpContext,
   runtime: Runtime,
@@ -257,6 +353,9 @@ async function handleResolveComment(
   if (isDenied(allowed)) return allowed.denied;
 
   const manager = await runtime.manager();
+  const mutation = await guardCommentMutation(ctx, manager, allowed, commentId);
+  if (isDenied(mutation)) return mutation.denied;
+
   return manager.comments.resolve(allowed.docName, commentId, resolved);
 }
 
@@ -271,6 +370,9 @@ async function handleDeleteComment(
   if (isDenied(allowed)) return allowed.denied;
 
   const manager = await runtime.manager();
+  const mutation = await guardCommentMutation(ctx, manager, allowed, commentId);
+  if (isDenied(mutation)) return mutation.denied;
+
   return { deleted: await manager.comments.remove(allowed.docName, commentId) };
 }
 
@@ -342,8 +444,8 @@ async function handleSaveState(ctx: CollabHttpContext, runtime: Runtime): Promis
   if (!doc) {
     return ctx.response.status(400).json({ error: 'query param "doc" is required' });
   }
-  const expectedSecret = runtime.partykit.jwtSecret;
-  if (!secretsMatch(ctx.request.header('x-collab-worker-secret'), expectedSecret)) {
+  const { partykit } = await runtime.settings();
+  if (!secretsMatch(ctx.request.header('x-collab-worker-secret'), partykit.jwtSecret)) {
     return ctx.response.status(403).json({ error: 'invalid worker secret' });
   }
 
@@ -377,12 +479,17 @@ export interface CollaborationRouterContract {
 /**
  * Registers every collaboration REST endpoint under an optional prefix
  * (default `/collaboration`).
+ *
+ * **Synchronous on purpose.** `RouteGroup` closes as soon as its callback
+ * returns, so anything registered after an `await` lands outside the group —
+ * which made it impossible to wrap these routes in an app's own middleware.
+ * Everything that needs the booted app is resolved at request time instead.
  */
-export async function collaborationRoutes(
+export function collaborationRoutes(
   router: CollaborationRouterContract,
-  options: CollabRoutesRuntime & { managerFallback?: () => Promise<CollabManagerLike> },
-): Promise<void> {
-  const runtime = await resolveRuntime(options, options.managerFallback);
+  options: CollabRoutesRuntime & { managerFallback?: () => Promise<CollabManagerLike> } = {},
+): void {
+  const runtime = resolveRuntime(options, options.managerFallback);
   const resolveUser = options.resolveUser ?? defaultResolveUser;
 
   router
@@ -432,12 +539,41 @@ function registerRoute(
 }
 
 /**
- * Default auth resolution: read `ctx.auth.user` (populated by @adonisjs/auth
- * when its middleware ran). Throws otherwise so unprotected deployments fail
- * closed with a clear message.
+ * Default auth resolution.
+ *
+ * Reads `ctx.auth.user` — but *authenticates first* when the auth stack has
+ * not run yet. With a lazily-resolving guard `ctx.auth.user` is simply
+ * `undefined` until something calls `check()`/`authenticate()`, which is why
+ * every app ended up bolting a global middleware onto a hardcoded
+ * `/collaboration` prefix. Here `check()` is preferred because it reports
+ * failure by returning `false` instead of throwing.
+ *
+ * Still fails closed: no user, no request.
  */
-export const defaultResolveUser: NonNullable<CollabRoutesRuntime['resolveUser']> = (ctx) => {
-  const user = ctx.auth?.user as { id?: unknown; name?: unknown } | undefined;
+export const defaultResolveUser: NonNullable<CollabRoutesRuntime['resolveUser']> = async (ctx) => {
+  const auth = ctx.auth as
+    | {
+        user?: unknown;
+        isAuthenticated?: boolean;
+        check?(): Promise<boolean>;
+        authenticate?(): Promise<unknown>;
+      }
+    | undefined;
+
+  if (auth && !auth.user) {
+    try {
+      if (typeof auth.check === 'function') {
+        await auth.check();
+      } else if (typeof auth.authenticate === 'function') {
+        await auth.authenticate();
+      }
+    } catch {
+      // A failed authentication is an absent user — reported as 401 below,
+      // never as a 500.
+    }
+  }
+
+  const user = auth?.user as { id?: unknown; name?: unknown } | undefined;
   if (!user || user.id === undefined || user.id === null) {
     throw new CollabUnauthorizedError(
       'no authenticated user on context — protect these routes with your auth middleware or provide routes.resolveUser in config/collaboration.ts',

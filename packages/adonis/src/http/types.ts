@@ -1,4 +1,5 @@
 import type { AuthorizeFn } from '../auth/token.js';
+import type { CollabPermission } from '../types.js';
 
 /**
  * Minimal HttpContext contract consumed by the built-in route handlers.
@@ -20,8 +21,17 @@ export interface CollabHttpContext {
     noContent(): unknown;
     header(name: string, value: string): unknown;
   };
-  /** Present when @adonisjs/auth is installed and its middleware ran. */
-  auth?: { user?: unknown };
+  /**
+   * Present when @adonisjs/auth is installed. `user` is only populated once
+   * the guard actually ran, so the default resolver calls `check()` (or
+   * `authenticate()`) itself before reading it.
+   */
+  auth?: {
+    user?: unknown;
+    isAuthenticated?: boolean;
+    check?(): Promise<boolean>;
+    authenticate?(): Promise<unknown>;
+  };
 }
 
 /** Authenticated user resolved by the token endpoint. */
@@ -50,6 +60,17 @@ export class CollabUnauthorizedError extends Error {
 export interface CollabManagerLike {
   /** Per-document engine resolution (used by the token endpoint). */
   engineFor?(options: { docName: string }): Promise<string>;
+  /**
+   * The app's permission rule, resolved exactly as the WebSocket handshake
+   * resolves it (declared document first, then the global rule, then deny).
+   * The routes fall back to this when no explicit `authorize` option is
+   * given — which is what makes manual registration enforce the same rule
+   * the provider does.
+   */
+  authorize?(
+    ctx: { userId: string; user?: { name?: string; avatarUrl?: string | null } },
+    docName: string,
+  ): Promise<CollabPermission>;
   getDocumentState(options: { docName: string }): Promise<Uint8Array>;
   createVersion(options: {
     docName: string;

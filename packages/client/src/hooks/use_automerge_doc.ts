@@ -1,6 +1,6 @@
 import * as A from '@automerge/automerge';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getOrCreateSession, useCollaborationContext } from '../context.js';
+import { useCollaborationContext } from '../context.js';
 import { fetchToken, resolveBaseUrl } from '../rest_client.js';
 import type { CollabStatus } from '../types.js';
 
@@ -41,8 +41,8 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
   const { docName, WebSocketImpl } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
-  // Keeps the shared session lifecycle alive (token endpoint + provider).
-  void getOrCreateSession(context, docName);
+  // No DocSession here: the Automerge path owns its own socket, and creating
+  // a Yjs session in the render body only leaked one Y.Doc per server render.
 
   const [doc, setDoc] = useState<A.Doc<T> | null>(null);
   const [status, setStatus] = useState<CollabStatus>('connecting');

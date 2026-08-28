@@ -18,6 +18,14 @@ import { documentKeyFromVfsKey, renderDocumentsRegistry } from './codegen/docume
  *   init: [() => import('@adonis-agora/collaboration/codegen_init')]
  * }
  * ```
+ *
+ * **Scope, stated plainly.** This hook only knows about the directory, which
+ * only exists once `make:collab-document` created it. Documents declared the
+ * other supported way — `defineDocument` inline in `config/collaboration.ts` —
+ * are invisible to it, and it early-returns generating nothing. For those,
+ * derive the union from the config with `InferCollabDocumentNames<typeof
+ * collaborationConfig>`; `defineConfig` is generic so the literal keys
+ * survive. See docs/codegen/documents-registry.
  */
 // The wrapper's inferred return type references non-portable @poppinss
 // internals — annotate explicitly so the declaration emit stays portable.
@@ -31,7 +39,9 @@ const initHook = hooks.init(
   ) => {
     const source = './app/collaboration/documents';
 
-    // Directory not created yet: nothing to index (make:collab-document creates it).
+    // Directory not created yet: nothing to index. Apps that declare their
+    // documents inline in config/collaboration.ts never create it — that is
+    // expected, and InferCollabDocumentNames is their route to the same type.
     if (!existsSync(source)) {
       return;
     }
