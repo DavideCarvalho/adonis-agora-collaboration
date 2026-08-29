@@ -60,7 +60,7 @@ describe('rest_client', () => {
     await expect(listComments(config, 'd')).rejects.toThrowError(CollabRestError);
   });
 
-  it('createVersion envia docName + label no body', async () => {
+  it('createVersion envia docName + label no body, e nada de userId', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
@@ -68,21 +68,47 @@ describe('rest_client', () => {
       );
     vi.stubGlobal('fetch', fetchMock);
 
-    await createVersion(config, 'doc', 'antes da revisão', 'u1');
+    await createVersion(config, 'doc', 'antes da revisão');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.app/collaboration/versions');
-    expect(JSON.parse(init.body as string)).toEqual({
-      docName: 'doc',
-      label: 'antes da revisão',
-      userId: 'u1',
-    });
+    // The author is the authenticated caller — the route reads the session and
+    // ignores the body, so nothing about an author goes on the wire.
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({ docName: 'doc', label: 'antes da revisão' });
+    expect(Object.keys(body)).toEqual(['docName', 'label']);
   });
 });
 
 describe('resolveBaseUrl (same-origin default)', () => {
   it('uses explicit baseUrl when provided', () => {
     expect(resolveBaseUrl({ baseUrl: 'https://api.app/' })).toBe('https://api.app');
+  });
+
+  /**
+   * `baseUrl` was declared required on `CollaborationClientConfig` while
+   * `resolveBaseUrl` had always fallen back to `location.origin` — so the
+   * same-origin setup the docs advertise ("pass it and forget it") did not
+   * typecheck and had to be worked around with a cast.
+   */
+  it('a config with no baseUrl is valid and resolves against location.origin', async () => {
+    const original = globalThis.location;
+    Object.defineProperty(globalThis, 'location', {
+      value: { origin: 'https://app.example' },
+      configurable: true,
+    });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(Response.json({ token: 't', wsUrl: '/collaboration', engine: 'yjs' }));
+    const sameOrigin: CollaborationClientConfig = { fetchImpl: fetchMock as typeof fetch };
+
+    await fetchToken(sameOrigin, 'docs/1');
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://app.example/collaboration/token?doc=docs%2F1',
+    );
+
+    Object.defineProperty(globalThis, 'location', { value: original, configurable: true });
   });
 
   it('falls back to the current origin when omitted', () => {

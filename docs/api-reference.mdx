@@ -44,7 +44,7 @@ defineConfig({
 | `routes.enabled` | `true` | `false` skips auto-registration; call `collaborationRoutes` yourself |
 | `routes.prefix` | `'/collaboration'` | |
 | `routes.middleware` | `[]` | applied to the whole group |
-| `routes.resolveUser` | `ctx.auth.user` | throws a `401` when there is no user |
+| `routes.resolveUser` | `ctx.auth.check()` then `ctx.auth.user` | throws a `401` when there is no user |
 
 ### `PartyKitConfig`
 
@@ -104,7 +104,7 @@ clear message if it is read too early.
 | `getDocumentText({ docName })` | `Promise<string>` — plain text; `''` when it is not a text layout |
 | `createVersion({ docName, createdBy, label? })` | `Promise<CollabVersion>` |
 | `listVersions({ docName })` | `Promise<CollabVersion[]>` |
-| `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live |
+| `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live; first snapshots the replaced state as a new `restored from #<seq>` version, attributed to `restoredBy` |
 | `diffVersions({ docName, aId, bId })` | `Promise<{ added: number; removed: number }>` |
 | `pruneVersions({ keep, docName?, dryRun? })` | `Promise<number>` — versions deleted; `keep` is per document |
 | `persistDocument({ docName, state })` | `Promise<void>` — throws without configured storage |
@@ -120,6 +120,7 @@ clear message if it is read too early.
 | Method | Returns |
 | --- | --- |
 | `list(docName, space?)` | `Promise<CollabComment[]>` — sorted oldest first |
+| `get(docName, commentId)` | `Promise<CollabComment \| null>` — one comment, through the storage's indexed lookup when it has one (`getComment`), else a filtered list |
 | `create(docName, { space, anchor, body, userId, authorName? })` | `Promise<CollabComment>` |
 | `resolve(docName, commentId, resolved)` | `Promise<CollabComment \| null>` — a toggle |
 | `remove(docName, commentId)` | `Promise<boolean>` |
@@ -186,6 +187,7 @@ interface CollaborationStorage {
   pruneVersions(options: { keep: number; docName?: string; dryRun?: boolean }): Promise<number>
 
   listComments(docName: string, space?: string): Promise<CollabComment[]>
+  getComment?(docName: string, commentId: string): Promise<CollabComment | null>  // optional
   saveComment(docName: string, comment: CollabComment): Promise<void>
   deleteComment(docName: string, commentId: string): Promise<void>
 }
@@ -203,12 +205,41 @@ signPartyKitToken(payload, secret, expiresInSeconds?): string
 verifyPartyKitToken(token, secret): { userId; docName; exp } | null
 parseLegacyToken(token): CollabConnectionContext | null
 
-class CollabForbiddenError extends Error   // authorize denied canRead
-class CollabUnauthorizedError extends Error // no user resolved
+class CollabForbiddenError extends Error       // authorize denied canRead
+class CollabAuthorizationError extends Error   // authorize itself threw — retryable, not a denial
+class CollabUnauthorizedError extends Error    // no user resolved
 ```
 
-`issueToken` enforces `canRead` when an `authorize` is passed — pass the **manager's**, not your
-config's, so per-document rules apply.
+`issueToken` **requires** an `authorize` and throws `CollabForbiddenError` without one: an absent
+rule is a misconfiguration, not a grant. Pass the **manager's**, not your config's, so per-document
+rules apply.
+
+## Observability
+
+```ts
+onCollaborationError(listener): () => void        // subscribe; returns unsubscribe
+setCollaborationLogger(logger | undefined): void  // the provider installs the Adonis logger
+reportCollaborationError(event): void             // report your own; never throws
+collaborationEvents                               // the EventEmitter
+COLLAB_ERROR_EVENT                                // its event name — deliberately not 'error'
+
+interface CollabErrorEvent {
+  scope: 'storage' | 'authorize'
+  operation: string      // e.g. 'saveDocument', 'onAuthenticate'
+  docName?: string
+  error: unknown
+}
+```
+
+Storage failures inside the Hocuspocus hooks, and a throw from `authorize` at the handshake, are
+reported here instead of vanishing. With neither a logger nor a listener they reach `console.error`.
+
+`COLLAB_ERROR_EVENT` is not `'error'` on purpose: an `EventEmitter` with no `'error'` listener
+throws, which would turn the observability hook into a second outage.
+
+A denial and an evaluation failure stay distinct all the way to the client. On the Yjs handshake the
+former is a `CollabForbiddenError` and the latter a `CollabAuthorizationError`; on the Automerge
+socket they are close codes **4003** (final) and **4503** (retryable).
 
 ## Routes
 
@@ -222,23 +253,37 @@ collaborationRoutes(router, {
   engine?: string
   path?: string
   partykit?: { roomHost?; jwtSecret?; party? }
-}): Promise<void>
+}): void
 ```
+
+Synchronous, so it composes inside `router.group()`. Omit `authorize` and the routes resolve the
+rule through the manager — the same one the handshake uses — and deny when nothing declares one.
 
 | Method | Path | Body / query |
 | --- | --- | --- |
 | `GET` | `/token` | `?doc=` |
 | `GET` | `/comments` | `?doc=&space=` |
-| `POST` | `/comments` | `{ docName, space, anchor, body, userId, authorName? }` |
-| `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) |
-| `DELETE` | `/comments/:id` | `?doc=` |
+| `POST` | `/comments` | `{ docName, space, anchor, body, authorName? }` — author is the caller |
+| `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) — author or `canWrite` |
+| `DELETE` | `/comments/:id` | `?doc=` — author or `canWrite` |
 | `GET` | `/versions` | `?doc=` |
-| `POST` | `/versions` | `{ docName, label?, userId? }` |
+| `POST` | `/versions` | `{ docName, label? }` — `createdBy` is the caller |
 | `POST` | `/versions/restore` | `{ docName, versionId }` → `204` |
 | `GET` | `/state` | `?doc=` → `application/octet-stream` |
 | `POST` | `/state` | `?doc=` · raw body · `x-collab-worker-secret` |
 
-Also exported: `defaultResolveUser`, `secretsMatch(received, expected)`.
+Also exported: `defaultResolveUser` (authenticates via `ctx.auth.check()` before reading the user),
+`canMutateComment({ comment, userId, permission })` and `secretsMatch(received, expected)`.
+
+## Document-name types
+
+```ts
+InferCollabDocumentNames<typeof collaborationConfig>  // union of declared patterns
+CollabDocumentNameFor<'researches/:id/writing'>       // `researches/${string}/writing`
+```
+
+`defineConfig` is generic, so the literal keys of `documents` survive into the config's type. See
+[Typed registry](/docs/collaboration/codegen/documents-registry).
 
 ## Ace commands
 
@@ -253,7 +298,7 @@ Also exported: `defaultResolveUser`, `secretsMatch(received, expected)`.
 
 ```tsx
 <CollaborationProvider
-  baseUrl={string}
+  baseUrl?={string}          // optional — falls back to location.origin
   getHeaders?={() => Record<string, string> | Promise<Record<string, string>>}
   createTransport?={(info, doc, docName) => CollabTransport}
   fetchImpl?={typeof fetch}
@@ -263,27 +308,51 @@ Also exported: `defaultResolveUser`, `secretsMatch(received, expected)`.
 ### Hooks
 
 ```ts
-useCollabDoc({ docName }): { doc: Y.Doc; status: CollabStatus; error: Error | null }
+useCollabDoc({ docName }): {
+  doc: Y.Doc                 // stable for the provider's lifetime
+  collabDoc: CollabDoc       // the same document behind read/write/onUpdate
+  status: CollabStatus
+  synced: boolean            // the server's initial state has been applied
+  error: Error | null
+}
 
 useAutomergeDoc<T>({ docName, WebSocketImpl? }): {
   doc: A.Doc<T> | null
   status: CollabStatus
+  synced: boolean            // the server's state has been merged on THIS connection
+  pendingChanges: number     // local changes not yet written to the socket
   error: Error | null
   change(fn: A.ChangeFn<T>): void
 }
 
-useAwareness({ docName }): {
+useAwareness({ docName, user? }): {
   peers: CollabPeer[]                              // everyone except you
   status: CollabStatus
   awareness: Awareness | null                      // the channel; null until connected
+  setLocalState(state: Record<string, unknown> | null): void
+  setLocalStateField(field: string, value: unknown): void
+}
+
+// `user` is your identity, published into the awareness `user` field — the
+// field every other client's `peers` reads. Without it the room is anonymous.
+interface CollabLocalUser {
+  userId?: string
+  name?: string
+  avatarUrl?: string | null
+  [key: string]: unknown
 }
 
 useCollabEditor<S>({ docName, editorId, adapter, doc? }): {
   state: S
   update(next: S): void
   status: CollabStatus
+  synced: boolean
   peers: CollabPeer[]
 }
+
+useExcalidrawSync({ doc, excalidrawAPI, editorId? }): void
+// doc: CollabDoc | Y.Doc | null — either of the two useCollabDoc returns
+// editorId defaults to 'excalidraw'; the scene is last-write-wins on one key
 
 useComments({ docName, space? }): {
   comments: CollabComment[]
@@ -330,16 +399,27 @@ interface CollabDoc {
 
 ```ts
 class DocSession {
-  constructor(docName: string, config: CollaborationClientConfig)
+  constructor(
+    docName: string,
+    config: CollaborationClientConfig,
+    options?: { registry?: DocSessionRegistry },   // the provider passes its map
+  )
   readonly doc: Y.Doc
   readonly docName: string
   get transport(): CollabTransport | undefined
   get engine(): string | undefined
   get error(): Error | null
+  get synced(): boolean          // initial state applied, not just "socket open"
+  get refCount(): number         // mounted consumers holding it open
+  get isDestroyed(): boolean
   getStatus(): CollabStatus
+  getSnapshot(): DocSessionSnapshot             // { status, error, synced }
   subscribe(listener: () => void): () => void   // also starts the session
   start(): Promise<void>                        // idempotent
-  destroy(): void
+  retain(): () => void   // hold it open; returns its own release
+  release(): void        // the last one calls stop()
+  stop(): void           // tears down the transport, KEEPS the Y.Doc
+  destroy(): void        // terminal: destroys the Y.Doc, evicts from the map
 }
 
 fetchToken(config, docName)
@@ -357,3 +437,18 @@ class CollabRestError extends Error { status: number; body: string }
 
 Transports: `HocuspocusCollabTransport`, `PartyKitCollabTransport`, `PartyServerCollabTransport`,
 and `defaultTransportFactory`.
+
+```ts
+interface CollabTransport {
+  readonly doc: Y.Doc
+  readonly awareness?: Awareness | null
+  getStatus(): CollabStatus
+  isSynced?(): boolean          // optional; the session falls back to the status
+  subscribe(listener: () => void): () => void
+  destroy(): void
+}
+```
+
+Only Hocuspocus can separate "socket open" from "initial state applied", so only it implements
+`isSynced`. For a transport that does not, `session.synced` reports `getStatus() === 'connected'` —
+never *less* informative than the status, and never more.

@@ -33,8 +33,10 @@ Postgres backend, an S3 backend and a test double interchangeable.
 
 ## What calls what
 
-- `saveDocument` is called by the driver on its **debounce**, and once more on graceful shutdown.
-  It receives the full encoded state, not a delta — the storage never needs to understand a CRDT.
+- `saveDocument` is called by the driver on its **debounce**, again when the last client leaves a
+  document (before the in-memory copy is dropped), again on graceful shutdown, and once more at the
+  end of a restore. It receives the full encoded state, not a delta — the storage never needs to
+  understand a CRDT.
 - `loadDocument` is called when a document is opened and nobody has it in memory.
 - `saveVersion` receives the document's bytes **at that moment** and must keep them. Returning them
   later from `loadVersionSnapshot` is what makes a restore restore anything;
@@ -47,6 +49,15 @@ Postgres backend, an S3 backend and a test double interchangeable.
 <Callout type="warn" title="saveComment is an upsert">
 Resolving a comment calls `saveComment` with an existing id. An implementation that blindly inserts
 will violate its primary key on the second resolve — upsert on `id`.
+</Callout>
+
+<Callout title="A rejected save is reported, not swallowed">
+The save paths run inside Hocuspocus hooks, which discard what they throw. The driver therefore
+catches, reports through
+[`onCollaborationError`](/docs/collaboration/troubleshooting) with `scope: 'storage'`, and rethrows.
+So a storage that rejects is visible — but only if you are listening, or the provider could resolve
+the Adonis logger. Subscribe before you need it; the failure mode this replaced was an empty
+`collab_documents` table with a perfectly healthy-looking WebSocket.
 </Callout>
 
 ## The built-ins

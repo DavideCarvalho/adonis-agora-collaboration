@@ -3,8 +3,14 @@ import { next as ANext } from '@automerge/automerge';
 import { WebSocketServer } from 'ws';
 import { parseLegacyToken } from '../../auth/token.js';
 import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
-import type { CollabDiffSummary, CollabVersion, CollaborationStorage } from '../../types.js';
-import { createVersionMetadata, seqVersions } from '../../versioning.js';
+import { reportCollaborationError } from '../../observability.js';
+import type {
+  CollabDiffSummary,
+  CollabPermission,
+  CollabVersion,
+  CollaborationStorage,
+} from '../../types.js';
+import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage } from '../shared.js';
 
 /**
@@ -24,6 +30,9 @@ import { lineDiff, resolveStorage } from '../shared.js';
 
 /** Connections whose permission denied canWrite — their updates are dropped. */
 const readOnlyClients = new WeakSet<object>();
+
+/** userId behind each open socket — feeds the presence roster on close. */
+const socketUsers = new WeakMap<object, string>();
 
 interface Room {
   // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
@@ -90,19 +99,43 @@ export class AutomergeDriver implements CollaborationDriver {
           return;
         }
 
-        try {
-          const ctx = JSON.parse(Buffer.from(token, 'base64').toString()) as {
-            userId: string;
-          };
-          const permission = await this.options.authorize(ctx, docName);
-          if (!permission.canRead) {
-            ws.close(4003, 'no access');
-            return;
-          }
+        const ctx = parseLegacyToken(token);
+        if (!ctx) {
+          ws.close(4001, 'authentication failed');
+          return;
+        }
 
+        // A denial and an outage are different events for the client: 4003
+        // is final, 4503 is worth retrying. Reporting one as the other is
+        // how an app-side database error becomes a reconnect storm.
+        let permission: CollabPermission;
+        try {
+          permission = await this.options.authorize(ctx, docName);
+        } catch (error) {
+          reportCollaborationError({
+            scope: 'authorize',
+            operation: 'upgrade',
+            docName,
+            error,
+          });
+          ws.close(4503, 'authorization unavailable');
+          return;
+        }
+
+        if (!permission.canRead) {
+          ws.close(4003, 'no access');
+          return;
+        }
+
+        try {
           const room = await this.loadRoom(docName);
           room.clients.add(ws);
           if (!permission.canWrite) readOnlyClients.add(ws);
+
+          await this.options.presence?.join(docName, {
+            userId: ctx.userId,
+            ...(ctx.user?.name ? { name: ctx.user.name } : {}),
+          });
 
           // Sends the full state to the new client.
           ws.send(A.save(room.text));
@@ -118,9 +151,19 @@ export class AutomergeDriver implements CollaborationDriver {
           ws.on('close', () => {
             room.clients.delete(ws);
             readOnlyClients.delete(ws);
+            // Only the user's LAST socket on this document leaves the roster.
+            const stillConnected = [...room.clients].some(
+              (client) => socketUsers.get(client) === ctx.userId,
+            );
+            socketUsers.delete(ws);
+            if (!stillConnected) {
+              void this.options.presence?.leave(docName, ctx.userId);
+            }
           });
-        } catch {
-          ws.close(4001, 'authentication failed');
+          socketUsers.set(ws, ctx.userId);
+        } catch (error) {
+          reportCollaborationError({ scope: 'storage', operation: 'loadDocument', docName, error });
+          ws.close(4500, 'could not open the document');
         }
       });
     });
@@ -153,7 +196,17 @@ export class AutomergeDriver implements CollaborationDriver {
       this.persistTimers.set(
         docName,
         setTimeout(() => {
-          void this.storage.saveDocument(docName, A.save(room.text)).finally(() => resolve());
+          void this.storage
+            .saveDocument(docName, A.save(room.text))
+            .catch((error: unknown) => {
+              reportCollaborationError({
+                scope: 'storage',
+                operation: 'saveDocument',
+                docName,
+                error,
+              });
+            })
+            .finally(() => resolve());
         }, this.options.debounce ?? 2000),
       );
     });
@@ -195,16 +248,38 @@ export class AutomergeDriver implements CollaborationDriver {
     return this.storage.listVersions(docName);
   }
 
+  /**
+   * Restores `versionId` — recording the state it replaces as a new version
+   * attributed to `restoredBy`, per the driver contract. Automerge keeps the
+   * change history natively, but the *version list* is ours, and a restore
+   * that leaves no entry in it is a restore nobody can undo.
+   */
   async restoreVersion(
     docName: string,
     versionId: string,
-    _restoredBy: string | null,
+    restoredBy: string | null,
   ): Promise<void> {
     const bytes = await this.storage.loadVersionSnapshot(docName, versionId);
     if (!bytes) throw new Error(`Version ${versionId} not found`);
 
     const snapshotDoc = A.load<Record<string, unknown>>(bytes);
     const room = await this.loadRoom(docName);
+
+    const existing = await this.storage.listVersions(docName);
+    const target = existing.find((version) => version.id === versionId);
+    await this.storage.saveVersion(
+      docName,
+      {
+        ...createVersionMetadata(
+          restoredBy,
+          restoredFromLabel(target, versionId),
+          seqVersions(existing),
+        ),
+        id: ANext.getHeads(room.text).join(','),
+      },
+      A.save(room.text),
+    );
+
     const merged = A.merge(room.text, snapshotDoc);
     // Automerge merge converges to the most recent state; to "restore",
     // we overwrite the content field with the value from the version.
@@ -236,6 +311,10 @@ export class AutomergeDriver implements CollaborationDriver {
 
   async close(): Promise<void> {
     for (const timer of this.persistTimers.values()) clearTimeout(timer);
+    // `this.wss?.close(cb)` never runs cb when there is no server, so this
+    // promise used to hang forever on a driver that was never attached —
+    // which is every driver outside the web process.
+    if (!this.wss) return;
     return new Promise((resolve) => {
       this.wss?.close(() => resolve());
     });

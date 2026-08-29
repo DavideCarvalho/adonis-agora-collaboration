@@ -6,6 +6,42 @@ icon: Type
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
+There are two ways to get a checkable document-name type, and which one you get depends on how you
+declared your documents.
+
+<Callout type="warn" title="Declared inline in config? Use the config, not the registry">
+The generated registry below indexes the **`app/collaboration/documents/` directory**, which only
+exists if you ran `node ace make:collab-document`. If you declared your documents the other
+supported way — `defineDocument` inline in `config/collaboration.ts` — that directory is not there,
+the `init` hook returns early and nothing is generated. Derive the union from the config instead:
+
+```ts title="types/collaboration.ts"
+import type { InferCollabDocumentNames } from '@adonis-agora/collaboration'
+import collaborationConfig from '#config/collaboration'
+
+export type CollabDocumentName = InferCollabDocumentNames<typeof collaborationConfig>
+// → 'researches/:id/writing' | 'whiteboards/:id'
+```
+
+This works because `defineConfig` is generic and returns your literal config — a widened return
+type would erase the keys, which is exactly why there was no bridge from `config.documents` to a
+type before 0.10.0.
+
+To check a *resolved* name and not just the pattern, run it through `CollabDocumentNameFor`:
+
+```ts
+import type { CollabDocumentNameFor } from '@adonis-agora/collaboration'
+
+type Writing = CollabDocumentNameFor<'researches/:id/writing'>
+// → `researches/${string}/writing`
+
+const ok: Writing = `researches/${research.id}/writing`
+const typo: Writing = 'research/42/writing' // ✗ does not compile
+```
+</Callout>
+
+## The generated registry
+
 AdonisJS generates code from your application into `.adonisjs/`. The collaboration package plugs into
 that: an Assembler `init` hook scans `app/collaboration/documents/`, strips the `_types` suffix from
 each file, and writes the result as a union.

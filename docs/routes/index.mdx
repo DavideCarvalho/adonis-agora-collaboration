@@ -70,12 +70,12 @@ Content-Type: application/json
   "space": "text",
   "anchor": { "kind": "text-range", "start": 120, "end": 160, "selectedText": "the sentence" },
   "body": "rephrase this",
-  "userId": "u_1",
   "authorName": "Jane"
 }
 ```
 
-Returns the created comment, with its generated `id` and `createdAt`.
+Returns the created comment, with its generated `id` and `createdAt`. There is no `userId` field:
+the author is the authenticated caller, and a body that supplies one is ignored.
 
 ```http
 PATCH  /collaboration/comments/:id?doc=researches/42/writing   { "resolved": true }
@@ -83,20 +83,26 @@ DELETE /collaboration/comments/:id?doc=researches/42/writing
 ```
 
 `resolved` defaults to `true`, so an empty `PATCH` body resolves; pass `false` to reopen. `DELETE`
-answers `{ "deleted": true }`, or `{ "deleted": false }` when the id was already gone — a
-double-click is not an error.
+answers `{ "deleted": true }`. An id that is not in the document answers `404`.
+
+Both mutations are **author-or-elevated**: the person who wrote the comment may always resolve or
+delete it, and anyone else needs `canWrite` on the document — a moderating editor, not a fellow
+commenter. `canComment` alone gets you `403` on someone else's thread.
 
 ### Versions
 
 ```http
 GET  /collaboration/versions?doc=researches/42/writing
-POST /collaboration/versions            { "docName": "…", "label": "before review", "userId": "u_1" }
+POST /collaboration/versions            { "docName": "…", "label": "before review" }
 POST /collaboration/versions/restore    { "docName": "…", "versionId": "…" }
 ```
 
-`POST /versions` returns the created `CollabVersion`. `POST /versions/restore` returns `204` and
-takes effect **live** — every connected client receives the restored content through the sync
-protocol. See [Versions](/docs/collaboration/concepts/versions).
+`POST /versions` returns the created `CollabVersion`; like a comment, its `createdBy` is the
+authenticated caller and a `userId` in the body is ignored. `POST /versions/restore` returns `204`
+and takes effect **live** — every connected client receives the restored content through the sync
+protocol, and the state the restore replaced is written to the history first as
+`restored from #<seq>`, attributed to the caller. See
+[Versions](/docs/collaboration/concepts/versions).
 
 ### Binary state
 
@@ -111,8 +117,9 @@ Machine-to-machine, used by edge workers. `POST` requires the worker's shared se
 
 ## Three levels of control
 
-**Level one — leave them alone.** The provider registers everything under `/collaboration` at boot.
-Nothing to write.
+**Level one — leave them alone.** The provider registers everything under `/collaboration` during
+its `boot()` — before `Server.boot()` commits the router, which is the only window in which a route
+is accepted. Nothing to write.
 
 **Level two — keep the handlers, change the wrapper.** Prefix, middleware and user resolution are
 config:
@@ -132,11 +139,28 @@ import router from '@adonisjs/core/services/router'
 import { collaborationRoutes } from '@adonis-agora/collaboration'
 
 // with routes.enabled = false in config
-await collaborationRoutes(router, {
+collaborationRoutes(router, {
   prefix: '/api/collab',
   middleware: [middleware.auth()],
 })
 ```
+
+`collaborationRoutes` is **synchronous**, so it also composes inside a group you already have —
+a `RouteGroup` closes the moment its callback returns, and an `await` in there would drop the
+routes outside it:
+
+```ts title="start/routes.ts"
+router
+  .group(() => {
+    collaborationRoutes(router, { prefix: '/collab' })
+  })
+  .prefix('/api/v2')
+  .use(middleware.auth())
+```
+
+Registering them yourself does not weaken the permission rule. With no explicit `authorize` option
+the routes resolve it through the manager — the same declared-document-then-global-then-deny
+resolution the WebSocket handshake runs, straight out of `config/collaboration.ts`.
 
 **Level three — write the controllers.** Disable auto-registration and build the surface yourself,
 keeping the library's token semantics through the exported `issueToken`. See
@@ -155,7 +179,8 @@ and then runs the document's `authorize`, requiring the permission that route ne
 | --- | --- |
 | `GET /comments`, `GET /versions`, `GET /state` | `canRead` |
 | `POST /versions`, `POST /versions/restore` | `canWrite` |
-| `POST`/`PATCH`/`DELETE /comments` | `canComment` |
+| `POST /comments` | `canComment` |
+| `PATCH`/`DELETE /comments/:id` | `canComment` **and** authorship — or `canWrite` to moderate |
 
 `POST /state` is the exception: it is machine-to-machine and authenticated by the worker secret
 instead. See [Binary state](/docs/collaboration/routes/state).
@@ -166,9 +191,13 @@ request body — otherwise anyone could comment as anyone. The same applies to t
 version.
 </Callout>
 
-<Callout type="warn" title="They still need your auth middleware">
-The routes enforce *authorization* — who may do what to which document. They do not perform
-*authentication*: `resolveUser` reads `ctx.auth.user`, which is only populated when your auth
-middleware ran on that route. Without it every request is unauthenticated and answers `401`, which
-is safe but not useful. Set `routes.middleware`.
+<Callout title="Authentication: the default resolver tries first">
+The routes enforce *authorization* — who may do what to which document. For *authentication* the
+default `resolveUser` calls `ctx.auth.check()` (or `authenticate()`) itself before reading
+`ctx.auth.user`, so a lazily-resolving guard still produces a caller without a global middleware
+bolted onto a hardcoded prefix. A request that cannot be authenticated answers `401`.
+
+Setting `routes.middleware` is still the right move when you want the whole group behind your own
+stack — rate limiting, tenancy, an audit trail — or when your guard is not reachable from
+`ctx.auth`. Then supply `routes.resolveUser` too.
 </Callout>

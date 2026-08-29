@@ -15,15 +15,15 @@ key of the collaborative document.
 ```tsx
 import { createExcalidrawAdapter, useCollabEditor } from '@adonis-agora/collaboration-client'
 
-const { state, update, status, peers } = useCollabEditor({
+const { state, update, status, synced, peers } = useCollabEditor({
   docName: 'whiteboards/1',
   editorId: 'excalidraw',
   adapter: createExcalidrawAdapter(),
 })
 ```
 
-Four things come back, and none of them mention a CRDT: the current scene, a way to write the next
-one, the connection status, and who else is here.
+Five things come back, and none of them mention a CRDT: the current scene, a way to write the next
+one, the connection status, whether the server's initial state has landed, and who else is here.
 
 ## What `editorId` is
 
@@ -52,21 +52,29 @@ same key when no plain value is there, so it interoperates with a document anoth
 
 ```tsx
 function Whiteboard({ id }: { id: string }) {
-  const { state, update, status } = useCollabEditor({
+  const { state, update, synced } = useCollabEditor({
     docName: `whiteboards/${id}`,
     editorId: 'excalidraw',
     adapter: createExcalidrawAdapter(),
   })
 
+  // Mount the canvas only once the saved scene has arrived: `initialData` is
+  // read once, so painting an empty board first means painting it forever.
+  if (!synced) return <BoardLoading />
+
   return (
     <Excalidraw
       initialData={{ elements: state.elements, appState: state.appState }}
-      viewModeEnabled={status !== 'connected'}
       onChange={(elements, appState) => update({ elements: [...elements], appState })}
     />
   )
 }
 ```
+
+`synced`, not `status`. A board rendered while `status === 'connected'` can still be empty — the
+socket is open and the initial state has not arrived — and `viewModeEnabled={status !== 'connected'}`
+locks the canvas every time the connection blips. Use `canWrite` from your own `authorize` result
+for a genuinely read-only board, and `synced` for "not painted yet".
 
 <Callout type="warn" title="This is whole-scene replacement, not fine-grained merging">
 `update(next)` writes the entire scene into the key. Two people dragging different shapes at the
@@ -79,6 +87,28 @@ surface where per-item concurrency genuinely matters, model the items as their o
 an adapter that does — or bind the editor to Yjs types directly with
 [`useCollabDoc`](/docs/collaboration/client/sessions).
 </Callout>
+
+## Excalidraw without the adapter
+
+Excalidraw drives its canvas through an imperative handle rather than props, so there is a second
+door for it — `useExcalidrawSync` wires that handle to a document directly, and `ExcalidrawBoard`
+is the whole thing (provider included) in one component:
+
+```tsx
+const [api, setApi] = useState<ExcalidrawAPIHandle | null>(null)
+const { doc } = useCollabDoc({ docName: 'whiteboards/1' })
+
+useExcalidrawSync({ doc, excalidrawAPI: api })
+
+return <Excalidraw excalidrawAPI={setApi} />
+```
+
+`doc` takes either the raw `Y.Doc` or the `collabDoc` view — the wrapper is applied for you.
+
+It stores the scene under the same single key as the adapter, so **the last-write-wins caveat above
+applies unchanged**: the whole `elements` array is one value, and two people drawing at the same
+instant resolve to one of the two boards, not a merge of both. An empty board is a real saved
+state, not a missing one — erasing everything propagates and survives a reload.
 
 ## Writing an adapter
 
@@ -123,9 +153,10 @@ Two rules. `state` must be a **getter**, not a captured value — the hook re-re
 document update, and a snapshot taken at `create` time would never change. And `empty()` must return
 a valid scene, because it is what a brand-new document looks like.
 
-The hook caches the snapshot by serialized equality, so returning a freshly built object from
-`state` on every read does not cause a render loop. Keep the scene JSON-serializable and that stays
-true.
+The hook caches the snapshot **by document version** — it re-reads `state` only after the document
+actually changed — so returning a freshly built object on every read does not cause a render loop.
+(It used to compare `JSON.stringify(scene)` instead, which serialized the whole board on every
+stroke just to decide whether anything had moved.)
 
 ## Adapter or raw document?
 

@@ -2,6 +2,7 @@ import type { ApplicationService } from '@adonisjs/core/types';
 import { Redis } from 'ioredis';
 import { CollaborationManager } from '../src/collaboration_manager.js';
 import type { CollaborationAppConfig } from '../src/define_config.js';
+import { type CollabLogger, setCollaborationLogger } from '../src/observability.js';
 import { collaborationRoutes } from '../src/routes.js';
 import { setBootedApp } from '../src/services/booted_app.js';
 import { RedisPresenceStore } from '../src/services/presence_service.js';
@@ -11,12 +12,21 @@ import { RedisPresenceStore } from '../src/services/presence_service.js';
  *
  * - `register()` hands the booted app to `services/main` and binds the
  *   `CollaborationManager` singleton from `config/collaboration.ts`;
- * - `boot()`/`ready()` attaches the collaboration WebSocket upgrade to the
- *   Adonis HTTP server (path from config, default `/collaboration`);
- * - `ready()` registers the built-in REST endpoints automatically unless
- *   `routes.enabled: false` — then call `collaborationRoutes(router)` in
- *   `start/routes.ts` with your own middleware;
+ * - `boot()` installs the logger and registers the built-in REST endpoints
+ *   — **before** the router commits — unless `routes.enabled: false`;
+ * - `ready()` attaches the collaboration WebSocket upgrade to the Adonis HTTP
+ *   server (path from config, default `/collaboration`);
  * - `shutdown()` flushes pending stores and closes all connections.
+ *
+ * The two phases are not interchangeable, and both directions of the mistake
+ * are silent:
+ *
+ * - routes must be registered in `boot()`, because `Server.boot()` calls
+ *   `router.commit()` during `start()` and everything registered after that
+ *   is dropped from the route store — the endpoints look configured and
+ *   answer 404;
+ * - the WebSocket attach must stay in `ready()`, because the node HTTP
+ *   server only exists once Ignitor created it in `start()`.
  */
 export default class CollaborationServiceProvider {
   private config?: CollaborationAppConfig;
@@ -53,6 +63,47 @@ export default class CollaborationServiceProvider {
     });
   }
 
+  async boot() {
+    // Storage and authorize failures otherwise vanish inside socket hooks.
+    try {
+      const logger = (await this.app.container.make('logger')) as unknown as CollabLogger;
+      if (logger && typeof logger.error === 'function') {
+        setCollaborationLogger(logger);
+      }
+    } catch {
+      // No logger bound (bare container, some test harnesses): the event
+      // stream in src/observability.ts still carries every failure.
+    }
+
+    // Auto-register built-in REST endpoints unless explicitly disabled.
+    const routes = this.config?.routes;
+    if (routes?.enabled === false) {
+      return;
+    }
+
+    const router = (await this.app.container.make('router')) as Parameters<
+      typeof collaborationRoutes
+    >[0];
+
+    const runtimeOptions: Parameters<typeof collaborationRoutes>[1] = {
+      // Resolved per request, never here: building the manager during boot
+      // would open its Redis connection in every environment, including ace.
+      managerFallback: () => this.app.container.make(CollaborationManager),
+      // The token endpoint must resolve permissions exactly like the WebSocket
+      // handshake does — through the manager, so declared documents' own
+      // `authorize` applies and an unmatched document still fails closed.
+      authorize: async (ctx, docName) => {
+        const manager = await this.app.container.make(CollaborationManager);
+        return manager.authorize(ctx, docName);
+      },
+    };
+    if (routes?.prefix !== undefined) runtimeOptions.prefix = routes.prefix;
+    if (routes?.middleware !== undefined) runtimeOptions.middleware = routes.middleware;
+    if (routes?.resolveUser !== undefined) runtimeOptions.resolveUser = routes.resolveUser;
+
+    collaborationRoutes(router, runtimeOptions);
+  }
+
   async ready() {
     // Attach happens in `ready()` (lifecycle phase 4): Ignitor created the
     // node HTTP server during `start()` (phase 3), so getNodeServer() exists.
@@ -77,32 +128,10 @@ export default class CollaborationServiceProvider {
     }
 
     await manager.attach(nodeServer);
-
-    // Auto-register built-in REST endpoints unless explicitly disabled.
-    const routes = this.config?.routes;
-    if (routes?.enabled === false) {
-      return;
-    }
-
-    const router = (await this.app.container.make('router')) as Parameters<
-      typeof collaborationRoutes
-    >[0];
-
-    const runtimeOptions: Parameters<typeof collaborationRoutes>[1] = {
-      managerFallback: () => this.app.container.make(CollaborationManager),
-    };
-    if (routes?.prefix !== undefined) runtimeOptions.prefix = routes.prefix;
-    if (routes?.middleware !== undefined) runtimeOptions.middleware = routes.middleware;
-    if (routes?.resolveUser !== undefined) runtimeOptions.resolveUser = routes.resolveUser;
-    // The token endpoint must resolve permissions exactly like the WebSocket
-    // handshake does — through the manager, so declared documents' own
-    // `authorize` applies and an unmatched document still fails closed.
-    runtimeOptions.authorize = (ctx, docName) => manager.authorize(ctx, docName);
-
-    await collaborationRoutes(router, runtimeOptions);
   }
 
   async shutdown() {
+    setCollaborationLogger(undefined);
     const manager = await this.app.container.make(CollaborationManager);
     await manager.close();
   }

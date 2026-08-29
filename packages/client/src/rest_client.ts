@@ -86,9 +86,16 @@ export function listComments(config: CollaborationClientConfig, docName: string,
   });
 }
 
+/**
+ * `userId` is not part of the input: the route stamps the authenticated caller
+ * on the comment and ignores a body-supplied author.
+ */
 export function createComment(
   config: CollaborationClientConfig,
-  input: Omit<import('./types.js').CollabComment, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt'>,
+  input: Omit<
+    import('./types.js').CollabComment,
+    'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'userId'
+  >,
 ) {
   return collabFetch<import('./types.js').CollabComment>(config, '/collaboration/comments', {
     method: 'POST',
@@ -127,15 +134,19 @@ export function listVersions(config: CollaborationClientConfig, docName: string)
   });
 }
 
+/**
+ * The author is the authenticated caller: `handleCreateVersion` reads
+ * `allowed.user.id` and never looks at the body, so a `userId` sent here went
+ * nowhere while reading like it decided something.
+ */
 export function createVersion(
   config: CollaborationClientConfig,
   docName: string,
   label: string | null,
-  userId?: string | null,
 ) {
   return collabFetch<import('./types.js').CollabVersion>(config, '/collaboration/versions', {
     method: 'POST',
-    body: { docName, label, userId },
+    body: { docName, label },
   });
 }
 

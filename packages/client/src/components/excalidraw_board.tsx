@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState, Suspense, lazy } from 'react';
-import { CollaborationProvider, useCollabDoc } from '../index.js';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { useExcalidrawSync } from '../hooks/use_excalidraw_sync.js';
-import { YjsCollabDoc } from '../docs/index.js';
+import { CollaborationProvider, useCollabDoc } from '../index.js';
 
 // O CSS do Excalidraw precisa ser importado pelo APP HOST, não por esta
 // lib — bundlers (Vite, rolldown) não conseguem resolver o subpath
@@ -36,8 +35,7 @@ function ExcalidrawBoardInner({
   readOnly = false,
   langCode = 'pt-BR',
 }: ExcalidrawBoardInnerProps) {
-  const { doc } = useCollabDoc({ docName });
-  const collabDoc = useMemo(() => (doc ? new YjsCollabDoc(doc) : null), [doc]);
+  const { collabDoc } = useCollabDoc({ docName });
   const [api, setApi] = useState<unknown>(null);
   const [mounted, setMounted] = useState(false);
 
@@ -45,7 +43,7 @@ function ExcalidrawBoardInner({
 
   useExcalidrawSync({ doc: collabDoc, excalidrawAPI: api as never, editorId: docName });
 
-  if (!mounted || !collabDoc) return <BoardLoading />;
+  if (!mounted) return <BoardLoading />;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-stone-50">
@@ -68,8 +66,8 @@ export interface ExcalidrawBoardProps {
   readOnly?: boolean;
   /** Código do idioma (default `'pt-BR'`). */
   langCode?: string;
-  /** Base URL do servidor (ex.: `https://api.app`). */
-  baseUrl: string;
+  /** Base URL do servidor (ex.: `https://api.app`). Default: `location.origin`. */
+  baseUrl?: string | undefined;
   /** Retorna cabeçalhos de auth (ex.: `() => ({ cookie })`). */
   getHeaders: () => Record<string, string>;
 }

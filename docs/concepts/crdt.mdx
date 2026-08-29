@@ -47,8 +47,8 @@ Three consequences you will meet on the first day:
 
 - **Undo is not the editor's job.** ProseMirror's history plugin has no idea which operations were
   yours; it will cheerfully undo the paragraph your colleague just wrote. Disable it
-  (`StarterKit.configure({ history: false })`) and let the CRDT's undo manager, which tracks
-  origin, own it.
+  (`StarterKit.configure({ undoRedo: false })` on Tiptap 3, `history: false` on Tiptap 2) and let
+  the CRDT's undo manager, which tracks origin, own it.
 - **You do not read the document from the database.** The authoritative copy is the live in-memory
   document the driver holds; the stored bytes are a debounced flush of it. Ask the manager
   (`getDocumentState`, `getDocumentText`) and it prefers the live document, falling back to storage

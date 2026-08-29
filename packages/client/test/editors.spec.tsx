@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react';
+import { act, render, renderHook, waitFor } from '@testing-library/react';
 import { createElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
@@ -9,6 +9,7 @@ import {
   createTextAdapter,
   createTldrawAdapter,
 } from '../src/editors/index.js';
+import type { CollabEditorAdapter } from '../src/editors/types.js';
 import { useCollabEditor } from '../src/hooks/use_collab_editor.js';
 import { fakeTransportFactory } from './helpers/fake_transport.js';
 
@@ -81,5 +82,49 @@ describe('useCollabEditor', () => {
     expect(result?.state.elements).toEqual([]);
     act(() => result?.update({ elements: [{ id: 'z' }] }));
     expect(result?.state.elements).toEqual([{ id: 'z' }]);
+  });
+});
+
+describe('useCollabEditor reactivity', () => {
+  /**
+   * `new YjsCollabDoc(session.doc)` was built in the render body, so the
+   * memoized adapter view and the `useSyncExternalStore` subscribe both got
+   * a new identity on every render — the Y.Doc 'update' listener was torn
+   * down and re-added each time, and the snapshot had to be cached by
+   * `JSON.stringify(scene)` (O(scene) per stroke) just to stop that becoming
+   * a loop.
+   */
+  it('does not rebuild the adapter view or re-subscribe on every render', async () => {
+    const { wrapper } = makeWrapper();
+    const base = createExcalidrawAdapter<unknown>();
+    let creates = 0;
+    const adapter: CollabEditorAdapter<{ elements: unknown[]; appState?: unknown }> = {
+      empty: base.empty,
+      create: (doc, editorId) => {
+        creates += 1;
+        return base.create(doc, editorId);
+      },
+    };
+
+    const { result, rerender } = renderHook(
+      () => useCollabEditor({ docName: 'lousas/render', editorId: 'excalidraw', adapter }),
+      { wrapper: ({ children }) => wrapper({ children }) },
+    );
+
+    await waitFor(() => expect(result.current.state).toBeDefined());
+    const before = creates;
+    const state = result.current.state;
+
+    rerender();
+    rerender();
+    rerender();
+
+    expect(creates).toBe(before);
+    // And the snapshot stays referentially stable with no document update.
+    expect(result.current.state).toBe(state);
+
+    // A real write still flows through.
+    act(() => result.current.update({ elements: [{ id: 'q' }] }));
+    expect(result.current.state.elements).toEqual([{ id: 'q' }]);
   });
 });

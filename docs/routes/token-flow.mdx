@@ -67,13 +67,24 @@ exponential backoff doubling per failed attempt, capped at 15 seconds, and reset
 connection succeeds.
 
 That loop is quietly doing something important: because every reconnect re-runs `authorize`, access
-revoked while someone is connected takes effect at the next reconnect without anyone reloading a
+revoked while someone is connected takes effect **at the next reconnect** without anyone reloading a
 page. Revocation is not a separate mechanism — it is the same check, running again.
+
+Note the "at the next reconnect" precisely. `authorize` is evaluated once per connection and never
+re-evaluated for a socket that stays open, so a user whose access you revoke keeps syncing until
+their transport drops. If a revocation must bite immediately, close the connection from the app
+side; do not wait for the rule to notice.
 
 <Callout title="Which also means authorize runs often">
 Every handshake, every token issue, every reconnect. Keep it to one indexed query. If your rule is
 genuinely expensive, cache it in your own layer — the library deliberately does not cache it for
 you, because a cached permission is a permission that outlives its revocation.
+
+If it *throws* — the database it queries is down — that is reported as a
+`CollabAuthorizationError`, not as a denial, and surfaced through
+[the error stream](/docs/collaboration/troubleshooting). The distinction matters: a client told
+"forbidden" should stop, and a client told "unavailable" may back off and retry, which is the
+difference between a blip and a reconnect storm.
 </Callout>
 
 ## Failure modes

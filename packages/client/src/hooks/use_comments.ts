@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getOrCreateSession, useCollaborationContext } from '../context.js';
+import { useCollaborationContext } from '../context.js';
 import {
   createComment as apiCreateComment,
   deleteComment as apiDeleteComment,
@@ -19,8 +19,13 @@ export interface UseCommentsResult {
   loading: boolean;
   error: Error | null;
   refresh(): Promise<void>;
+  /**
+   * The author is the authenticated caller — `handleCreateComment` sets
+   * `userId` from the session and discards whatever the body claimed, so this
+   * does not ask for one.
+   */
   create(
-    input: Pick<CollabComment, 'space' | 'anchor' | 'body' | 'userId'> & {
+    input: Pick<CollabComment, 'space' | 'anchor' | 'body'> & {
       authorName?: string | null;
     },
   ): Promise<CollabComment>;
@@ -40,9 +45,9 @@ export function useComments(options: UseCommentsOptions): UseCommentsResult {
   const context = useCollaborationContext();
   const config = context.getConfig();
 
-  // Mantém a sessão viva (compartilha o ciclo do doc) sem exigir o WS pra
-  // comentários — REST funciona mesmo com engine offline.
-  void getOrCreateSession(context, docName);
+  // Nada de abrir sessão aqui: comentários são REST puro e funcionam com o
+  // engine offline. Criar a sessão no corpo do render só mutava o Map do
+  // provider (e vazava um Y.Doc por render de servidor) sem nunca iniciá-la.
 
   const [comments, setComments] = useState<CollabComment[]>([]);
   const [loading, setLoading] = useState(true);

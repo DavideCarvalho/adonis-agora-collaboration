@@ -31,6 +31,23 @@ Deliberately simple, and worth knowing because it explains the trade-offs:
 Full-document exchange rather than incremental deltas. Automerge compresses well, so this is fine
 for the structured documents it is meant for and unsuited to a 500-page manuscript.
 
+The handshake refuses with a close code rather than an HTTP status, and the codes are meant to be
+read:
+
+| Code | Meaning |
+| --- | --- |
+| `4000` | no `doc` in the query string |
+| `4001` | no token, or a token that does not parse |
+| `4003` | `authorize` said `canRead: false` — **final**, do not retry |
+| `4503` | `authorize` itself threw — the rule could not be evaluated, **retry with backoff** |
+| `4500` | the document could not be loaded from storage |
+
+`4003` and `4503` are deliberately different. "You may not" is an answer a client should respect;
+"we could not tell" is a transient condition, and reporting the second as the first is how a
+database blip on your side turns into a reconnect storm. `useAutomergeDoc` honours the distinction:
+it retries a `4503` and stops dead on a `4003`. Both are reported server-side through
+[the error stream](/docs/collaboration/troubleshooting) as well.
+
 ## The client hook
 
 Automerge documents get **their own hook**, not `useCollabDoc`:
@@ -44,16 +61,23 @@ interface Ficha extends Record<string, unknown> {
 }
 
 function FichaEditor({ id }: { id: string }) {
-  const { doc, status, error, change } = useAutomergeDoc<Ficha>({ docName: `fichas/${id}` })
+  const { doc, status, pendingChanges, error, change } = useAutomergeDoc<Ficha>({
+    docName: `fichas/${id}`,
+  })
 
+  if (error) return <p role="alert">{error.message}</p>
   if (!doc) return <p>Loading…</p>
 
   return (
-    <textarea
-      value={doc.content}
-      disabled={status !== 'connected'}
-      onChange={(event) => change((draft) => { draft.content = event.target.value })}
-    />
+    <>
+      <textarea
+        value={doc.content}
+        onChange={(event) => change((draft) => { draft.content = event.target.value })}
+      />
+      {status !== 'connected' && (
+        <p role="status">Reconnecting — {pendingChanges} change(s) not sent yet.</p>
+      )}
+    </>
   )
 }
 ```
@@ -62,12 +86,41 @@ function FichaEditor({ id }: { id: string }) {
 debounced send. `doc` is `null` until the first server payload lands — render a loading state rather
 than reaching into it.
 
-<Callout type="warn" title="useCollabDoc throws on an Automerge document">
+`synced` is the Automerge counterpart of the Yjs `synced` flag: `status === 'connected'` only means
+the socket is open, while `synced` means the server's state has actually been merged **on the
+current connection**. It goes back to `false` on a drop.
+
+## Reconnection
+
+The hook rebuilds its socket on a drop, with a **fresh token** and the same budget as the Yjs
+`DocSession`: exponential backoff from 1s, capped at 15s, five attempts, reset by a connection that
+opens. Run out of attempts and `error` reads `reconnect: exceeded 5 attempts (last failure: …)` and
+carries the real failure as its `cause` — the exhausted message names what kept failing rather than
+replacing it.
+
+A **permanent** failure is not retried at all, because retrying it cannot succeed and the retry
+would end by burying the message that explained it. Those are the close codes the handshake uses for
+an answer — `4000`, `4001`, `4003` — and a document the server routes to another engine
+(`useAutomergeDoc requires engine=automerge`). `4503` and `4500` are outages, so they *are*
+retried.
+
+<Callout title="Changes made while disconnected are not dropped">
+Do **not** disable the editor on a disconnect. A change applied while the socket is down stays in
+the local document and is counted by `pendingChanges`; the whole saved document is written the
+moment a socket is open again, and the count returns to zero. That works precisely because this
+protocol exchanges whole documents — the local doc is its own outbox.
+
+What you owe the user is the *fact*, not a locked input: show `pendingChanges` (and `status`) so
+nobody types into a document they believe is syncing when it is not.
+</Callout>
+
+<Callout type="warn" title="useCollabDoc fails on an Automerge document">
 `useCollabDoc` returns a `Y.Doc`, and an Automerge document is a fundamentally different structure —
 there is no honest way to hand one back as the other. Pointing `useCollabDoc` at a document the
-server resolves to `automerge` fails with a clear error instead of silently returning an empty
-document. Two hooks, chosen by engine — this is the one seam the library deliberately does not
-unify.
+server resolves to `automerge` puts a clear message on the hook's `error` and leaves `status` at
+`'error'`, instead of silently returning an empty document. It does not throw out of the render, so
+read `error` rather than wrapping the hook. Two hooks, chosen by engine — this is the one seam the
+library deliberately does not unify.
 </Callout>
 
 Both hooks live under the same `CollaborationProvider`, so a page with a Yjs body and an Automerge

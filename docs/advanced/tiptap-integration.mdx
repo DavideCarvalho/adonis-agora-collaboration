@@ -17,8 +17,11 @@ operation that syncs and converges. There is no save button and no conflict dial
 The client package already ships `yjs` and `y-protocols`. What is missing is Tiptap's side:
 
 ```sh
-pnpm add @tiptap/extension-collaboration @tiptap/extension-collaboration-cursor y-prosemirror
+pnpm add @tiptap/extension-collaboration @tiptap/extension-collaboration-caret y-prosemirror
 ```
+
+On Tiptap 2 the caret extension was called `@tiptap/extension-collaboration-cursor` and exported
+`CollaborationCursor`. Tiptap 3 renamed it; the rest of this page assumes 3.
 
 </Step>
 <Step title="Mount the provider once">
@@ -43,32 +46,41 @@ export default function WritingPage({ research }: { research: { id: string } }) 
 ```tsx title="app/components/writing_editor.tsx"
 import { useAwareness, useCollabDoc } from '@adonis-agora/collaboration-client'
 import Collaboration from '@tiptap/extension-collaboration'
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
+import CollaborationCaret from '@tiptap/extension-collaboration-caret'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 
-export function WritingEditor({ researchId }: { researchId: string }) {
+export function WritingEditor({
+  researchId,
+  currentUser,
+}: {
+  researchId: string
+  currentUser: { id: string; name: string; color: string }
+}) {
   const docName = `researches/${researchId}/writing`
-  const { doc, status, error } = useCollabDoc({ docName })
-  const { peers, awareness } = useAwareness({ docName })
+  const { doc, synced, error } = useCollabDoc({ docName })
+  const { peers, awareness } = useAwareness({
+    docName,
+    user: { userId: currentUser.id, name: currentUser.name },
+  })
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ history: false }),   // ← the CRDT owns undo
+      StarterKit.configure({ undoRedo: false }),   // ← the CRDT owns undo
       Collaboration.configure({ document: doc }),
-      // CollaborationCursor reads `provider.awareness`, so the awareness
+      // CollaborationCaret reads `provider.awareness`, so the awareness
       // object is all it needs — there is no provider to hand it.
-      CollaborationCursor.configure({
+      CollaborationCaret.configure({
         provider: { awareness },
         user: { name: currentUser.name, color: currentUser.color },
       }),
-      Placeholder.configure({ placeholder: 'Start writing…' }),
     ],
     // The awareness object is rebuilt on reconnect, so re-create the editor
     // when it changes rather than holding a stale channel.
   }, [awareness])
 
   if (error) return <p>Could not open this document: {error.message}</p>
+  if (!synced) return <p>Loading the document…</p>
 
   return (
     <>
@@ -84,18 +96,32 @@ export function WritingEditor({ researchId }: { researchId: string }) {
 
 ## The two lines that matter
 
-<Callout type="warn" title="history: false is not optional">
+<Callout type="warn" title="undoRedo: false is not optional">
 ProseMirror's undo stack does not know which operations were yours. Leave it enabled and Ctrl+Z will
 happily undo the paragraph your colleague just typed — a bug that only shows up with two people in
-the room, which is to say only in production. `history: false` hands undo to the CRDT's own manager,
+the room, which is to say only in production. `undoRedo: false` hands undo to the CRDT's own manager,
 which tracks origin and undoes only your own edits.
+
+The option was named `history` in Tiptap 2. On Tiptap 3 that key no longer exists, so
+`StarterKit.configure({ history: false })` silently leaves the undo extension on — the exact
+collision it was written to prevent.
 </Callout>
 
-`editable: status === 'connected'` is the second one. `useCollabDoc` returns the `Y.Doc` immediately
-and connects in the background, so the editor mounts against a document that is briefly empty.
-Typing during that window produces local operations that merge with the server's state when it
-arrives — the CRDT behaving exactly as specified, and rarely what the writer meant. Keep it
-read-only until sync completes.
+`if (!synced) return …` is the second one. `useCollabDoc` returns the `Y.Doc` immediately and
+connects in the background, so the editor mounts against a document that is briefly empty. Typing
+during that window produces local operations that merge with the server's state when it arrives —
+the CRDT behaving exactly as specified, and rarely what the writer meant. `synced` is `true` once
+the server's initial state has actually been applied, so gating the **first paint** on it means the
+editor never renders an empty document that is about to fill in.
+
+<Callout type="warn" title="Do not gate `editable` on the connection">
+`editable: status === 'connected'` looks like the same fix and is not. `'connected'` means the
+socket is open, not that the state arrived — so it does not close the empty-document window — and
+it introduces a worse failure: a WebSocket that drops for four seconds turns the editor read-only
+mid-sentence with nothing on screen to explain why. Yjs is built for offline edits. Gate the
+initial render on `synced`, leave `editable` alone after that, and show the connection state next
+to the document title.
+</Callout>
 
 ## Why passing `doc` straight in is safe
 
@@ -110,9 +136,14 @@ else in the room, re-read on every awareness change — which is what you render
 `awareness` is the **channel object itself**, which is what an editor extension needs in order to
 publish the local cursor and subscribe to remote ones.
 
-`CollaborationCursor` takes a `provider` and reads `provider.awareness` off it, so `{ awareness }` is
+`CollaborationCaret` takes a `provider` and reads `provider.awareness` off it, so `{ awareness }` is
 a complete provider as far as it is concerned. Both views come from the same channel, which is why
 the avatar stack and the in-editor carets never disagree.
+
+`peers` reads the `user` field of everyone else's awareness state, so somebody has to publish
+yours. Pass `user` to `useAwareness` (as above) or call `setLocalState` yourself — without it the
+avatar stack is a row of anonymous client ids, and it stays that way after a reconnect too, because
+whatever you last published is what gets re-applied to the rebuilt channel.
 
 The channel is rebuilt on every reconnect, so key the editor on it — otherwise a reconnected session
 leaves the extension publishing into an abandoned channel and remote carets quietly stop moving.

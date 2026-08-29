@@ -133,6 +133,13 @@ export interface CollaborationStorage {
   pruneVersions(options: PruneVersionsOptions): Promise<number>;
   /** Comments of a document (by space). */
   listComments(docName: string, space?: string): Promise<CollabComment[]>;
+  /**
+   * One comment by id. Optional: a storage that cannot look one up directly is
+   * served by {@link CommentService.get} falling back to a filtered list — the
+   * point of the hook is that a backend WITH an index (Lucid) does not have to
+   * load every comment on a document to authorize a PATCH.
+   */
+  getComment?(docName: string, commentId: string): Promise<CollabComment | null>;
   saveComment(docName: string, comment: CollabComment): Promise<void>;
   deleteComment(docName: string, commentId: string): Promise<void>;
 }
@@ -156,13 +163,16 @@ export interface CollaborationConfig {
   /** Omitted = in-memory (dev only). The config stub publishes a default. */
   storage?: CollaborationStorage;
   /**
-   * Per-document authorization. Called at the handshake (onAuthenticate) and
-   * on every relevant permission change — return false to drop the connection.
-   */
-  /**
    * Global per-document authorization. May be omitted when `documents`
    * declares authorize for every type — unmatched docs then fall back to
    * deny.
+   *
+   * **Evaluated once per connection**, at the handshake (`onAuthenticate`),
+   * and once per REST request. Nothing re-runs it afterwards: revoking a
+   * user's access does NOT drop the socket they already hold, and they keep
+   * syncing that document until they disconnect. When a revocation has to
+   * take effect immediately, close the connection from the app side (or
+   * restart the document) — the rule alone will not do it.
    */
   authorize?: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>;
   /** Redis for cross-instance presence (optional in single-instance dev). */

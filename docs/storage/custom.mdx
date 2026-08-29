@@ -37,12 +37,23 @@ that fail quietly rather than loudly:
    zero — with no error anywhere.
 3. **`saveComment` is an upsert.** Resolving and reopening call it with an existing `id`.
 4. **`listComments` filters by space when given one**, and returns every space when not. Sorting is
-   handled above you.
+   handled above you. `getComment` is **optional**: implement it when your backend can look one
+   comment up by id, and `manager.comments.get` — which the route guard calls on every comment
+   PATCH and DELETE — stops loading a document's whole thread to authorize one row. Leave it out and
+   that call falls back to a filtered `listComments`, which is correct but O(n) in the thread.
 5. **`pruneVersions` keeps `keep` versions *per document*.** Keeping the N newest rows across the
    whole store lets one busy document delete another one's history. Validate `keep` (a negative or
    fractional value is a mistake, `0` is a legitimate "delete them all"), honour `dryRun` by
    counting without deleting, and return the number removed — that count is what the ace command
    prints.
+
+<Callout title="Throw — do not swallow">
+When a method cannot do its job, reject. The driver wraps every save, reports it through
+`onCollaborationError` (`scope: 'storage'`, with the operation and the document name) and rethrows,
+so a real failure reaches your logger and your alerting. A backend that catches its own errors and
+returns quietly reinstates exactly the bug that seam exists to close: an application whose documents
+never persist and whose sockets look perfectly healthy.
+</Callout>
 
 <Callout title="No transactions, deliberately">
 The interface has no transaction boundary because the operations do not need one: a document save is

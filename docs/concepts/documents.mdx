@@ -125,4 +125,16 @@ import type { CollabDocumentName } from '.adonisjs/collaboration/documents.js'
 function openDocument(name: CollabDocumentName) { /* autocompleted, exhaustive */ }
 ```
 
+That generator reads `app/collaboration/documents/`, so it produces nothing for documents declared
+inline in `config/collaboration.ts`. For those, derive the union from the config itself —
+`defineConfig` is generic, so the literal keys of `documents` survive:
+
+```ts
+import type { InferCollabDocumentNames } from '@adonis-agora/collaboration'
+import collaborationConfig from '#config/collaboration'
+
+type CollabDocumentName = InferCollabDocumentNames<typeof collaborationConfig>
+// → 'researches/:id/writing' | 'whiteboards/:id'
+```
+
 See [Codegen](/docs/collaboration/codegen).

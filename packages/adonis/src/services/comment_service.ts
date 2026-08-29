@@ -17,6 +17,22 @@ export class CommentService {
     return comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  /**
+   * One comment by id, without loading the document's whole comment list.
+   *
+   * The permission check on a PATCH/DELETE needs exactly one comment; doing it
+   * through `list()` made every mutation O(n) in the document's comments and
+   * grew with the discussion. Storages that can index the lookup implement
+   * `getComment`; the rest keep the old scan, but behind this call.
+   */
+  async get(docName: string, commentId: string): Promise<CollabComment | null> {
+    if (this.storage.getComment) {
+      return this.storage.getComment(docName, commentId);
+    }
+    const comments = await this.storage.listComments(docName);
+    return comments.find((comment) => comment.id === commentId) ?? null;
+  }
+
   async create(
     docName: string,
     comment: Omit<CollabComment, 'id' | 'createdAt' | 'updatedAt' | 'resolvedAt'>,
@@ -39,8 +55,7 @@ export class CommentService {
     commentId: string,
     resolved: boolean,
   ): Promise<CollabComment | null> {
-    const comments = await this.storage.listComments(docName);
-    const target = comments.find((comment) => comment.id === commentId);
+    const target = await this.get(docName, commentId);
     if (!target) return null;
 
     const updated: CollabComment = {
@@ -53,8 +68,7 @@ export class CommentService {
   }
 
   async remove(docName: string, commentId: string): Promise<boolean> {
-    const comments = await this.storage.listComments(docName);
-    const exists = comments.some((comment) => comment.id === commentId);
+    const exists = (await this.get(docName, commentId)) !== null;
     if (!exists) return false;
     await this.storage.deleteComment(docName, commentId);
     return true;

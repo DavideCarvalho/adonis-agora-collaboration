@@ -116,7 +116,10 @@ export class LucidStorage implements CollaborationStorage {
 
   async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
     await this.ensure();
-    const row = await (await this.knex()).from('collab_documents').where('doc_name', docName).first();
+    const row = await (await this.knex())
+      .from('collab_documents')
+      .where('doc_name', docName)
+      .first();
     if (!row?.state) return null;
     return { state: new Uint8Array(row.state as Buffer) };
   }
@@ -137,13 +140,11 @@ export class LucidStorage implements CollaborationStorage {
     if (existing) {
       await knex.from('collab_documents').where('doc_name', docName).update(payload);
     } else {
-      await knex
-        .table('collab_documents')
-        .insert({
-          doc_name: docName,
-          ...payload,
-          created_at: new Date(),
-        });
+      await knex.table('collab_documents').insert({
+        doc_name: docName,
+        ...payload,
+        created_at: new Date(),
+      });
     }
   }
 
@@ -234,7 +235,11 @@ export class LucidStorage implements CollaborationStorage {
     let query = knex.from('collab_comments').where('doc_name', docName);
     if (space) query = query.where('space', space);
     const rows = await query;
-    return rows.map((row) => ({
+    return rows.map((row) => this.toComment(row));
+  }
+
+  private toComment(row: Record<string, unknown>): CollabComment {
+    return {
       id: row.id as string,
       documentName: row.doc_name as string,
       space: (row.space as string) ?? 'text',
@@ -242,10 +247,33 @@ export class LucidStorage implements CollaborationStorage {
       body: row.body as string,
       userId: row.user_id as string,
       authorName: (row.author_name as string | null) ?? null,
-      resolvedAt: (row.resolved_at as Date | null)?.toISOString?.() ?? row.resolved_at ?? null,
+      resolvedAt:
+        (row.resolved_at as Date | null)?.toISOString?.() ??
+        (row.resolved_at as string | null) ??
+        null,
       createdAt: (row.created_at as Date)?.toISOString?.() ?? String(row.created_at),
-      updatedAt: (row.updated_at as Date | null)?.toISOString?.() ?? row.updated_at ?? null,
-    }));
+      updatedAt:
+        (row.updated_at as Date | null)?.toISOString?.() ??
+        (row.updated_at as string | null) ??
+        null,
+    };
+  }
+
+  /**
+   * Indexed single-row lookup — the reason {@link CollaborationStorage.getComment}
+   * exists. The permission check on a comment mutation used to read every
+   * comment on the document to find one.
+   */
+  async getComment(docName: string, commentId: string): Promise<CollabComment | null> {
+    await this.ensure();
+    const knex = await this.knex();
+    const row = await knex
+      .from('collab_comments')
+      .where('doc_name', docName)
+      .where('id', commentId)
+      .first();
+    if (!row) return null;
+    return this.toComment(row);
   }
 
   async saveComment(docName: string, comment: CollabComment): Promise<void> {
@@ -265,13 +293,11 @@ export class LucidStorage implements CollaborationStorage {
     if (existing) {
       await knex.from('collab_comments').where('id', comment.id).update(payload);
     } else {
-      await knex
-        .table('collab_comments')
-        .insert({
-          id: comment.id,
-          ...payload,
-          created_at: new Date(comment.createdAt),
-        });
+      await knex.table('collab_comments').insert({
+        id: comment.id,
+        ...payload,
+        created_at: new Date(comment.createdAt),
+      });
     }
     void docName;
   }

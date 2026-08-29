@@ -11,24 +11,56 @@ a reconnect loop. The provider keeps one per document name and hands the same in
 that asks for it.
 
 ```tsx
-const { doc, status, error } = useCollabDoc({ docName: 'researches/42/writing' })
+const { doc, collabDoc, status, synced, error } = useCollabDoc({ docName: 'researches/42/writing' })
 ```
 
-## Shared, and longer-lived than your component
+## Shared, and reference counted
 
 Three components on the same page asking for `researches/42/writing` get **one** session: one
-socket, one document, one set of listeners. And a session outlives the components that opened it —
-unmounting the editor does not close the connection, so navigating away and back resumes instead of
-reconnecting.
+socket, one document, one set of listeners.
 
-Sessions are destroyed with the provider. That is the lifetime to design around: mount the provider
-in the layout, not in a page, or every route change becomes a full reconnect.
+The session is **reference counted**. Each hook that mounts holds it open; when the last one
+unmounts the socket closes — but the `Y.Doc` stays in the provider's map, with everything typed
+into it:
+
+```text
+first hook mounts   → token fetched, transport built
+another hook mounts → same session, nothing new opens
+last hook unmounts  → transport destroyed, reconnect timer cleared, Y.Doc kept
+it mounts again     → fresh token, new transport, same Y.Doc — resumed, not restarted
+```
+
+So navigating away and back **does** close the socket, and coming back reconnects onto the document
+you left. Unmounting is not free (a token request and a handshake), but it is also not a data loss,
+and nothing is left holding a socket open behind a page nobody is looking at.
 
 <Callout title="The doc reference is stable">
-`doc` is the same `Y.Doc` object on every render for as long as the session lives, which is what
-makes `Collaboration.configure({ document: doc })` safe to pass into a `useEditor` config. You do
-not need to memoize it, and you should not key an editor on it.
+`doc` is the same `Y.Doc` object on every render for as long as the provider lives — across
+unmount/remount and across every reconnect. That is what makes
+`Collaboration.configure({ document: doc })` safe to pass into a `useEditor` config. You do not
+need to memoize it, and you should not key an editor on it.
 </Callout>
+
+Documents accumulate in the provider's map, one per document name visited. That is the point — it
+is what makes a remount resume — but it also means the provider is the lifetime to design around:
+mount it in the layout, not in a page. A provider that remounts on navigation throws its map away
+and every route change starts from an empty document.
+
+`session.destroy()` is the terminal call, for a non-React frontend or a test: it destroys the
+`Y.Doc` too, and evicts the session from the provider's map so it is never handed back.
+
+<Callout type="warn" title="Do not call destroy() from a component">
+An earlier version of `useCollabDoc` destroyed the session in its effect cleanup. Two things went
+wrong. The Hocuspocus provider queues callbacks that touch the `Y.Doc` after teardown, and a
+destroyed document made them throw — which drives Tiptap's `Collaboration` extension into React
+error #185. And the destroyed session stayed in the map, so the remount got a corpse back that
+could never reconnect: `connecting` forever, with no error to show for it. Let the reference count
+do it.
+</Callout>
+
+`collabDoc` is the same document behind the engine-agnostic `CollabDoc` seam (`read`, `write`,
+`onUpdate`) — that is what the editor adapters and `useExcalidrawSync` consume. `useExcalidrawSync`
+also accepts the raw `doc`, and wraps it for you.
 
 ## Starting up
 
@@ -36,30 +68,43 @@ Opening a document is a sequence, and `status` is how you watch it:
 
 ```text
 'connecting'  → token requested, transport being built
-'connected'   → synced; safe to edit
+'connected'   → socket open — not the same as "the document is here"
 'disconnected'→ socket closed; a reconnect is scheduled
 'error'       → the token could not be fetched, or the handshake was refused
 ```
 
-The session starts **lazily**, on the first subscriber, and starting is idempotent — ten components
-calling `useCollabDoc` for the same name produce one token request.
+The session starts **lazily**, on the first mounted consumer, and starting is idempotent — ten
+components calling `useCollabDoc` for the same name produce one token request.
 
-Gate editing on `connected`:
+`synced` is the one to gate the first paint on. `status === 'connected'` only says the socket is
+open; `synced` says the server's initial state has actually been applied to the `Y.Doc`:
 
 ```tsx
-const { doc, status, error } = useCollabDoc({ docName })
+const { doc, status, synced, error } = useCollabDoc({ docName })
 
 const editor = useEditor({
-  extensions: [StarterKit.configure({ history: false }), Collaboration.configure({ document: doc })],
-  editable: status === 'connected',
+  extensions: [StarterKit.configure({ undoRedo: false }), Collaboration.configure({ document: doc })],
+  editable: true,
 })
 
 if (error) return <DocumentUnavailable error={error} />
+if (!synced) return <DocumentLoading />
 ```
 
 Not for cosmetics: `doc` is handed back immediately, before the server's state arrives. Typing into
 it during `connecting` produces local operations that merge with the incoming state — which is the
 CRDT behaving correctly, and rarely what the user meant.
+
+<Callout type="warn" title="Do not flip `editable` off on a disconnect">
+Gating `editable` on the live connection — `editable: status === 'connected'` — reads well and
+behaves badly: a WebSocket that drops for four seconds silently turns the editor read-only
+mid-sentence, with no explanation. Yjs is built for offline edits; let people keep typing and show
+the connection state next to the title instead. Gate on `synced` for the **initial** load, when
+there is genuinely nothing to edit yet, and leave it alone after that.
+</Callout>
+
+On engines whose transport cannot separate the two (partykit, partyserver, a test double),
+`synced` falls back to reporting `connected` — never less informative than the status.
 
 ## Reconnecting, and why the token is refetched
 
@@ -86,17 +131,33 @@ last error: …" without wiring your own state.
 `useAwareness` reads the same session's ephemeral peer state:
 
 ```tsx
-const { peers, status, awareness } = useAwareness({ docName })
+const { peers, status, awareness, setLocalState } = useAwareness({
+  docName,
+  user: { userId: me.id, name: me.name, avatarUrl: me.avatarUrl },
+})
 // peers:     [{ clientId, userId, name, avatarUrl }] — everyone except you
 // awareness: the channel object itself, or null before the transport connects
 ```
+
+**Publish before you read.** `peers` is built from the `user` field of everyone else's awareness
+state, so if nobody publishes one, everybody sees a room full of anonymous client ids. The `user`
+option does it for you; `setLocalState` is the general form, for a cursor position or a selection
+alongside the identity:
+
+```tsx
+setLocalState({ user: { userId: me.id, name: me.name }, cursor: { x, y } })
+```
+
+Whatever you last published is re-applied to the channel after every reconnect — the transport is
+rebuilt with a new `Awareness` each time, and without that you would quietly vanish from everyone
+else's presence list on the first dropped socket.
 
 Two views of one channel, for two different jobs:
 
 - **`peers` is a snapshot** — re-read on every awareness change, and what you render an avatar stack
   or a presence list from.
 - **`awareness` is the channel** — what an editor extension needs in order to publish the local
-  cursor and subscribe to remote ones. Tiptap's `CollaborationCursor` takes a `provider` and reads
+  cursor and subscribe to remote ones. Tiptap's `CollaborationCaret` takes a `provider` and reads
   `provider.awareness`, so `{ awareness }` is a complete provider as far as it is concerned. See
   [Tiptap collaboration](/docs/collaboration/advanced/tiptap-integration).
 
@@ -127,10 +188,17 @@ const unsubscribe = session.subscribe(() => console.log(session.getStatus()))
 await session.start()          // idempotent
 session.doc                    // the Y.Doc
 session.engine                 // what the server said, once the token arrived
-session.destroy()              // closes the transport and the document
+session.synced                 // initial state applied, not just "socket open"
+
+const release = session.retain()  // hold it open (what the hooks do on mount)
+release()                         // last release closes the transport, keeps the doc
+session.stop()                    // same teardown, forced
+session.destroy()                 // terminal: also destroys the Y.Doc, evicts from the map
 ```
 
-`subscribe` starts the session too, so a subscriber never misses the first transition.
+`subscribe` starts the session too, so a subscriber never misses the first transition. `retain` is
+what makes the lifetime work: it returns its own `release`, so an effect can `return session.retain()`
+and never double-release.
 
 ## Testing without a server
 

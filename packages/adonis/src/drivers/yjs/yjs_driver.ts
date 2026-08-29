@@ -7,10 +7,20 @@ import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import { WebSocketServer } from 'ws';
 import * as Y from 'yjs';
-import { parseLegacyToken } from '../../auth/token.js';
+import {
+  CollabAuthorizationError,
+  CollabForbiddenError,
+  parseLegacyToken,
+} from '../../auth/token.js';
 import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
-import type { CollabDiffSummary, CollabVersion, CollaborationStorage } from '../../types.js';
-import { createVersionMetadata, seqVersions } from '../../versioning.js';
+import { reportCollaborationError } from '../../observability.js';
+import type {
+  CollabDiffSummary,
+  CollabPermission,
+  CollabVersion,
+  CollaborationStorage,
+} from '../../types.js';
+import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
 
 /**
@@ -25,11 +35,6 @@ import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
  *  - `diffVersions`: materializes both versions and compares them by line.
  *  - Anchored comments: delegate to the CommentService (generic anchor).
  */
-
-/** Permissions per connection (userId:docName), filled in at authenticate. */
-
-/** userId por documento conectado — alimenta presence no disconnect. */
-const presenceByDoc = new Map<string, string>();
 
 export class YjsDriver implements CollaborationDriver {
   readonly engine = 'yjs';
@@ -47,13 +52,39 @@ export class YjsDriver implements CollaborationDriver {
     // the driver instance.
     const storage = this.storage;
 
+    /**
+     * Presence bookkeeping, keyed by **socket** and scoped to this driver
+     * instance.
+     *
+     * It used to be a module-level `Map<docName, userId>` — one slot per
+     * DOCUMENT. A second editor overwrote the first, and then whichever of
+     * them disconnected first evicted the other from the roster too. A room
+     * is many connections; the map has to be too.
+     */
+    const presenceBySocket = new Map<string, { documentName: string; userId: string }>();
+
     this.hocuspocus = new Hocuspocus({
       async onAuthenticate({ documentName, token, connectionConfig }: onAuthenticatePayload) {
         const ctx = parseLegacyToken(token);
         if (!ctx) throw new Error('invalid token');
-        const permission = await options.authorize(ctx, documentName);
+
+        // "You may not" and "we could not tell" are different answers, and a
+        // client that cannot distinguish them retries the first one forever.
+        let permission: CollabPermission;
+        try {
+          permission = await options.authorize(ctx, documentName);
+        } catch (error) {
+          reportCollaborationError({
+            scope: 'authorize',
+            operation: 'onAuthenticate',
+            docName: documentName,
+            error,
+          });
+          throw new CollabAuthorizationError(documentName, error);
+        }
+
         if (!permission.canRead) {
-          throw new Error('no access to this document');
+          throw new CollabForbiddenError(documentName);
         }
         // canWrite has to bind the connection itself: a client that is only
         // told it may not write can simply not ask. Hocuspocus drops inbound
@@ -61,11 +92,11 @@ export class YjsDriver implements CollaborationDriver {
         connectionConfig.readOnly = !permission.canWrite;
       },
 
-      async onConnect({ documentName, requestParameters }: onConnectPayload) {
+      async onConnect({ documentName, requestParameters, socketId }: onConnectPayload) {
         const token = requestParameters.get('token');
         const ctx = token ? parseLegacyToken(token) : null;
         if (options.presence && ctx?.userId) {
-          presenceByDoc.set(documentName, ctx.userId);
+          presenceBySocket.set(socketId, { documentName, userId: ctx.userId });
           await options.presence.join(documentName, {
             userId: ctx.userId,
             ...(ctx.user ? { name: ctx.user.name } : {}),
@@ -73,12 +104,20 @@ export class YjsDriver implements CollaborationDriver {
         }
       },
 
-      async onDisconnect({ documentName }: onDisconnectPayload) {
-        const userId = presenceByDoc.get(documentName);
-        if (options.presence && userId) {
-          presenceByDoc.delete(documentName);
-          await options.presence.leave(documentName, userId);
-        }
+      async onDisconnect({ socketId }: onDisconnectPayload) {
+        const entry = presenceBySocket.get(socketId);
+        if (!entry) return;
+        presenceBySocket.delete(socketId);
+        if (!options.presence) return;
+
+        // One user, two tabs: the roster entry only goes away with the last
+        // socket that user holds on that document.
+        const stillConnected = [...presenceBySocket.values()].some(
+          (other) => other.documentName === entry.documentName && other.userId === entry.userId,
+        );
+        if (stillConnected) return;
+
+        await options.presence.leave(entry.documentName, entry.userId);
       },
 
       // Seed each in-memory doc from the persisted state: without this hook the
@@ -94,7 +133,19 @@ export class YjsDriver implements CollaborationDriver {
       },
 
       async onStoreDocument({ documentName, document }) {
-        await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+        // Hocuspocus swallows what this hook throws, so a storage outage was
+        // completely silent — indistinguishable from a healthy save.
+        try {
+          await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+        } catch (error) {
+          reportCollaborationError({
+            scope: 'storage',
+            operation: 'saveDocument',
+            docName: documentName,
+            error,
+          });
+          throw error;
+        }
       },
 
       // CRITICAL: when the last client disconnects (F5 / close tab / nav away),
@@ -105,7 +156,17 @@ export class YjsDriver implements CollaborationDriver {
       // to persist synchronously before the doc is destroyed, regardless of
       // debouncer state. This makes F5 reliable.
       async beforeUnloadDocument({ documentName, document }) {
-        await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+        try {
+          await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+        } catch (error) {
+          reportCollaborationError({
+            scope: 'storage',
+            operation: 'saveDocument',
+            docName: documentName,
+            error,
+          });
+          throw error;
+        }
       },
 
       debounce: options.debounce ?? 2000,
@@ -192,19 +253,40 @@ export class YjsDriver implements CollaborationDriver {
     return this.storage.listVersions(docName);
   }
 
+  /**
+   * Restores `versionId` into the live document — and keeps what it replaced.
+   *
+   * The state being overwritten is written to the history first, as a new
+   * version attributed to `restoredBy` and labelled `restored from #<seq>`.
+   * Without that step a restore is a destructive edit with no undo, which is
+   * the opposite of what a version history is for.
+   */
   async restoreVersion(
     docName: string,
     versionId: string,
     restoredBy: string | null,
   ): Promise<void> {
-    void restoredBy;
-
+    // Resolve the target first: a missing version must fail before anything
+    // is written, so a bad id never lands a spurious version in the history.
     const state = await this.versionState(docName, versionId);
     const restoredDoc = this.hydrate(state);
 
+    const live = await this.ensureDoc(docName);
+    const existing = await this.storage.listVersions(docName);
+    const target = existing.find((version) => version.id === versionId);
+
+    await this.storage.saveVersion(
+      docName,
+      createVersionMetadata(
+        restoredBy,
+        restoredFromLabel(target, versionId),
+        seqVersions(existing),
+      ),
+      Y.encodeStateAsUpdate(live),
+    );
+
     // Applies the restored content to the live doc — connected clients receive
     // the change in real time via the Hocuspocus sync protocol.
-    const live = await this.ensureDoc(docName);
     live.transact(() => {
       applyRestoredContent(live, restoredDoc);
     });

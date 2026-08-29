@@ -96,6 +96,10 @@ export class CollaborationManager {
     const shared: SelfHostedDriverOptions = {
       authorize: (ctx, docName) => this.authorize(ctx, docName),
       ...(storage ? { storage } : {}),
+      // Without this the presence store the provider builds from `redisUrl`
+      // is never reached: the drivers' join/leave both guard on
+      // `options.presence`, so `listPresence()` answered [] forever.
+      ...(this.presence ? { presence: this.presence } : {}),
       ...(this.config.path !== undefined ? { path: this.config.path } : {}),
       ...(this.config.debounce !== undefined ? { debounce: this.config.debounce } : {}),
     };

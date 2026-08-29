@@ -1,6 +1,6 @@
 ---
 title: Production
-description: The operational checklist — why documents are process-bound and what sticky routing has to guarantee, tuning the debounce against data loss, Redis presence, shutdown, secrets, growth and backup.
+description: The operational checklist — why documents are process-bound and what sticky routing has to guarantee, tuning the debounce against data loss, Redis presence, the failure stream, shutdown, secrets, growth and backup.
 icon: ServerCog
 ---
 
@@ -125,6 +125,28 @@ import collaboration from '@adonis-agora/collaboration/services/main'
 const removed = await collaboration.current.pruneVersions({ keep: 20 })
 ```
 
+## Subscribe to the failure stream
+
+The library runs inside sockets and Hocuspocus hooks — places where a throw is discarded by the
+engine. Storage failures and a throwing `authorize` are therefore routed to a reporting seam
+instead: the Adonis logger when the provider could resolve one, always an event, and
+`console.error` when there is neither.
+
+Wire the event to whatever you already page on:
+
+```ts title="start/collaboration_observability.ts"
+import { onCollaborationError } from '@adonis-agora/collaboration'
+
+onCollaborationError(({ scope, operation, docName, error }) => {
+  // scope: 'storage' | 'authorize' — operation: e.g. 'saveDocument'
+  reportToSentry(error, { scope, operation, docName })
+})
+```
+
+This is worth doing before you need it. The failure it makes visible is an application whose
+`collab_documents` table stays empty while every WebSocket looks healthy — nothing in the product
+misbehaves until someone reloads and their work is gone.
+
 ## Backups
 
 `collab_documents` is the only table whose loss is unrecoverable — it *is* the content. Include it
@@ -161,6 +183,7 @@ is far away and those operations start failing rather than being slow.
 ## Before you ship
 
 - [ ] `authorize` is written, and the **denial** path has a test
+- [ ] `onCollaborationError` is wired to your logging or alerting
 - [ ] `storage` is set — an unconfigured install silently keeps everything in memory
 - [ ] Migrations are run, or you have deliberately chosen the lazily created tables
 - [ ] Either one collaboration instance, or sticky routing keyed on the **document name**

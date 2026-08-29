@@ -124,16 +124,19 @@ opens the WebSocket and hands you the `Y.Doc` — Tiptap writes straight into it
 import { useAwareness, useCollabDoc } from '@adonis-agora/collaboration-client'
 import Collaboration from '@tiptap/extension-collaboration'
 import { useEditor, EditorContent } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
 
 export function WritingEditor({ researchId }: { researchId: string }) {
   const docName = `researches/${researchId}/writing`
-  const { doc, status } = useCollabDoc({ docName })
+  const { doc, synced } = useCollabDoc({ docName })
   const { peers } = useAwareness({ docName })
 
   const editor = useEditor({
-    extensions: [StarterKit, Collaboration.configure({ document: doc })],
-    editable: status === 'connected',
+    // undoRedo: false — the CRDT owns undo, or Ctrl+Z undoes someone else's edit
+    extensions: [StarterKit.configure({ undoRedo: false }), Collaboration.configure({ document: doc })],
   })
+
+  if (!synced) return <p>Loading the document…</p>
 
   return (
     <>
@@ -146,6 +149,12 @@ export function WritingEditor({ researchId }: { researchId: string }) {
 
 Every keystroke is now a CRDT operation that syncs to every other open tab and persists on a
 debounce.
+
+`synced` is the gate on the **first paint**: the `Y.Doc` comes back immediately and fills in when
+the server's state lands, so rendering before that shows an empty document for a beat. Gating
+`editable` on `status === 'connected'` instead is the tempting mistake — it does not close that
+window (a socket being open is not state having arrived) and it turns the editor read-only on every
+dropped connection. See [Sessions](/docs/collaboration/client/sessions).
 
 </Step>
 </Steps>
