@@ -29,7 +29,7 @@ export interface CollabLogger {
 /** What failed, and while doing what. */
 export interface CollabErrorEvent {
   /** Subsystem that failed. */
-  scope: 'storage' | 'authorize';
+  scope: 'storage' | 'authorize' | 'transport';
   /** Operation being attempted, e.g. `saveDocument`. */
   operation: string;
   /** Document the operation was about, when there is one. */
