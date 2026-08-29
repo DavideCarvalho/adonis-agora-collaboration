@@ -48,6 +48,9 @@
   "peerDependenciesMeta": {
     "react": {
       "optional": true
+    },
+    "@excalidraw/excalidraw": {
+      "optional": true
     }
   },
   "devDependencies": {

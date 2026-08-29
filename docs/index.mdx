@@ -197,6 +197,53 @@ move.
 - **Typed end to end.** Document names become a union in `.adonisjs/`, and the built-in routes are
   ordinary routes — so Tuyau types them for the frontend.
 
+## What works out of the box
+
+Everything below ships with the package — nothing to write, nothing to glue. The only extra
+install is the editor's own library, and each is loaded lazily, so an app that never renders one
+never pays for it.
+
+### Sync engines
+
+| Engine | Where the socket lives | Install | Use it for |
+| --- | --- | --- | --- |
+| `yjs` | your Adonis process | nothing — bundled | rich text, canvases, live cursors. The default |
+| `automerge` | your Adonis process | nothing — bundled | a JSON-like document with a native change graph |
+| `partykit` | Cloudflare Durable Objects | a Worker you deploy (`collaboration:init` writes it) | many instances without sticky sessions |
+| `partyserver` | Cloudflare Durable Objects | same | the `partyserver` flavour of the same edge model |
+
+The client picks its transport from the engine the token response names, so moving a document
+between these is a config change and the editor code does not move.
+
+### Editors
+
+| Editor | What ships | Peer to install |
+| --- | --- | --- |
+| **Excalidraw** | `<ExcalidrawBoard>` — a mounted, synced board — plus `useExcalidrawSync` and `createExcalidrawAdapter` | `@excalidraw/excalidraw` (optional peer, imported lazily) |
+| **tldraw** | `createTldrawAdapter()` — the snapshot mirror, records plus schema | `tldraw`, yours to render |
+| **Plain text** | `createTextAdapter()` — a `string` key on the document | none. A textarea, Monaco, anything |
+| **Tiptap / ProseMirror / CodeMirror** | no adapter, and none is needed: `useCollabDoc` hands you the `Y.Doc` and `useAwareness` the awareness channel, which is exactly what their collaboration extensions take | the editor's own packages |
+
+Rich text is the one case with no adapter on purpose — Tiptap binds to the `Y.Doc` directly, and a
+wrapper would only stand between them. See
+[Tiptap integration](/docs/collaboration/advanced/tiptap-integration).
+
+### Storage
+
+| Storage | Persists to | Use it for |
+| --- | --- | --- |
+| `lucidStorage()` — or the `LucidStorage` class it wraps | your database, tables created on first use | production. Documents, versions and comments |
+| `FileSystemStorage` | a directory on disk | single-process development |
+| `InMemoryCollaborationStorage` | nothing, dies with the process | tests |
+
+All three implement the same `CollaborationStorage` SPI, including `pruneVersions` — so a custom
+backend is one object, not a fork. See [Storage](/docs/collaboration/storage).
+
+### Presence
+
+Peer-to-peer awareness needs nothing. The cross-instance roster — "who is in this document" across
+every Node process — needs `redisUrl` in the config and nothing else.
+
 ## Where to go next
 
 <Cards>
