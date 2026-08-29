@@ -325,11 +325,13 @@ async function guardCommentMutation(
   allowed: Allowed,
   commentId: string,
 ): Promise<{ denied: unknown } | { ok: true }> {
-  const comments = (await manager.comments.list(allowed.docName)) as Array<{
-    id?: string;
-    userId?: string | null;
-  }>;
-  const comment = comments.find((entry) => entry?.id === commentId);
+  // One comment, not the document's whole comment list: this runs on every
+  // PATCH and DELETE, and scanning every comment to authorize one of them made
+  // the check grow with the discussion.
+  const comment = (await manager.comments.get(allowed.docName, commentId)) as
+    | { id?: string; userId?: string | null }
+    | null
+    | undefined;
 
   if (!comment) {
     return { denied: ctx.response.status(404).json({ error: 'comment not found' }) };

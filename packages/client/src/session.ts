@@ -8,7 +8,7 @@ import type {
   CollaborationClientConfig,
 } from './types.js';
 
-const MAX_RECONNECT_DELAY_MS = 15_000;
+export const MAX_RECONNECT_DELAY_MS = 15_000;
 /**
  * Circuit breaker: depois de MAX_RECONNECT_ATTEMPTS falhas consecutivas no
  * fetchToken (e.g. banco sem as tabelas esperadas, auth quebrada), paramos
@@ -18,7 +18,7 @@ const MAX_RECONNECT_DELAY_MS = 15_000;
  * o editor com `forceUpdate` na mudança, isso vira React error #185
  * (Maximum update depth exceeded) e trava a página.
  */
-const MAX_RECONNECT_ATTEMPTS = 5;
+export const MAX_RECONNECT_ATTEMPTS = 5;
 
 /**
  * Whether a failure can never succeed on a retry.
@@ -28,13 +28,32 @@ const MAX_RECONNECT_ATTEMPTS = 5;
  * way five times and then reports "exceeded 5 attempts" — which names nothing and buries
  * what did.
  *
- * Matched on the message rather than an error class because these arrive from three
- * different places (this file, `fetchToken`, the transport factory) and unifying their
- * error types is a wider change than this fix.
+ * Matched on the message rather than an error class because these arrive from four
+ * different places (this file, `fetchToken`, the transport factory, `useAutomergeDoc`)
+ * and unifying their error types is a wider change than this fix.
+ *
+ * Shared with the Automerge hook on purpose: both paths reconnect, and two dialects of
+ * "this can never work" would drift.
  */
-function isPermanentFailure(error: Error): boolean {
-  return /has no client-side hooks yet|jwtSecret is required|\bforbidden\b|\b40[13]\b/i.test(
+export function isPermanentFailure(error: Error): boolean {
+  return /has no client-side hooks yet|requires engine=|jwtSecret is required|\bforbidden\b|\b40[13]\b/i.test(
     error.message,
+  );
+}
+
+/**
+ * The error a caller is left with when the reconnect budget runs out.
+ *
+ * Keeps WHY it kept failing: replacing the cause with "exceeded N attempts" leaves the
+ * reader the one fact they can do nothing about, having discarded the one they could.
+ * Shared with the Automerge hook so an exhausted budget reads the same on both paths.
+ */
+export function reconnectExhausted(lastFailure: Error | null): Error {
+  return new Error(
+    `reconnect: exceeded ${MAX_RECONNECT_ATTEMPTS} attempts${
+      lastFailure ? ` (last failure: ${lastFailure.message})` : ''
+    }`,
+    lastFailure ? { cause: lastFailure } : undefined,
   );
 }
 
@@ -321,15 +340,7 @@ export class DocSession {
   #scheduleReconnect(): void {
     if (this.#reconnectTimer || this.#destroyed || this.#detached) return;
     if (this.#attempt >= MAX_RECONNECT_ATTEMPTS) {
-      // Keep WHY it kept failing: replacing the cause with "exceeded N attempts" leaves the
-      // reader the one fact they can do nothing about, having discarded the one they could.
-      const exhausted = new Error(
-        `reconnect: exceeded ${MAX_RECONNECT_ATTEMPTS} attempts${
-          this.#error ? ` (last failure: ${this.#error.message})` : ''
-        }`,
-        this.#error ? { cause: this.#error } : undefined,
-      );
-      this.#setStatus('error', exhausted);
+      this.#setStatus('error', reconnectExhausted(this.#error));
       return;
     }
 

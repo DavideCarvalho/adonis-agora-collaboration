@@ -133,6 +133,13 @@ export interface CollaborationStorage {
   pruneVersions(options: PruneVersionsOptions): Promise<number>;
   /** Comments of a document (by space). */
   listComments(docName: string, space?: string): Promise<CollabComment[]>;
+  /**
+   * One comment by id. Optional: a storage that cannot look one up directly is
+   * served by {@link CommentService.get} falling back to a filtered list — the
+   * point of the hook is that a backend WITH an index (Lucid) does not have to
+   * load every comment on a document to authorize a PATCH.
+   */
+  getComment?(docName: string, commentId: string): Promise<CollabComment | null>;
   saveComment(docName: string, comment: CollabComment): Promise<void>;
   deleteComment(docName: string, commentId: string): Promise<void>;
 }

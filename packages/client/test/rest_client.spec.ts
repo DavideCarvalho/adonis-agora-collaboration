@@ -60,7 +60,7 @@ describe('rest_client', () => {
     await expect(listComments(config, 'd')).rejects.toThrowError(CollabRestError);
   });
 
-  it('createVersion envia docName + label no body', async () => {
+  it('createVersion envia docName + label no body, e nada de userId', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
@@ -68,15 +68,15 @@ describe('rest_client', () => {
       );
     vi.stubGlobal('fetch', fetchMock);
 
-    await createVersion(config, 'doc', 'antes da revisão', 'u1');
+    await createVersion(config, 'doc', 'antes da revisão');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.app/collaboration/versions');
-    expect(JSON.parse(init.body as string)).toEqual({
-      docName: 'doc',
-      label: 'antes da revisão',
-      userId: 'u1',
-    });
+    // The author is the authenticated caller — the route reads the session and
+    // ignores the body, so nothing about an author goes on the wire.
+    const body = JSON.parse(init.body as string);
+    expect(body).toEqual({ docName: 'doc', label: 'antes da revisão' });
+    expect(Object.keys(body)).toEqual(['docName', 'label']);
   });
 });
 

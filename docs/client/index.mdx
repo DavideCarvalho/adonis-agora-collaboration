@@ -51,7 +51,7 @@ every route change starts from scratch. Put it in the layout.
 | Hook | Returns | Backed by |
 | --- | --- | --- |
 | `useCollabDoc` | the shared `Y.Doc` (and its `collabDoc` view) plus `status`, `synced` and `error` | WebSocket |
-| `useAutomergeDoc` | the Automerge document plus `change(fn)` | WebSocket |
+| `useAutomergeDoc` | the Automerge document plus `change(fn)`, `synced` and `pendingChanges` | WebSocket |
 | `useCollabEditor` | an editor-agnostic `{ state, update }` view, plus `synced` and peers | WebSocket |
 | `useAwareness` | `peers` — everyone else in the room — plus `setLocalState` to publish yourself | WebSocket |
 | `useExcalidrawSync` | nothing — it wires a `Y.Doc` (or a `collabDoc`) to Excalidraw's imperative API | WebSocket |

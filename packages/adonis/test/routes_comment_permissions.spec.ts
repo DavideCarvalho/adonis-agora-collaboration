@@ -20,10 +20,13 @@ const comments = [
   { id: 'c_bob', userId: 'u_bob', body: 'theirs' },
 ];
 
-function makeManager(): CollabManagerLike & { calls: string[] } {
+function makeManager(): CollabManagerLike & { calls: string[]; reads: string[] } {
   const calls: string[] = [];
+  /** How the guard READ the comment it authorizes — one row, or the whole thread. */
+  const reads: string[] = [];
   return {
     calls,
+    reads,
     async getDocumentState() {
       return new Uint8Array();
     },
@@ -36,7 +39,12 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
     async restoreVersion() {},
     comments: {
       async list() {
+        reads.push('list');
         return comments;
+      },
+      async get(_docName, commentId) {
+        reads.push(`get:${commentId}`);
+        return comments.find((comment) => comment.id === commentId) ?? null;
       },
       async create() {
         return {};
@@ -224,5 +232,29 @@ describe('canMutateComment', () => {
     expect(
       canMutateComment({ comment: { userId: null }, userId: 'u_1', permission: comment }),
     ).toBe(false);
+  });
+});
+
+/**
+ * The guard resolved its one comment through `manager.comments.list(docName)`
+ * plus `.find()`, on every PATCH and DELETE — correct, and O(n) in the
+ * document's comments, so authorizing a mutation got slower the longer the
+ * discussion got. `CommentService.get` is the single-comment read it needed.
+ */
+describe('authorizing a comment mutation reads one comment', () => {
+  it('resolves the comment by id instead of scanning the document', async () => {
+    const { manager, find } = setup({ canWrite: false });
+
+    await find('PATCH', '/comments/:id').handler(makeCtx('c_jane'));
+
+    expect(manager.reads).toEqual(['get:c_jane']);
+  });
+
+  it('does the same on delete', async () => {
+    const { manager, find } = setup({ canWrite: false });
+
+    await find('DELETE', '/comments/:id').handler(makeCtx('c_jane'));
+
+    expect(manager.reads).toEqual(['get:c_jane']);
   });
 });

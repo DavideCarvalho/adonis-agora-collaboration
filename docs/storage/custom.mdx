@@ -37,7 +37,10 @@ that fail quietly rather than loudly:
    zero — with no error anywhere.
 3. **`saveComment` is an upsert.** Resolving and reopening call it with an existing `id`.
 4. **`listComments` filters by space when given one**, and returns every space when not. Sorting is
-   handled above you.
+   handled above you. `getComment` is **optional**: implement it when your backend can look one
+   comment up by id, and `manager.comments.get` — which the route guard calls on every comment
+   PATCH and DELETE — stops loading a document's whole thread to authorize one row. Leave it out and
+   that call falls back to a filtered `listComments`, which is correct but O(n) in the thread.
 5. **`pruneVersions` keeps `keep` versions *per document*.** Keeping the N newest rows across the
    whole store lets one busy document delete another one's history. Validate `keep` (a negative or
    fractional value is a mistake, `0` is a legitimate "delete them all"), honour `dryRun` by

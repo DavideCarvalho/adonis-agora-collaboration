@@ -19,8 +19,13 @@ export interface UseCommentsResult {
   loading: boolean;
   error: Error | null;
   refresh(): Promise<void>;
+  /**
+   * The author is the authenticated caller — `handleCreateComment` sets
+   * `userId` from the session and discards whatever the body claimed, so this
+   * does not ask for one.
+   */
   create(
-    input: Pick<CollabComment, 'space' | 'anchor' | 'body' | 'userId'> & {
+    input: Pick<CollabComment, 'space' | 'anchor' | 'body'> & {
       authorName?: string | null;
     },
   ): Promise<CollabComment>;

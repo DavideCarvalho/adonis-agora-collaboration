@@ -32,9 +32,12 @@ await create({
   space: 'text',
   anchor: { kind: 'text-range', start: 120, end: 160, selectedText: 'the sentence' },
   body: 'rephrase this',
-  userId: currentUser.id,
   authorName: currentUser.name,
 })
+
+There is no `userId` in that call. The route attributes the comment to whoever the request
+authenticated as and ignores a body-supplied author, so asking the component for one would only be
+asking it to supply a value that is thrown away.
 
 await resolve(comment.id)        // resolve
 await resolve(comment.id, false) // reopen
@@ -74,7 +77,6 @@ function useCommentOnSelection(editor: Editor, docName: string) {
         selectedText: editor.state.doc.textBetween(from, to),
       },
       body,
-      userId: currentUser.id,
     })
   }
 }

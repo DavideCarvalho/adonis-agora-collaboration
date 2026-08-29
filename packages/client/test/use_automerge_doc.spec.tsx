@@ -14,7 +14,7 @@ class FakeWebSocket {
   onopen: (() => void) | null = null;
   onmessage: ((e: { data: ArrayBuffer }) => void) | null = null;
   onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((e: { code?: number; reason?: string }) => void) | null = null;
   sent: ArrayBuffer[] = [];
 
   constructor(public url: string) {
@@ -31,13 +31,13 @@ class FakeWebSocket {
   send(data: ArrayBuffer) {
     this.sent.push(data);
   }
-  close() {
+  close(code?: number, reason = '') {
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.({ code, reason });
   }
 }
 
-function wrapper() {
+function wrapper(fetchImpl?: typeof fetch) {
   const { factory } = fakeTransportFactory();
   return ({ children }: { children: React.ReactNode }) =>
     createElement(
@@ -45,12 +45,14 @@ function wrapper() {
       {
         baseUrl: 'https://api.app',
         createTransport: factory,
-        fetchImpl: (async (input: string | URL | Request) => {
-          if (input.toString().includes('/collaboration/token')) {
-            return Response.json({ token: 't', wsUrl: '/collaboration', engine: 'automerge' });
-          }
-          return new Response('not found', { status: 404 });
-        }) as typeof fetch,
+        fetchImpl:
+          fetchImpl ??
+          ((async (input: string | URL | Request) => {
+            if (input.toString().includes('/collaboration/token')) {
+              return Response.json({ token: 't', wsUrl: '/collaboration', engine: 'automerge' });
+            }
+            return new Response('not found', { status: 404 });
+          }) as typeof fetch),
       },
       children,
     );
@@ -177,5 +179,164 @@ describe('useAutomergeDoc', () => {
     expect(items).toContain('server-seeded');
     expect(items).toContain('remote');
     expect(items).toContain('local');
+  });
+});
+
+/**
+ * The hook used to open ONE socket: `ws.onclose` set `'disconnected'` and nothing
+ * ever rebuilt it, while `change()` went on mutating the local doc — a user typing
+ * into a document that had stopped syncing, with no state saying so. These cover the
+ * reconnect budget it now shares with `DocSession`.
+ */
+describe('useAutomergeDoc reconnect', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function tokenFetch() {
+    return vi
+      .fn()
+      .mockImplementation(async () =>
+        Response.json({ token: 't', wsUrl: '/collaboration', engine: 'automerge' }),
+      ) as unknown as typeof fetch;
+  }
+
+  async function mount(fetchImpl: typeof fetch, docName: string) {
+    const rendered = renderHook(
+      () =>
+        useAutomergeDoc({
+          docName,
+          WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+        }),
+      { wrapper: wrapper(fetchImpl) },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    return rendered;
+  }
+
+  it('rebuilds the socket with a fresh token after a drop', async () => {
+    const fetchMock = tokenFetch();
+    const { result } = await mount(fetchMock, 'r/1');
+
+    const first = FakeWebSocket.instances[0]!;
+    act(() => {
+      first.open();
+      first.serverSend(A.save(A.from<Record<string, unknown>>({ content: 'hello' })));
+    });
+    expect(result.current.synced).toBe(true);
+
+    act(() => first.close(1006));
+    expect(result.current.status).toBe('disconnected');
+    expect(result.current.synced).toBe(false);
+
+    // Backoff: first retry after ~1s, with a token fetched again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    act(() => FakeWebSocket.instances[1]!.open());
+    expect(result.current.status).toBe('connected');
+  });
+
+  it('keeps changes made while disconnected and flushes them on reconnect', async () => {
+    const { result } = await mount(tokenFetch(), 'r/2');
+
+    const first = FakeWebSocket.instances[0]!;
+    act(() => {
+      first.open();
+      first.serverSend(A.save(A.from<Record<string, unknown>>({ content: '' })));
+    });
+    act(() => first.close(1006));
+
+    // The user goes on typing into a document that stopped syncing.
+    act(() => {
+      result.current.change((d) => {
+        (d as { content: string }).content = 'typed while offline';
+      });
+    });
+    expect(result.current.pendingChanges).toBe(1);
+
+    // The debounced send fires while there is no socket: nothing is sent, and
+    // nothing is dropped either.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    expect(first.sent).toHaveLength(0);
+    expect(result.current.pendingChanges).toBe(1);
+
+    const second = FakeWebSocket.instances[1]!;
+    act(() => second.open());
+
+    expect(second.sent).toHaveLength(1);
+    const flushed = A.load<{ content?: string }>(new Uint8Array(second.sent[0]!));
+    expect(flushed.content).toBe('typed while offline');
+    expect(result.current.pendingChanges).toBe(0);
+  });
+
+  it('does not retry a 4003 close, and keeps the reason it was refused', async () => {
+    const fetchMock = tokenFetch();
+    const { result } = await mount(fetchMock, 'r/3');
+
+    const first = FakeWebSocket.instances[0]!;
+    act(() => first.open());
+    act(() => first.close(4003, 'no access'));
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.error?.message).toContain('4003');
+    expect(result.current.error?.message).toContain('no access');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry an engine that is not automerge', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () =>
+        Response.json({ token: 't', wsUrl: '/collaboration', engine: 'yjs' }),
+      ) as unknown as typeof fetch;
+    const { result } = await mount(fetchMock, 'r/4');
+
+    expect(result.current.status).toBe('error');
+    expect(result.current.error?.message).toContain('requires engine=automerge');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after 5 attempts, keeping the last real failure as cause', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(
+        async () => new Response('nope', { status: 500 }),
+      ) as unknown as typeof fetch;
+    const { result } = await mount(fetchMock, 'r/5');
+
+    expect(result.current.status).toBe('error');
+
+    // 1s + 2s + 4s + 8s + 15s (capped) of retries, then the budget is spent.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1 + 5);
+    expect(result.current.status).toBe('error');
+    expect(result.current.error?.message).toContain('reconnect: exceeded 5 attempts');
+    // The exhausted error names what actually kept failing, and carries it.
+    expect(result.current.error?.message).toContain('500');
+    expect((result.current.error?.cause as Error | undefined)?.message).toContain('500');
   });
 });

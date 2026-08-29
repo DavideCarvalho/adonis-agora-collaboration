@@ -120,6 +120,7 @@ clear message if it is read too early.
 | Method | Returns |
 | --- | --- |
 | `list(docName, space?)` | `Promise<CollabComment[]>` — sorted oldest first |
+| `get(docName, commentId)` | `Promise<CollabComment \| null>` — one comment, through the storage's indexed lookup when it has one (`getComment`), else a filtered list |
 | `create(docName, { space, anchor, body, userId, authorName? })` | `Promise<CollabComment>` |
 | `resolve(docName, commentId, resolved)` | `Promise<CollabComment \| null>` — a toggle |
 | `remove(docName, commentId)` | `Promise<boolean>` |
@@ -186,6 +187,7 @@ interface CollaborationStorage {
   pruneVersions(options: { keep: number; docName?: string; dryRun?: boolean }): Promise<number>
 
   listComments(docName: string, space?: string): Promise<CollabComment[]>
+  getComment?(docName: string, commentId: string): Promise<CollabComment | null>  // optional
   saveComment(docName: string, comment: CollabComment): Promise<void>
   deleteComment(docName: string, commentId: string): Promise<void>
 }
@@ -317,6 +319,8 @@ useCollabDoc({ docName }): {
 useAutomergeDoc<T>({ docName, WebSocketImpl? }): {
   doc: A.Doc<T> | null
   status: CollabStatus
+  synced: boolean            // the server's state has been merged on THIS connection
+  pendingChanges: number     // local changes not yet written to the socket
   error: Error | null
   change(fn: A.ChangeFn<T>): void
 }

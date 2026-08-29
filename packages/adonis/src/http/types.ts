@@ -86,6 +86,7 @@ export interface CollabManagerLike {
   persistDocument?(options: { docName: string; state: Uint8Array }): Promise<void>;
   comments: {
     list(docName: string, space?: string): Promise<unknown[]>;
+    get(docName: string, commentId: string): Promise<unknown>;
     create(docName: string, comment: Record<string, unknown>): Promise<unknown>;
     resolve(docName: string, commentId: string, resolved: boolean): Promise<unknown>;
     remove(docName: string, commentId: string): Promise<boolean>;
