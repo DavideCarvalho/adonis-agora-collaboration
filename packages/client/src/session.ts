@@ -20,6 +20,24 @@ const MAX_RECONNECT_DELAY_MS = 15_000;
  */
 const MAX_RECONNECT_ATTEMPTS = 5;
 
+/**
+ * Whether a failure can never succeed on a retry.
+ *
+ * Reconnecting is for a network that dropped. An engine this package has no client for, a
+ * document the server refuses, or a config that cannot produce a transport fails the same
+ * way five times and then reports "exceeded 5 attempts" — which names nothing and buries
+ * what did.
+ *
+ * Matched on the message rather than an error class because these arrive from three
+ * different places (this file, `fetchToken`, the transport factory) and unifying their
+ * error types is a wider change than this fix.
+ */
+function isPermanentFailure(error: Error): boolean {
+  return /has no client-side hooks yet|jwtSecret is required|\bforbidden\b|\b40[13]\b/i.test(
+    error.message,
+  );
+}
+
 /** Immutable snapshot consumed by `useSyncExternalStore`. */
 export interface DocSessionSnapshot {
   status: CollabStatus;
@@ -261,7 +279,14 @@ export class DocSession {
       this.#notify();
     } catch (error) {
       if (stale()) return;
-      this.#setStatus('error', error instanceof Error ? error : new Error(String(error)));
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.#setStatus('error', failure);
+      // A PERMANENT failure is not retried. Retrying an unsupported engine, a rejected
+      // document or a malformed config cannot succeed, and the retry is not free: after the
+      // last attempt `#scheduleReconnect` replaces `error` with "exceeded N attempts", so
+      // the message the reader is finally shown is the one that explains nothing, and the
+      // one that named the actual problem is gone.
+      if (isPermanentFailure(failure)) return;
       this.#scheduleReconnect();
     }
   }
@@ -296,7 +321,15 @@ export class DocSession {
   #scheduleReconnect(): void {
     if (this.#reconnectTimer || this.#destroyed || this.#detached) return;
     if (this.#attempt >= MAX_RECONNECT_ATTEMPTS) {
-      this.#setStatus('error', new Error(`reconnect: exceeded ${MAX_RECONNECT_ATTEMPTS} attempts`));
+      // Keep WHY it kept failing: replacing the cause with "exceeded N attempts" leaves the
+      // reader the one fact they can do nothing about, having discarded the one they could.
+      const exhausted = new Error(
+        `reconnect: exceeded ${MAX_RECONNECT_ATTEMPTS} attempts${
+          this.#error ? ` (last failure: ${this.#error.message})` : ''
+        }`,
+        this.#error ? { cause: this.#error } : undefined,
+      );
+      this.#setStatus('error', exhausted);
       return;
     }
 

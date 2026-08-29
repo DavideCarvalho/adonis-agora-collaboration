@@ -176,3 +176,44 @@ describe('session lifecycle', () => {
     expect(second.isDestroyed).toBe(false);
   });
 });
+
+/**
+ * A failure that cannot succeed on a retry must not be retried, and the reason must survive.
+ *
+ * Both halves were broken together. An unsupported engine threw, the session set `error`
+ * and scheduled a reconnect anyway; five attempts later `#scheduleReconnect` REPLACED the
+ * message with "exceeded 5 attempts" — so the reader was left with the one fact they can do
+ * nothing about, and the one naming the actual problem was gone.
+ */
+describe('a permanent failure', () => {
+  it('is not retried, and keeps the reason it failed', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockImplementation(
+          async () =>
+            new Response(
+              JSON.stringify({ engine: 'automerge', wsUrl: 'wss://api.app', token: 't' }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            ),
+        ) as unknown as typeof fetch;
+
+      const session = new DocSessionClass('doc/permanent', {
+        baseUrl: 'https://api.app',
+        fetchImpl,
+      } as unknown as CollaborationClientConfig);
+
+      await session.start();
+      expect(session.getStatus()).toBe('error');
+      expect(session.error?.message).toMatch(/no client-side hooks yet/);
+
+      // Nothing was scheduled: advancing past the whole backoff window changes nothing.
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(session.error?.message).toMatch(/no client-side hooks yet/);
+      expect(session.error?.message).not.toMatch(/exceeded/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
