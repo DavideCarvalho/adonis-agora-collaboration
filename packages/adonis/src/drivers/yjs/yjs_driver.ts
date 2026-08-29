@@ -5,7 +5,7 @@ import {
 } from '@hocuspocus/server';
 import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
-import { WebSocketServer } from 'ws';
+import { type RawData, WebSocketServer } from 'ws';
 import * as Y from 'yjs';
 import {
   CollabAuthorizationError,
@@ -22,6 +22,19 @@ import type {
 } from '../../types.js';
 import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
+
+/**
+ * `ws` delivers a frame as a Buffer, a list of Buffers (fragmented frame) or an
+ * ArrayBuffer depending on `binaryType`; Hocuspocus wants one `Uint8Array`.
+ */
+function toUint8Array(data: RawData): Uint8Array {
+  const buffer = Array.isArray(data)
+    ? Buffer.concat(data)
+    : data instanceof ArrayBuffer
+      ? Buffer.from(data)
+      : data;
+  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
 
 /**
  * Yjs driver: Hocuspocus as the sync engine (y-protocols protocol over
@@ -209,7 +222,25 @@ export class YjsDriver implements CollaborationDriver {
         const fetchRequest = new Request(parsed, {
           headers: request.headers as unknown as Record<string, string>,
         });
-        this.hocuspocus.handleConnection(ws, fetchRequest);
+
+        // Hocuspocus 4 does not listen on the socket. `handleConnection` takes a
+        // `WebSocketLike` (send/close/readyState — no events) and hands back a
+        // `ClientConnection` that the integrator feeds, exactly as the package's
+        // own `Server` does through crossws. Calling `handleConnection` and
+        // dropping the return value looked like a working server: the socket
+        // opened, the client sent Auth + SyncStep1, and nothing ever answered —
+        // no document loaded, nothing stored, every version a 2-byte snapshot.
+        const connection = this.hocuspocus.handleConnection(ws, fetchRequest);
+
+        ws.on('message', (data) => {
+          connection.handleMessage(toUint8Array(data));
+        });
+        ws.on('close', (code, reason) => {
+          connection.handleClose({ code, reason: reason.toString() });
+        });
+        ws.on('error', (error) => {
+          reportCollaborationError({ scope: 'transport', operation: 'websocket', error });
+        });
       });
     });
   }
