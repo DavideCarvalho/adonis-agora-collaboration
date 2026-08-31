@@ -22,8 +22,17 @@ export {
   defineConfig,
   type InferCollabDocumentNames,
 } from './define_config.js';
-export type { CollabDocumentDeclaration, DocumentParams } from './documents.js';
-export { defineDocument, matchDocumentPattern } from './documents.js';
+export type {
+  CollabDocumentDeclaration,
+  CollectionPattern,
+  DocumentParams,
+} from './documents.js';
+export {
+  defineCollection,
+  defineDocument,
+  documentPatternParams,
+  matchDocumentPattern,
+} from './documents.js';
 export { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 export {
   PartyKitDriver,
@@ -45,6 +54,7 @@ export {
   collaborationEvents,
   onCollaborationError,
   reportCollaborationError,
+  reportCollaborationWarning,
   setCollaborationLogger,
 } from './observability.js';
 export {

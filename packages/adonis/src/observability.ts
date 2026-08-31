@@ -24,6 +24,11 @@ import { EventEmitter } from 'node:events';
 /** Minimal logger contract — satisfied by the Adonis (pino) logger. */
 export interface CollabLogger {
   error(mergingObject: Record<string, unknown>, message?: string): void;
+  /**
+   * Configuration warnings — something that runs, but almost certainly not
+   * as intended. Optional: without it they go to `console.warn`.
+   */
+  warn?(mergingObject: Record<string, unknown>, message?: string): void;
 }
 
 /** What failed, and while doing what. */
@@ -62,6 +67,27 @@ export function onCollaborationError(listener: (event: CollabErrorEvent) => void
   return () => {
     collaborationEvents.off(COLLAB_ERROR_EVENT, listener);
   };
+}
+
+/**
+ * Reports a configuration warning to the logger (`warn`), else to
+ * `console.warn`. Not an error and not on the event stream: nothing failed,
+ * the config just does not say what it looks like it says. Never throws.
+ */
+export function reportCollaborationWarning(
+  details: Record<string, unknown>,
+  message: string,
+): void {
+  const full = `[@adonis-agora/collaboration] ${message}`;
+  if (logger?.warn) {
+    try {
+      logger.warn(details, full);
+      return;
+    } catch {
+      // A broken logger must not escalate a warning into a failure.
+    }
+  }
+  console.warn(full, details);
 }
 
 /** Reports a failure to the logger and/or the event stream. Never throws. */

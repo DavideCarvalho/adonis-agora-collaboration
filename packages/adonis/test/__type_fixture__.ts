@@ -14,7 +14,7 @@ import type {
 } from '../src/define_config.js';
 import { defineConfig } from '../src/define_config.js';
 import type { DocumentParams } from '../src/documents.js';
-import { defineDocument } from '../src/documents.js';
+import { defineCollection, defineDocument } from '../src/documents.js';
 
 const allow = { canRead: true, canWrite: true, canComment: true };
 const expectString = (_value: string) => {};
@@ -52,6 +52,17 @@ const config = defineConfig({
         return allow;
       },
     },
+    // A collection is `<prefix>/:id` — the key is built for you, `params.id` typed.
+    ...defineCollection('boards', {
+      engine: 'automerge',
+      async authorize(_ctx, { params }) {
+        expectString(params.id);
+        // @ts-expect-error a collection is keyed by `:id`, nothing else
+        expectString(params.boardId);
+        return allow;
+      },
+    }),
+    ...defineCollection('announcements/pinned'),
     // `defineDocument` still works inline and infers `P` from the key.
     'forms/:id': defineDocument({
       async authorize(_ctx, { params }) {
@@ -80,6 +91,8 @@ type Names = InferCollabDocumentNames<typeof config>;
 
 const declared: Names = 'researches/:id/writing';
 const alsoDeclared: Names = 'workspaces/:workspaceId/whiteboards/:boardId';
+const collection: Names = 'boards/:id';
+const nestedCollection: Names = 'announcements/pinned/:id';
 // @ts-expect-error a document the config never declares is not a declared name
 const undeclared: Names = 'reviews/:id';
 
@@ -108,6 +121,8 @@ export const used = [
   widened,
   declared,
   alsoDeclared,
+  collection,
+  nestedCollection,
   undeclared,
   bareName,
   resolved,
