@@ -38,22 +38,22 @@ When each kind of document has its own rule, write them as **patterns** and let 
 
 ```ts title="config/collaboration.ts"
 documents: {
-  'researches/:id/writing': defineDocument<{ id: string }>({
+  'researches/:id/writing': {
     async authorize(ctx, { docName, params }) {
       // params.id is typed as string, extracted from the incoming name
       const research = await Research.findVisibleTo(ctx.userId, params.id)
       if (!research) return { canRead: false, canWrite: false, canComment: false }
       return { canRead: true, canWrite: true, canComment: true }
     },
-  }),
+  },
 
-  'whiteboards/:id': defineDocument<{ id: string }>({
+  'whiteboards/:id': {
     engine: 'automerge',
     async authorize(ctx, { params }) {
       const member = await Whiteboard.isMember(params.id, ctx.userId)
       return { canRead: member, canWrite: member, canComment: member }
     },
-  }),
+  },
 }
 ```
 
@@ -65,9 +65,15 @@ That means `researches/:id/writing` matches `researches/42/writing` but **not**
 `researches/42/writing/draft` — a different shape is a different document type, and gets its own
 entry. The bluntness is the point: you can read a pattern and know exactly what it accepts.
 
-The type parameter on `defineDocument<{ id: string }>` is what makes `params.id` typed. It is not
-inferred from the pattern string — pass it, and a typo in `params.reserachId` becomes a compile
-error.
+`params` is typed **from the key**. `defineConfig` reads the `:segments` out of each pattern, so
+`'whiteboards/:boardId'` hands its `authorize` a `params: { boardId: string }` and `params.id` there
+is a compile error, not an `undefined` at runtime. A pattern with no `:segments` gets `params: {}`.
+There is no type parameter to pass and nothing to keep in sync with the string.
+
+The same shape is available on its own as `DocumentParams<'researches/:id/writing'>` when you need
+it outside the config, and `defineDocument()` remains for declarations that live away from their
+key (a shared module, a `CollaborationManager` built by hand in a test) — there it takes the params
+type explicitly, and attaching it to a key that disagrees is rejected at the config.
 
 <Callout title="Order matters, first match wins">
 Patterns are tried in the order they appear in the object. If two patterns can match the same name,
@@ -81,12 +87,12 @@ For any incoming document name, the library answers two questions independently.
 **Which engine?**
 
 1. `config.engineFor(docName)` — if you provided the function, it wins outright, for every document.
-2. The `engine` on the matched `defineDocument` entry.
+2. The `engine` on the matched `documents` entry.
 3. `config.engine` (the global default; `'yjs'` when unset).
 
 **Which authorization?**
 
-1. The `authorize` on the matched `defineDocument` entry.
+1. The `authorize` on the matched `documents` entry.
 2. `config.authorize` (the global callback).
 3. **Deny** — `{ canRead: false, canWrite: false, canComment: false }`.
 

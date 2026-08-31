@@ -12,7 +12,7 @@ declared your documents.
 <Callout type="warn" title="Declared inline in config? Use the config, not the registry">
 The generated registry below indexes the **`app/collaboration/documents/` directory**, which only
 exists if you ran `node ace make:collab-document`. If you declared your documents the other
-supported way — `defineDocument` inline in `config/collaboration.ts` — that directory is not there,
+supported way — inline under `documents` in `config/collaboration.ts` — that directory is not there,
 the `init` hook returns early and nothing is generated. Derive the union from the config instead:
 
 ```ts title="types/collaboration.ts"

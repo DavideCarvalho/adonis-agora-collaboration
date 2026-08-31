@@ -1,3 +1,4 @@
+import type { CollabDocumentDeclaration, DocumentParams } from './documents.js';
 import type { ResolveUserFn } from './http/types.js';
 import type { CollaborationConfig, PartyKitConfig } from './types.js';
 
@@ -36,16 +37,38 @@ export type CollaborationAppConfig = {
 };
 
 /**
+ * `config.documents` keyed by the declared patterns, each entry typed by the
+ * `:params` of its own key — `'researches/:id/writing'` gets
+ * `authorize(ctx, { params: { id: string } })`.
+ */
+export type CollabDocuments<Pattern extends string> = {
+  [P in Pattern]: CollabDocumentDeclaration<DocumentParams<P>>;
+};
+
+/**
+ * {@link CollaborationAppConfig} with `documents` narrowed to the declared
+ * patterns — what {@link defineConfig} accepts and returns.
+ */
+export type CollaborationAppConfigFor<Pattern extends string> = Omit<
+  CollaborationAppConfig,
+  'documents'
+> & {
+  documents?: CollabDocuments<Pattern>;
+};
+
+/**
  * Type-safe config helper used in the app's `config/collaboration.ts` —
  * same pattern as @adonisjs/*'s `defineConfig`.
  *
- * Generic over the literal config so the **keys of `documents` survive**.
- * Returning the widened `CollaborationAppConfig` collapsed them to `string`,
- * which is why there was no way to get a union of declared document names out
- * of the config and every call site hand-built doc-name strings. See
- * {@link InferCollabDocumentNames}.
+ * Generic over the **keys of `documents`** so they survive as literals (see
+ * {@link InferCollabDocumentNames}) and so each entry's `authorize` receives
+ * `params` typed from its own pattern: the key `'whiteboards/:boardId'` makes
+ * `params.boardId` a `string` and `params.id` a compile error. No type
+ * parameter on the entry, nothing to keep in sync with the key.
  */
-export function defineConfig<T extends CollaborationAppConfig>(config: T): T {
+export function defineConfig<Pattern extends string = never>(
+  config: CollaborationAppConfigFor<Pattern>,
+): CollaborationAppConfigFor<Pattern> {
   return config;
 }
 
@@ -65,8 +88,8 @@ export function defineConfig<T extends CollaborationAppConfig>(config: T): T {
  * resolved name. Build a concrete name from one with
  * {@link CollabDocumentNameFor} when you want the parameters checked too.
  */
-export type InferCollabDocumentNames<T> = T extends { documents: infer D }
-  ? Extract<keyof D, string>
+export type InferCollabDocumentNames<T> = T extends { documents?: infer D }
+  ? Extract<keyof NonNullable<D>, string>
   : never;
 
 /**

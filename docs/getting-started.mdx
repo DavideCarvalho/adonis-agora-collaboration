@@ -105,7 +105,7 @@ regexes gets ugly fast. Declare the document types instead — the library match
 against each pattern and hands you the extracted, typed params:
 
 ```ts title="config/collaboration.ts"
-import { defineConfig, defineDocument, lucidStorage } from '@adonis-agora/collaboration'
+import { defineConfig, lucidStorage } from '@adonis-agora/collaboration'
 import Research from '#models/research'
 import Whiteboard from '#models/whiteboard'
 
@@ -114,7 +114,7 @@ export default defineConfig({
   storage: lucidStorage({ connection: 'primary' }),
 
   documents: {
-    'researches/:id/writing': defineDocument<{ id: string }>({
+    'researches/:id/writing': {
       async authorize(ctx, { params }) {
         const research = await Research.query()
           .where('id', params.id)
@@ -124,15 +124,15 @@ export default defineConfig({
         if (!research) return { canRead: false, canWrite: false, canComment: false }
         return { canRead: true, canWrite: research.status === 'draft', canComment: true }
       },
-    }),
+    },
 
-    'whiteboards/:id': defineDocument<{ id: string }>({
+    'whiteboards/:id': {
       engine: 'automerge',
       async authorize(ctx, { params }) {
         const member = await Whiteboard.isMember(params.id, ctx.userId)
         return { canRead: member, canWrite: member, canComment: member }
       },
-    }),
+    },
   },
 })
 ```

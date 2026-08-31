@@ -57,25 +57,35 @@ defineConfig({
 }
 ```
 
-## `defineDocument`
+## `documents` entries
 
 ```ts
-defineDocument<P extends Record<string, string>>(declaration: {
+type CollabDocumentDeclaration<P> = {
   engine?: CollaborationEngine
   authorize?: (
     ctx: CollabConnectionContext,
     info: { docName: string; params: P },
   ) => Promise<CollabPermission>
-}): CollabDocumentDeclaration<P>
+}
+
+type DocumentParams<Pattern extends string>
+// 'researches/:id/writing'  → { id: string }
+// 'a/:x/b/:y'               → { x: string; y: string }
+// 'announcements'           → {}
+// string                    → Record<string, string>
 ```
 
-The type parameter types `params`; it is **not** inferred from the pattern string.
+Inside `defineConfig({ documents })`, `P` is `DocumentParams<key>` — inferred from the pattern the
+entry sits under, so a plain object literal is all you write:
 
 ```ts
-'researches/:id/writing': defineDocument<{ id: string }>({
-  async authorize(ctx, { docName, params }) { /* params.id is a string */ },
-})
+'researches/:id/writing': {
+  async authorize(ctx, { docName, params }) { /* params.id is a string; params.foo is an error */ },
+}
 ```
+
+`defineDocument<P>(declaration)` is an identity helper for declarations that live away from their
+key. Attaching one whose `P` contradicts the key is a compile error at the config.
 
 `matchDocumentPattern(pattern, docName)` is exported too — same-segment-count matching, returning the
 extracted params or `null`.
