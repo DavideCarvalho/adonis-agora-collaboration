@@ -1,9 +1,10 @@
-import { matchDocumentPattern } from './documents.js';
+import { documentPatternParams, matchDocumentPattern } from './documents.js';
 import type { CollaborationDriver, SelfHostedDriverOptions } from './driver.js';
 import { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 import { PartyKitDriver } from './drivers/partykit/partykit_driver.js';
 import { resolveStorage } from './drivers/shared.js';
 import { YjsDriver } from './drivers/yjs/yjs_driver.js';
+import { reportCollaborationWarning } from './observability.js';
 import { CommentService } from './services/comment_service.js';
 import {
   type PresenceMember,
@@ -26,6 +27,22 @@ import type {
  * engine is built lazily on first use. Self-hosted drivers attach their
  * WebSocket to the HTTP server the first time a document uses them.
  */
+/**
+ * A pattern without a `:segment` matches exactly one document — almost never
+ * what a `documents` entry means. Say so once, at boot, with the fix.
+ */
+function warnAboutSingleDocumentPatterns(documents: CollaborationConfig['documents']): void {
+  for (const pattern of Object.keys(documents ?? {})) {
+    if (documentPatternParams(pattern).length > 0) continue;
+    reportCollaborationWarning(
+      { pattern },
+      `document pattern "${pattern}" has no ":param" segment, so it matches exactly one document ` +
+        `named "${pattern}" — not "${pattern}/<id>". If it is a collection, declare ` +
+        `"${pattern}/:id" or use defineCollection("${pattern}", …).`,
+    );
+  }
+}
+
 export class CollaborationManager {
   private readonly config: CollaborationConfig;
   private readonly drivers = new Map<CollaborationEngine, CollaborationDriver>();
@@ -35,6 +52,7 @@ export class CollaborationManager {
 
   constructor(config: CollaborationConfig, presenceStore?: PresenceStore) {
     this.config = config;
+    warnAboutSingleDocumentPatterns(config.documents);
     this.comments = new CommentService(resolveStorage(config.storage));
     if (presenceStore) {
       this.presence = new PresenceService(presenceStore);

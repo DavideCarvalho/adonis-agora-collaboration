@@ -97,6 +97,15 @@ The pattern's `:id` segment is extracted for you — no regex per connection —
 typed `string` straight from the key. Nothing to declare twice: rename the segment and the
 `params` type follows.
 
+<Callout type="warn" title="The `:id` is what makes it many documents">
+A pattern matches segment by segment, and only a `:segment` accepts anything. `'whiteboards'`
+matches **one** document named `whiteboards` — `whiteboards/42` does not match it and falls back
+to the global `engine` and `authorize`. When the type is "one document per whiteboard", use
+`...defineCollection('whiteboards', { … })`, which declares `whiteboards/:id` for you and cannot be
+written without the `:id`. The manager also warns at boot about any declared pattern that has no
+`:segment`. See [Documents](/docs/collaboration/concepts/documents).
+</Callout>
+
 </Step>
 <Step>
 

@@ -34,34 +34,58 @@ an opaque id with no slashes in it.
 
 ## Declaring document types
 
-When each kind of document has its own rule, write them as **patterns** and let the library match:
+When each kind of document has its own rule, declare the **types** and let the library match. The
+common shape — many documents named `<prefix>/<id>`, one engine, one rule — is a **collection**:
+
+```ts title="config/collaboration.ts"
+import { defineCollection, defineConfig } from '@adonis-agora/collaboration'
+
+documents: {
+  ...defineCollection('whiteboards', {
+    engine: 'automerge',
+    async authorize(ctx, { params }) {
+      // params.id is a string, extracted from the incoming name
+      const member = await Whiteboard.isMember(params.id, ctx.userId)
+      return { canRead: member, canWrite: member, canComment: member }
+    },
+  }),
+}
+```
+
+`defineCollection('whiteboards', …)` declares the pattern `whiteboards/:id`: it matches
+`whiteboards/42`, `whiteboards/abc`, any `whiteboards/<one segment>`. Spread it into `documents`
+(it returns the entry, keyed by the pattern it built). Omit the declaration when the globals apply —
+`...defineCollection('announcements')` routes `announcements/<id>` through `engine` and `authorize`.
+
+A shape that is not `<prefix>/<id>` is written out as a **pattern** key — the collection above is
+literally `'whiteboards/:id': { … }`:
 
 ```ts title="config/collaboration.ts"
 documents: {
   'researches/:id/writing': {
     async authorize(ctx, { docName, params }) {
-      // params.id is typed as string, extracted from the incoming name
       const research = await Research.findVisibleTo(ctx.userId, params.id)
       if (!research) return { canRead: false, canWrite: false, canComment: false }
       return { canRead: true, canWrite: true, canComment: true }
     },
   },
-
-  'whiteboards/:id': {
-    engine: 'automerge',
-    async authorize(ctx, { params }) {
-      const member = await Whiteboard.isMember(params.id, ctx.userId)
-      return { canRead: member, canWrite: member, canComment: member }
-    },
-  },
+  'workspaces/:workspaceId/boards/:boardId': { engine: 'automerge' },
 }
 ```
 
+<Callout type="warn" title="A pattern without a `:segment` matches exactly one document">
 The matcher is deliberately small: a pattern and a name are split on `/`, they must have the
 **same number of segments**, a `:name` segment captures anything, and every other segment must be
-equal. There is no `*`, no optional segment, no regex.
+equal. There is no `*`, no prefix match, no optional segment, no regex.
 
-That means `researches/:id/writing` matches `researches/42/writing` but **not**
+So `'whiteboards'` is not "everything under `whiteboards/`" — it is the one document named
+`whiteboards`, and `whiteboards/42` falls through to the globals. A collection needs the
+`:segment`: `'whiteboards/:id'`, or `defineCollection('whiteboards')`, which cannot be written
+without it. The manager logs a warning at boot for every declared pattern that has no `:segment`,
+naming the fix; a genuine singleton (one shared `announcements` document) can ignore it.
+</Callout>
+
+`researches/:id/writing` matches `researches/42/writing` but **not**
 `researches/42/writing/draft` — a different shape is a different document type, and gets its own
 entry. The bluntness is the point: you can read a pattern and know exactly what it accepts.
 

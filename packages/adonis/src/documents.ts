@@ -79,6 +79,69 @@ export function defineDocument<P extends Record<string, string> = Record<string,
   return declaration;
 }
 
+/** The pattern {@link defineCollection} declares for a prefix. */
+export type CollectionPattern<Prefix extends string> = `${Prefix}/:id`;
+
+/**
+ * Declares a **collection**: many documents named `<prefix>/<id>` that share
+ * one engine and one rule — the shape almost every document type has.
+ *
+ * A pattern only matches many documents when it has a `:segment`; a bare
+ * `'whiteboards'` matches exactly one document named `whiteboards`. This
+ * helper makes the common case impossible to get wrong: give it the prefix
+ * and it declares `'<prefix>/:id'`, with `params.id` typed in `authorize`.
+ * Spread it into `documents`:
+ *
+ * @example
+ * documents: {
+ *   ...defineCollection('whiteboards', {
+ *     engine: 'automerge',
+ *     async authorize(ctx, { params }) {
+ *       const member = await Whiteboard.isMember(params.id, ctx.userId)
+ *       return { canRead: member, canWrite: member, canComment: member }
+ *     },
+ *   }),
+ *   ...defineCollection('announcements'), // engine + authorize from the globals
+ * }
+ *
+ * The prefix is the literal part of the name: no `:params`, no leading or
+ * trailing slash. Nested literals are fine (`'workspaces/main/boards'`). For a
+ * shape that is not `<prefix>/<id>` — several params, a suffix like
+ * `researches/:id/writing` — write the pattern out as a key instead.
+ */
+export function defineCollection<Prefix extends string>(
+  prefix: Prefix,
+  declaration: CollabDocumentDeclaration<{ id: string }> = {},
+): { [K in CollectionPattern<Prefix>]: CollabDocumentDeclaration<{ id: string }> } {
+  if (
+    prefix === '' ||
+    prefix.includes(':') ||
+    prefix.startsWith('/') ||
+    prefix.endsWith('/') ||
+    prefix.includes('//')
+  ) {
+    throw new Error(
+      `[@adonis-agora/collaboration] defineCollection(${JSON.stringify(prefix)}): the prefix is ` +
+        'the literal part of the document name — no ":params", no leading or trailing "/". ' +
+        'defineCollection("whiteboards") declares "whiteboards/:id".',
+    );
+  }
+  return { [`${prefix}/:id`]: declaration } as {
+    [K in CollectionPattern<Prefix>]: CollabDocumentDeclaration<{ id: string }>;
+  };
+}
+
+/**
+ * The `:name` segments of a pattern, in order — `[]` for a pattern that
+ * matches exactly one document.
+ */
+export function documentPatternParams(pattern: string): string[] {
+  return pattern
+    .split('/')
+    .filter((segment) => segment.startsWith(':'))
+    .map((segment) => segment.slice(1));
+}
+
 /**
  * Casa um docName com um padrão `researches/:id/writing`, extraindo os
  * params nomeados. Retorna null se não casar.

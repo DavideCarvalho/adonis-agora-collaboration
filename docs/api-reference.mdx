@@ -87,6 +87,32 @@ entry sits under, so a plain object literal is all you write:
 `defineDocument<P>(declaration)` is an identity helper for declarations that live away from their
 key. Attaching one whose `P` contradicts the key is a compile error at the config.
 
+## `defineCollection`
+
+```ts
+defineCollection<Prefix extends string>(
+  prefix: Prefix,
+  declaration?: CollabDocumentDeclaration<{ id: string }>,
+): { [K in `${Prefix}/:id`]: CollabDocumentDeclaration<{ id: string }> }
+```
+
+Declares the collection `<prefix>/:id` — the entry most document types are — and returns it keyed by
+that pattern, ready to spread into `documents`. `params.id` is typed in `authorize`. The prefix is
+the literal part of the name (`'whiteboards'`, `'workspaces/main/boards'`): a `:param`, a leading or
+trailing `/` throws.
+
+```ts
+documents: {
+  ...defineCollection('whiteboards', { engine: 'automerge', authorize }),
+  ...defineCollection('announcements'),           // globals apply
+  'researches/:id/writing': { authorize },        // any other shape: write the pattern
+}
+```
+
+A declared pattern with no `:segment` matches exactly one document; the manager warns about each
+one at boot. `documentPatternParams(pattern)` lists a pattern's `:segments` (`[]` for such a
+pattern).
+
 `matchDocumentPattern(pattern, docName)` is exported too — same-segment-count matching, returning the
 extracted params or `null`.
 
