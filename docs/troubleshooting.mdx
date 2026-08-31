@@ -33,6 +33,37 @@ Check in this order:
    authorization; `401` means no user was resolved (your auth middleware did not run, or
    `routes.resolveUser` needs configuring); `400` means the `doc` param is missing.
 
+## A declared document's `engine` or `authorize` never applies
+
+The document opens, but with the **global** rule and the **global** engine — a `whiteboards`
+entry declared as Automerge comes up as Yjs, or its `authorize` never runs.
+
+Look at the pattern's key: it probably has no `:segment`.
+
+```ts
+documents: {
+  'whiteboards': { engine: 'automerge' },   // matches ONE document, named "whiteboards"
+}
+```
+
+A pattern is matched segment by segment, and only a `:segment` accepts anything — there is no
+prefix match. `'whiteboards'` is the single document literally named `whiteboards`;
+`whiteboards/42` has two segments, does not match, and falls through to `engineFor`, `engine` and
+the global `authorize`. The manager logs a warning at boot for every declared pattern with no
+`:segment` — check the log for `has no ":param" segment`.
+
+The fix is the `:id`, and the safest way to write it is the helper that cannot be written without
+one:
+
+```ts
+documents: {
+  ...defineCollection('whiteboards', { engine: 'automerge' }),   // declares "whiteboards/:id"
+}
+```
+
+For a shape that is not `<prefix>/<id>` — `researches/:id/writing`, two params — write the pattern
+out, `:segment` included. See [Documents](/docs/collaboration/concepts/documents).
+
 ## `401` from the token endpoint on a request that is clearly logged in
 
 `routes.resolveUser` defaults to reading `ctx.auth.user`, which is only populated when
