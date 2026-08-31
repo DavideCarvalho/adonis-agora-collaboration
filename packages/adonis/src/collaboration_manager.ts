@@ -10,12 +10,13 @@ import {
   PresenceService,
   type PresenceStore,
 } from './services/presence_service.js';
-import type { CollabConnectionContext, CollabPermission } from './types.js';
 import type {
+  CollabConnectionContext,
   CollabDiffSummary,
-  CollabVersion,
   CollaborationConfig,
   CollaborationEngine,
+  CollabPermission,
+  CollabVersion,
   PruneVersionsOptions,
 } from './types.js';
 
@@ -230,5 +231,5 @@ export class CollaborationManager {
   }
 }
 
-export { YjsDriver, AutomergeDriver, PartyKitDriver };
 export type { CollaborationConfig, CollaborationDriver };
+export { AutomergeDriver, PartyKitDriver, YjsDriver };

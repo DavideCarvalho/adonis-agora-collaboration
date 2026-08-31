@@ -3,8 +3,8 @@ import { type AuthorizeFn, CollabForbiddenError, issueToken } from './auth/token
 import {
   type CollabHttpContext,
   type CollabManagerLike,
-  type CollabRouteUser,
   type CollabRoutesRuntime,
+  type CollabRouteUser,
   CollabUnauthorizedError,
 } from './http/types.js';
 import type { CollabPermission } from './types.js';

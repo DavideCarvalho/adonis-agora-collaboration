@@ -5,8 +5,8 @@ import {
   createVersion,
   fetchToken,
   listComments,
+  resolveBaseUrl,
 } from '../src/rest_client.js';
-import { resolveBaseUrl } from '../src/rest_client.js';
 import type { CollaborationClientConfig } from '../src/types.js';
 
 const config: CollaborationClientConfig = { baseUrl: 'https://api.app' };

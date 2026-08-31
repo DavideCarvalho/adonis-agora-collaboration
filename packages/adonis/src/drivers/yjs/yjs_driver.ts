@@ -1,9 +1,9 @@
+import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import {
   Hocuspocus,
   type onAuthenticatePayload,
   type onLoadDocumentPayload,
 } from '@hocuspocus/server';
-import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import { type RawData, WebSocketServer } from 'ws';
 import * as Y from 'yjs';
@@ -16,9 +16,9 @@ import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.
 import { reportCollaborationError } from '../../observability.js';
 import type {
   CollabDiffSummary,
+  CollaborationStorage,
   CollabPermission,
   CollabVersion,
-  CollaborationStorage,
 } from '../../types.js';
 import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';

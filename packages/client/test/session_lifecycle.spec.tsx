@@ -7,8 +7,8 @@ import {
   useCollaborationContext,
 } from '../src/context.js';
 import { useCollabDoc } from '../src/hooks/use_collab_doc.js';
-import { DocSession as DocSessionClass } from '../src/session.js';
 import type { DocSession } from '../src/session.js';
+import { DocSession as DocSessionClass } from '../src/session.js';
 import type { CollaborationClientConfig } from '../src/types.js';
 import { fakeTransportFactory } from './helpers/fake_transport.js';
 

@@ -1,4 +1,4 @@
-import { type ReactNode, createContext, useContext, useMemo, useRef } from 'react';
+import { createContext, type ReactNode, useContext, useMemo, useRef } from 'react';
 import { DocSession } from './session.js';
 import type { CollaborationClientConfig } from './types.js';
 

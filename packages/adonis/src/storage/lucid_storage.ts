@@ -1,8 +1,8 @@
 import type { Knex } from 'knex';
 import type {
   CollabComment,
-  CollabVersion,
   CollaborationStorage,
+  CollabVersion,
   PruneVersionsOptions,
 } from '../types.js';
 import { assertPruneKeep, versionsToPrune } from './shared.js';

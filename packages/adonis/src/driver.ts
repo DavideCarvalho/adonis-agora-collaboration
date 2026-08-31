@@ -4,10 +4,10 @@ import type {
   CollabComment,
   CollabConnectionContext,
   CollabDiffSummary,
-  CollabPermission,
-  CollabVersion,
   CollaborationConfig,
   CollaborationStorage,
+  CollabPermission,
+  CollabVersion,
   PartyKitConfig,
 } from './types.js';
 
@@ -71,8 +71,8 @@ export interface PartyKitDriverOptions {
 export type {
   CollabComment,
   CollabConnectionContext,
+  CollabDiffSummary,
+  CollaborationConfig,
   CollabPermission,
   CollabVersion,
-  CollaborationConfig,
 };
-export type { CollabDiffSummary };

@@ -26,9 +26,9 @@ describe('YjsDriver onLoadDocument (persistência round-trip)', () => {
       driver as unknown as {
         hocuspocus: {
           configuration: {
-            onLoadDocument?: (payload: { documentName: string }) => Promise<
-              { document: Y.Doc } | undefined
-            >;
+            onLoadDocument?: (payload: {
+              documentName: string;
+            }) => Promise<{ document: Y.Doc } | undefined>;
           };
         };
       }
@@ -48,9 +48,9 @@ describe('YjsDriver onLoadDocument (persistência round-trip)', () => {
       driver as unknown as {
         hocuspocus: {
           configuration: {
-            onLoadDocument?: (payload: { documentName: string }) => Promise<
-              { document: Y.Doc } | undefined
-            >;
+            onLoadDocument?: (payload: {
+              documentName: string;
+            }) => Promise<{ document: Y.Doc } | undefined>;
           };
         };
       }

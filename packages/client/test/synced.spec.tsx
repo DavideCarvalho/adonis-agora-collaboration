@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { type ReactNode, createElement } from 'react';
+import { createElement, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type * as Y from 'yjs';
 import { CollaborationProvider } from '../src/context.js';

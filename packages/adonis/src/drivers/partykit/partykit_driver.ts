@@ -1,7 +1,7 @@
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import * as Y from 'yjs';
 import type { CollaborationDriver, PartyKitDriverOptions } from '../../driver.js';
-import type { CollabDiffSummary, CollabVersion, CollaborationStorage } from '../../types.js';
+import type { CollabDiffSummary, CollaborationStorage, CollabVersion } from '../../types.js';
 import { createVersionMetadata, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
 

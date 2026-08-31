@@ -1,4 +1,4 @@
-import { BaseCommand, args, flags } from '@adonisjs/core/ace';
+import { args, BaseCommand, flags } from '@adonisjs/core/ace';
 import stringHelpers from '@adonisjs/core/helpers/string';
 import { stubsRoot } from '../stubs/main.js';
 

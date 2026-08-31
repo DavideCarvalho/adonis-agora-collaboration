@@ -1,4 +1,4 @@
-import type { CollabConnectionContext, CollabPermission, CollaborationEngine } from './types.js';
+import type { CollabConnectionContext, CollaborationEngine, CollabPermission } from './types.js';
 
 /**
  * Declaração declarativa de um documento colaborativo.

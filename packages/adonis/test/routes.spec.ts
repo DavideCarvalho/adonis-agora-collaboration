@@ -20,7 +20,11 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
       docName,
       createdBy,
       label,
-    }: { docName: string; createdBy: string | null; label: string | null }) {
+    }: {
+      docName: string;
+      createdBy: string | null;
+      label: string | null;
+    }) {
       calls.push(`version:${docName}:${createdBy}:${label}`);
       return { id: 'v1', seq: 1 };
     },

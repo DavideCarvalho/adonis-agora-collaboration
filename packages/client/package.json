@@ -39,7 +39,7 @@
     "y-partykit": "^0.0.33",
     "y-partyserver": "^2.2.0",
     "y-protocols": "^1.0.7",
-    "yjs": "^13.6.27"
+    "yjs": "^13.6.32"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
@@ -54,17 +54,17 @@
     }
   },
   "devDependencies": {
-    "@swc/core": "1.15.47",
-    "@testing-library/react": "16.3.0",
-    "@types/node": "22.20.1",
-    "@types/react": "18.3.27",
-    "@types/react-dom": "18.3.7",
-    "jsdom": "26.1.0",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "typescript": "5.9.3",
+    "@swc/core": "1.16.1",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "26.4.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "jsdom": "30.0.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "typescript": "7.0.2",
     "unplugin-swc": "1.5.11",
-    "vitest": "3.2.7"
+    "vitest": "4.1.11"
   },
   "engines": {
     "node": ">=20.6.0"

@@ -1,9 +1,9 @@
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   CollabComment,
-  CollabVersion,
   CollaborationStorage,
+  CollabVersion,
   PruneVersionsOptions,
 } from '../types.js';
 import { assertPruneKeep, versionsToPrune } from './shared.js';

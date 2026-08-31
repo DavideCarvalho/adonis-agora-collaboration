@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, vi } from 'vitest';
 import {
-  type RegistryFile,
   documentKeyFromVfsKey,
+  type RegistryFile,
   renderDocumentsRegistry,
 } from '../src/codegen/documents_registry.js';
 

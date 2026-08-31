@@ -3,9 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollaborationContext } from '../context.js';
 import { fetchToken, resolveBaseUrl } from '../rest_client.js';
 import {
+  isPermanentFailure,
   MAX_RECONNECT_ATTEMPTS,
   MAX_RECONNECT_DELAY_MS,
-  isPermanentFailure,
   reconnectExhausted,
 } from '../session.js';
 import type { CollabStatus } from '../types.js';

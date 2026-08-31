@@ -2,10 +2,10 @@ import * as Y from 'yjs';
 import { fetchToken } from './rest_client.js';
 import { defaultTransportFactory } from './transports/index.js';
 import type {
+  CollaborationClientConfig,
   CollabStatus,
   CollabTokenInfo,
   CollabTransport,
-  CollaborationClientConfig,
 } from './types.js';
 
 export const MAX_RECONNECT_DELAY_MS = 15_000;
