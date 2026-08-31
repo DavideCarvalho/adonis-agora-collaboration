@@ -6,9 +6,9 @@ import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.
 import { reportCollaborationError } from '../../observability.js';
 import type {
   CollabDiffSummary,
+  CollaborationStorage,
   CollabPermission,
   CollabVersion,
-  CollaborationStorage,
 } from '../../types.js';
 import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage } from '../shared.js';

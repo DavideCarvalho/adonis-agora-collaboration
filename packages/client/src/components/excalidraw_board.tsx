@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useExcalidrawSync } from '../hooks/use_excalidraw_sync.js';
 import { CollaborationProvider, useCollabDoc } from '../index.js';
 

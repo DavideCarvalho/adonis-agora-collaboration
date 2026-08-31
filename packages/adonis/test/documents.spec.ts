@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CollaborationManager } from '../src/collaboration_manager.js';
-import { matchDocumentPattern } from '../src/documents.js';
-import { defineDocument } from '../src/documents.js';
+import { defineDocument, matchDocumentPattern } from '../src/documents.js';
 import type { CollaborationConfig } from '../src/types.js';
 
 describe('matchDocumentPattern', () => {

@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -16,34 +18,35 @@ import { describe, expect, it } from 'vitest';
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
-const packageRoot = join(here, '..');
+const require = createRequire(import.meta.url);
+
+/**
+ * Runs `tsc` on `tsconfig.fixture.json` (the package tsconfig narrowed to the
+ * fixture) and returns the diagnostics reported against the fixture as
+ * `TS<code>: <message>`. Shelling out to the binary rather than driving the
+ * compiler API keeps this working across TypeScript majors: TS 7 (the native
+ * compiler) no longer ships the JS `createProgram` API from `typescript`.
+ */
+function typecheckFixture(): string[] {
+  const typescriptPackage = require.resolve('typescript/package.json');
+  const { bin } = JSON.parse(readFileSync(typescriptPackage, 'utf8')) as { bin: { tsc: string } };
+  const tsc = join(dirname(typescriptPackage), bin.tsc);
+  const result = spawnSync(
+    process.execPath,
+    [tsc, '-p', join(here, 'tsconfig.fixture.json'), '--pretty', 'false'],
+    { encoding: 'utf8' },
+  );
+  if (result.error) throw result.error;
+
+  return `${result.stdout}\n${result.stderr}`
+    .split('\n')
+    .map((line) => /^(.*__type_fixture__\.ts)\(\d+,\d+\): error (TS\d+): (.*)$/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => `${match[2]}: ${match[3]}`);
+}
 
 describe('the client does not ask for what the routes discard', () => {
   it('rejects a userId on createVersion, createComment and useComments().create', () => {
-    const configPath = join(packageRoot, 'tsconfig.json');
-    const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
-      ...ts.sys,
-      onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
-        throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
-      },
-    } as unknown as ts.ParseConfigFileHost);
-
-    const fixture = join(packageRoot, 'test/__type_fixture__.ts');
-    const program = ts.createProgram([fixture], {
-      ...parsed!.options,
-      noEmit: true,
-      incremental: false,
-      tsBuildInfoFile: undefined,
-    });
-
-    const reported = ts
-      .getPreEmitDiagnostics(program)
-      .filter((diagnostic) => diagnostic.file?.fileName.endsWith('__type_fixture__.ts'))
-      .map(
-        (diagnostic) =>
-          `TS${diagnostic.code}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}`,
-      );
-
-    expect(reported).toEqual([]);
+    expect(typecheckFixture()).toEqual([]);
   }, 60_000);
 });

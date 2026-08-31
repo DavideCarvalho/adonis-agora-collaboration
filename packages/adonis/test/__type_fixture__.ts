@@ -1,5 +1,5 @@
 /**
- * Compiled by `document_names.spec.ts` through the TypeScript compiler API —
+ * Compiled by `document_names.spec.ts` through `tsc` (see `tsconfig.fixture.json`) —
  * NOT a test file (vitest only collects `*.spec.ts`), and excluded from the
  * package typecheck along with the rest of `test/`.
  *

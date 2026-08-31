@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { LucidConnectionLike, LucidStorage } from '../../src/storage/lucid_storage.js';
 import type { CollabVersion } from '../../src/types.js';
-import { type IntegrationDatabase, createIntegrationDatabase } from './harness.js';
+import { createIntegrationDatabase, type IntegrationDatabase } from './harness.js';
 
 /**
  * `LucidStorage.pruneVersions` against a real Postgres, on the tables the published

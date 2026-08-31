@@ -1,5 +1,5 @@
 /**
- * Compiled by `discarded_params.spec.ts` through the TypeScript compiler API —
+ * Compiled by `discarded_params.spec.ts` through `tsc` (see `tsconfig.fixture.json`) —
  * NOT a test file (vitest only collects `*.spec.ts[x]`), and excluded from the
  * package typecheck along with the rest of `test/`.
  *
