@@ -4,26 +4,90 @@
  * package typecheck along with the rest of `test/`.
  *
  * Every `@ts-expect-error` below is the assertion: if the union widens back to
- * `string`, the suppression becomes unused and tsc reports error 2578.
+ * `string`, or `params` widens back to `Record<string, string>`, the
+ * suppression becomes unused and tsc reports error 2578.
  */
-import type { CollabDocumentNameFor, InferCollabDocumentNames } from '../src/define_config.js';
+import type {
+  CollabDocumentNameFor,
+  CollaborationAppConfig,
+  InferCollabDocumentNames,
+} from '../src/define_config.js';
 import { defineConfig } from '../src/define_config.js';
+import type { DocumentParams } from '../src/documents.js';
 import { defineDocument } from '../src/documents.js';
+
+const allow = { canRead: true, canWrite: true, canComment: true };
+const expectString = (_value: string) => {};
 
 const config = defineConfig({
   engine: 'yjs',
   documents: {
-    'researches/:id/writing': defineDocument<{ id: string }>({ engine: 'yjs' }),
-    'whiteboards/:id': defineDocument<{ id: string }>({ engine: 'automerge' }),
+    // Plain object literal: params come from the key, no type parameter.
+    'researches/:id/writing': {
+      engine: 'yjs',
+      async authorize(_ctx, { docName, params }) {
+        expectString(docName);
+        expectString(params.id);
+        // @ts-expect-error the pattern declares `:id`, not `:researchId`
+        expectString(params.researchId);
+        return allow;
+      },
+    },
+    // Two params, one of them not named `id`.
+    'workspaces/:workspaceId/whiteboards/:boardId': {
+      engine: 'automerge',
+      async authorize(_ctx, { params }) {
+        expectString(params.workspaceId);
+        expectString(params.boardId);
+        // @ts-expect-error `id` is not a segment of this pattern
+        expectString(params.id);
+        return allow;
+      },
+    },
+    // No params at all: `params` is `{}`, not a loose record.
+    announcements: {
+      async authorize(_ctx, { params }) {
+        // @ts-expect-error a pattern without `:segments` has no params
+        expectString(params.id);
+        return allow;
+      },
+    },
+    // `defineDocument` still works inline and infers `P` from the key.
+    'forms/:id': defineDocument({
+      async authorize(_ctx, { params }) {
+        expectString(params.id);
+        // @ts-expect-error inferred from the key, so a wrong name is still caught
+        expectString(params.formId);
+        return allow;
+      },
+    }),
+    // An explicit `P` that matches the key is accepted.
+    'invoices/:id': defineDocument<{ id: string }>({ engine: 'yjs' }),
+    // @ts-expect-error an explicit `P` that contradicts the key is rejected at the config
+    'contracts/:contractId': defineDocument<{ id: string }>({
+      async authorize(_ctx, { params }) {
+        expectString(params.id);
+        return allow;
+      },
+    }),
   },
 });
+
+// The narrowed config is still what the provider reads.
+const widened: CollaborationAppConfig = config;
 
 type Names = InferCollabDocumentNames<typeof config>;
 
 const declared: Names = 'researches/:id/writing';
-const alsoDeclared: Names = 'whiteboards/:id';
+const alsoDeclared: Names = 'workspaces/:workspaceId/whiteboards/:boardId';
 // @ts-expect-error a document the config never declares is not a declared name
-const undeclared: Names = 'invoices/:id';
+const undeclared: Names = 'reviews/:id';
+
+// A config without `documents` declares no names.
+const bare = defineConfig({ engine: 'yjs' });
+type BareNames = InferCollabDocumentNames<typeof bare>;
+// @ts-expect-error nothing is declared, so nothing is a declared name
+const bareName: BareNames = 'researches/:id/writing';
 
 type Writing = CollabDocumentNameFor<'researches/:id/writing'>;
 
@@ -31,4 +95,24 @@ const resolved: Writing = 'researches/42/writing';
 // @ts-expect-error the pattern has to match, not merely be some string
 const misspelled: Writing = 'research/42/writing';
 
-export const used = [declared, alsoDeclared, undeclared, resolved, misspelled];
+// `DocumentParams` on its own, for callers that want the shape by pattern.
+const nested: DocumentParams<'workspaces/:workspaceId/whiteboards/:boardId'> = {
+  workspaceId: 'w1',
+  boardId: 'b1',
+};
+// @ts-expect-error a runtime-style `string` pattern stays loose, a literal one does not
+const loose: DocumentParams<'researches/:id/writing'> = { anything: 'goes' };
+const runtime: DocumentParams<string> = { anything: 'goes' };
+
+export const used = [
+  widened,
+  declared,
+  alsoDeclared,
+  undeclared,
+  bareName,
+  resolved,
+  misspelled,
+  nested,
+  loose,
+  runtime,
+];

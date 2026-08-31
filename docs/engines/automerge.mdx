@@ -12,10 +12,10 @@ top. That native graph is the reason to choose it.
 
 ```ts title="config/collaboration.ts"
 documents: {
-  'forms/:id': defineDocument<{ id: string }>({
+  'forms/:id': {
     engine: 'automerge',
     async authorize(ctx, { params }) { /* ... */ },
-  }),
+  },
 }
 ```
 

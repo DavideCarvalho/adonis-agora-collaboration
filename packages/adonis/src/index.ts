@@ -16,11 +16,13 @@ export {
 export { CollaborationManager } from './collaboration_manager.js';
 export {
   type CollabDocumentNameFor,
+  type CollabDocuments,
   type CollaborationAppConfig,
+  type CollaborationAppConfigFor,
   defineConfig,
   type InferCollabDocumentNames,
 } from './define_config.js';
-export type { CollabDocumentDeclaration } from './documents.js';
+export type { CollabDocumentDeclaration, DocumentParams } from './documents.js';
 export { defineDocument, matchDocumentPattern } from './documents.js';
 export { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 export {

@@ -21,7 +21,7 @@ import { documentKeyFromVfsKey, renderDocumentsRegistry } from './codegen/docume
  *
  * **Scope, stated plainly.** This hook only knows about the directory, which
  * only exists once `make:collab-document` created it. Documents declared the
- * other supported way — `defineDocument` inline in `config/collaboration.ts` —
+ * other supported way — inline under `documents` in `config/collaboration.ts` —
  * are invisible to it, and it early-returns generating nothing. For those,
  * derive the union from the config with `InferCollabDocumentNames<typeof
  * collaborationConfig>`; `defineConfig` is generic so the literal keys

@@ -70,7 +70,7 @@ Fill in `authorize`. The published config throws until you do — the library ne
 default:
 
 ```ts title="config/collaboration.ts"
-import { defineConfig, defineDocument, lucidStorage } from '@adonis-agora/collaboration'
+import { defineConfig, lucidStorage } from '@adonis-agora/collaboration'
 import Research from '#models/research'
 
 export default defineConfig({
@@ -78,7 +78,7 @@ export default defineConfig({
   storage: lucidStorage({ connection: 'primary' }),
 
   documents: {
-    'researches/:id/writing': defineDocument<{ id: string }>({
+    'researches/:id/writing': {
       async authorize(ctx, { params }) {
         const research = await Research.query()
           .where('id', params.id)
@@ -88,13 +88,14 @@ export default defineConfig({
         if (!research) return { canRead: false, canWrite: false, canComment: false }
         return { canRead: true, canWrite: true, canComment: true }
       },
-    }),
+    },
   },
 })
 ```
 
-The pattern's `:id` segment is extracted for you — no regex per connection, and the params are
-typed by the parameter you give `defineDocument`.
+The pattern's `:id` segment is extracted for you — no regex per connection — and `params.id` is
+typed `string` straight from the key. Nothing to declare twice: rename the segment and the
+`params` type follows.
 
 </Step>
 <Step>

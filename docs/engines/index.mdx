@@ -57,7 +57,7 @@ engineFor: (docName) => (docName.startsWith('archives/') ? 'automerge' : 'yjs'),
 
 // 2. Per declared document type
 documents: {
-  'whiteboards/:id': defineDocument({ engine: 'automerge' }),
+  'whiteboards/:id': { engine: 'automerge' },
 },
 
 // 3. The global default (and the fallback when nothing else matches)
