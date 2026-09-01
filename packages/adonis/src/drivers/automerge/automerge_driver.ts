@@ -1,9 +1,9 @@
 import * as A from '@automerge/automerge';
 import { next as ANext } from '@automerge/automerge';
 import { WebSocketServer } from 'ws';
-import { parseLegacyToken } from '../../auth/token.js';
+import { verifySelfHostedToken } from '../../auth/token.js';
 import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
-import { reportCollaborationError } from '../../observability.js';
+import { reportCollaborationError, reportCollaborationWarning } from '../../observability.js';
 import type {
   CollabDiffSummary,
   CollaborationStorage,
@@ -48,24 +48,97 @@ export class AutomergeDriver implements CollaborationDriver {
   private readonly options: SelfHostedDriverOptions;
   private readonly storage: CollaborationStorage;
   private persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Rooms being opened, by document name.
+   *
+   * `loadRoom` reads the storage before it registers the room, so two
+   * messages arriving on a cold document used to open it twice and the second
+   * `rooms.set` threw the first room — and its clients' merges — away. With a
+   * seeding `load` in the picture that stops being a lost update and becomes
+   * duplicated content, so the window has to close.
+   */
+  private roomLoads = new Map<string, Promise<Room>>();
 
   constructor(options: SelfHostedDriverOptions) {
     this.options = options;
     this.storage = resolveStorage(options.storage);
   }
 
-  private async loadRoom(docName: string): Promise<Room> {
-    let room = this.rooms.get(docName);
-    if (room) return room;
+  private loadRoom(docName: string): Promise<Room> {
+    const room = this.rooms.get(docName);
+    if (room) return Promise.resolve(room);
 
+    const loading = this.roomLoads.get(docName);
+    if (loading) return loading;
+
+    const opening = this.openRoom(docName);
+    this.roomLoads.set(docName, opening);
+    return opening.finally(() => this.roomLoads.delete(docName));
+  }
+
+  private async openRoom(docName: string): Promise<Room> {
     const stored = await this.storage.loadDocument(docName);
     const doc = stored
       ? A.load<Record<string, unknown>>(stored.state)
-      : A.from({ content: '' } as Record<string, unknown>);
+      : await this.seedDocument(docName);
 
-    room = { text: doc, clients: new Set() };
+    const room = { text: doc, clients: new Set<import('ws').WebSocket>() };
     this.rooms.set(docName, room);
     return room;
+  }
+
+  /**
+   * The document a name is born with: the declaration's `load`, else the
+   * empty `{ content: '' }` this driver has always started from.
+   *
+   * Automerge gets the hook for the same reason Yjs does — the room is the
+   * only copy the clients will ever see, so content that is not in it when
+   * the first client connects is content the first save will erase. What it
+   * does NOT get is the `Y.Doc` shortcut: seeds arrive here as `A.save(doc)`
+   * bytes, and anything else is a configuration mistake worth naming rather
+   * than a document worth guessing at.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
+  private async seedDocument(docName: string): Promise<any> {
+    const empty = () => A.from({ content: '' } as Record<string, unknown>);
+    if (!this.options.seedDocument) return empty();
+
+    let seed: Awaited<ReturnType<NonNullable<SelfHostedDriverOptions['seedDocument']>>>;
+    try {
+      seed = await this.options.seedDocument(docName);
+    } catch (error) {
+      // A failing seed opens the document empty; it must never close the
+      // connection, which the client would only retry.
+      reportCollaborationError({ scope: 'storage', operation: 'loadDocument', docName, error });
+      return empty();
+    }
+
+    if (!seed) return empty();
+    if (!(seed instanceof Uint8Array)) {
+      reportCollaborationWarning(
+        { docName },
+        `document "${docName}" runs on the automerge engine, but its load() returned a Y.Doc — ` +
+          'an Automerge seed is the bytes of A.save(doc). Opening the document empty.',
+      );
+      return empty();
+    }
+
+    let doc: unknown;
+    try {
+      doc = A.load<Record<string, unknown>>(seed);
+    } catch (error) {
+      reportCollaborationError({ scope: 'storage', operation: 'loadDocument', docName, error });
+      return empty();
+    }
+
+    // Persisted before it is served: without this the hook would run again on
+    // every cold room, and the app would pay the read every time.
+    try {
+      await this.storage.saveDocument(docName, seed);
+    } catch (error) {
+      reportCollaborationError({ scope: 'storage', operation: 'saveDocument', docName, error });
+    }
+    return doc;
   }
 
   private broadcast(room: Room, payload: Uint8Array, sender?: import('ws').WebSocket): void {
@@ -92,14 +165,30 @@ export class AutomergeDriver implements CollaborationDriver {
           return;
         }
 
-        // Authentication: base64 token in the query (?token=...&doc=...).
+        // Authentication: signed token in the query (?token=...&doc=...).
+        //
+        // Verified, not decoded. This used to accept the base64 of any JSON
+        // with a `userId` in it, which made the query string an identity
+        // claim anyone could write: no session, no cookie, no login — just
+        // `?token=base64({"userId":"<victim>"})` and the room opened as them.
+        // `docName` is the document this socket asked for, so the check also
+        // pins the token to it.
         const token = url.searchParams.get('token');
         if (!token) {
           ws.close(4001, 'not authenticated');
           return;
         }
 
-        const ctx = parseLegacyToken(token);
+        let ctx: Awaited<ReturnType<typeof verifySelfHostedToken>>;
+        try {
+          ctx = await verifySelfHostedToken(token, docName, this.options.tokenSecret);
+        } catch (error) {
+          // No signing key: a server misconfiguration, and a distinct answer
+          // from a rejected token so the logs say which one happened.
+          reportCollaborationError({ scope: 'authorize', operation: 'upgrade', docName, error });
+          ws.close(4503, 'authentication unavailable');
+          return;
+        }
         if (!ctx) {
           ws.close(4001, 'authentication failed');
           return;
@@ -259,9 +348,7 @@ export class AutomergeDriver implements CollaborationDriver {
     versionId: string,
     restoredBy: string | null,
   ): Promise<void> {
-    const bytes = await this.storage.loadVersionSnapshot(docName, versionId);
-    if (!bytes) throw new Error(`Version ${versionId} not found`);
-
+    const bytes = await this.getVersionState(docName, versionId);
     const snapshotDoc = A.load<Record<string, unknown>>(bytes);
     const room = await this.loadRoom(docName);
 
@@ -294,12 +381,18 @@ export class AutomergeDriver implements CollaborationDriver {
     await this.storage.saveDocument(docName, A.save(finalDoc));
   }
 
+  /** Binary state stored for a version (`A.save` of the doc at that point). */
+  async getVersionState(docName: string, versionId: string): Promise<Uint8Array> {
+    const persisted = await this.storage.loadVersionSnapshot(docName, versionId);
+    if (!persisted) throw new Error(`Version ${versionId} not found`);
+    return persisted;
+  }
+
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
     const [aBytes, bBytes] = await Promise.all([
-      this.storage.loadVersionSnapshot(docName, aId),
-      this.storage.loadVersionSnapshot(docName, bId),
+      this.getVersionState(docName, aId),
+      this.getVersionState(docName, bId),
     ]);
-    if (!aBytes || !bBytes) throw new Error('Version not found');
 
     const textOf = (bytes: Uint8Array) => {
       const doc = A.load<{ content?: { toString(): string } }>(bytes);

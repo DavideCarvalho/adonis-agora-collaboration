@@ -9,6 +9,7 @@ import {
 } from '../src/observability.js';
 import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.js';
 import type { CollaborationStorage } from '../src/types.js';
+import { TEST_TOKEN_SECRET, testToken } from './helpers/token.js';
 
 /**
  * The library took no logger and emitted no events, and both of its failure
@@ -39,10 +40,6 @@ function hooksOf(driver: YjsDriver): Hooks {
   return (driver as unknown as { hocuspocus: { configuration: Hooks } }).hocuspocus.configuration;
 }
 
-function token(userId: string): string {
-  return Buffer.from(JSON.stringify({ userId })).toString('base64');
-}
-
 /** Collects everything reported while the callback runs. */
 async function captured(run: () => Promise<void>): Promise<CollabErrorEvent[]> {
   const events: CollabErrorEvent[] = [];
@@ -68,7 +65,11 @@ afterEach(() => {
 
 describe('storage failures are surfaced', () => {
   it('reports a failed persist from onStoreDocument', async () => {
-    const driver = new YjsDriver({ authorize: allow, storage: failing });
+    const driver = new YjsDriver({
+      authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage: failing,
+    });
     const document = new Y.Doc();
 
     const events = await captured(async () => {
@@ -88,7 +89,11 @@ describe('storage failures are surfaced', () => {
   });
 
   it('reports a failed persist from beforeUnloadDocument — the F5 path', async () => {
-    const driver = new YjsDriver({ authorize: allow, storage: failing });
+    const driver = new YjsDriver({
+      authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage: failing,
+    });
     const document = new Y.Doc();
 
     const events = await captured(async () => {
@@ -106,7 +111,11 @@ describe('storage failures are surfaced', () => {
     const error = vi.fn();
     setCollaborationLogger({ error });
 
-    const driver = new YjsDriver({ authorize: allow, storage: failing });
+    const driver = new YjsDriver({
+      authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage: failing,
+    });
     await expect(
       hooksOf(driver).onStoreDocument({ documentName: DOC, document: new Y.Doc() }),
     ).rejects.toThrow();
@@ -119,7 +128,11 @@ describe('storage failures are surfaced', () => {
   });
 
   it('says nothing when the save succeeds', async () => {
-    const driver = new YjsDriver({ authorize: allow, storage: new InMemoryCollaborationStorage() });
+    const driver = new YjsDriver({
+      authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage: new InMemoryCollaborationStorage(),
+    });
 
     const events = await captured(async () => {
       await hooksOf(driver).onStoreDocument({ documentName: DOC, document: new Y.Doc() });
@@ -132,10 +145,18 @@ describe('storage failures are surfaced', () => {
 });
 
 describe('a denial and an outage are different answers at the handshake', () => {
-  const payload = { documentName: DOC, token: token('u_1'), connectionConfig: { readOnly: false } };
+  const payload = {
+    documentName: DOC,
+    token: testToken(DOC, 'u_1'),
+    connectionConfig: { readOnly: false },
+  };
 
   it('denies with CollabForbiddenError, and reports nothing', async () => {
-    const driver = new YjsDriver({ authorize: deny, storage: new InMemoryCollaborationStorage() });
+    const driver = new YjsDriver({
+      authorize: deny,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage: new InMemoryCollaborationStorage(),
+    });
 
     let thrown: unknown;
     const events = await captured(async () => {
@@ -158,6 +179,7 @@ describe('a denial and an outage are different answers at the handshake', () => 
       authorize: async () => {
         throw new Error('ECONNREFUSED 127.0.0.1:5432');
       },
+      tokenSecret: TEST_TOKEN_SECRET,
       storage: new InMemoryCollaborationStorage(),
     });
 
@@ -182,6 +204,7 @@ describe('a denial and an outage are different answers at the handshake', () => 
   it('binds the connection read-only when the rule grants read but not write', async () => {
     const driver = new YjsDriver({
       authorize: async () => ({ canRead: true, canWrite: false, canComment: true }),
+      tokenSecret: TEST_TOKEN_SECRET,
       storage: new InMemoryCollaborationStorage(),
     });
 

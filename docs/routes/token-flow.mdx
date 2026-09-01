@@ -1,6 +1,6 @@
 ---
 title: Token flow
-description: How a browser gets a credential a WebSocket can carry — the five steps, the two token formats, what happens when one expires, and how the reconnect loop turns expiry into revocation.
+description: How a browser gets a credential a WebSocket can carry — the five steps, what the signed token contains, where its key comes from, what happens when one expires, and how the reconnect loop turns expiry into revocation.
 icon: KeyRound
 ---
 
@@ -33,9 +33,10 @@ response, picks the matching transport and opens the socket; you never see steps
 
 ```json
 {
-  "token": "eyJ1c2VySWQiOiJ1XzEiLCJ1c2VyIjp7Im5hbWUiOiJKYW5lIn19",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ1XzEiLCJkb2NOYW1lIjoicmVzZWFyY2hlcy80Mi93cml0aW5nIiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjE3MDAwMDAzMDB9.OaJ0…",
   "wsUrl": "/collaboration",
-  "engine": "yjs"
+  "engine": "yjs",
+  "expiresAt": 1700000300000
 }
 ```
 
@@ -43,21 +44,50 @@ response, picks the matching transport and opens the socket; you never see steps
 protocol this document speaks. `wsUrl` is a relative path for self-hosted engines (the client
 resolves it against its base URL) and an absolute `wss://` origin for edge engines.
 
-## Two formats, two trust models
+## One format, two keys
 
-| Engine | Format | Verified by | Lifetime |
-| --- | --- | --- | --- |
-| `yjs`, `automerge` | base64 JSON of the connection context | the same Adonis process, on the handshake | until the socket closes |
-| `partykit`, `partyserver` | HS256 JWT over `{ userId, docName, iat, exp }` | the edge worker, with the shared secret | 5 minutes |
+| Engine | Format | Signed with | Verified by | Lifetime |
+| --- | --- | --- | --- | --- |
+| `yjs`, `automerge` | HS256 JWT over `{ userId, docName, user?, iat, exp }` | the app's own key (see below) | the same Adonis process, on the handshake | 5 minutes |
+| `partykit`, `partyserver` | the same JWT | `partykit.jwtSecret` | the edge worker | 5 minutes |
 
-The self-hosted token is **not a grant**. The process that issued it re-runs `authorize` when the
-socket arrives, so the token's contents are a claim about identity that the server then checks
-against its own rules. Tampering with it does not help: the re-check is what decides.
+Three things are checked before `authorize` is consulted, on every engine: the **signature**, the
+**expiry**, and the **document** — a token issued for `researches/42/writing` does not open
+`researches/43/writing`. The client picks the document name it connects to, so without that last
+check "may read one document" would quietly mean "may read every document".
 
-The edge JWT **is** a grant. A Durable Object has no database, cannot call `authorize`, and has
-nothing to check the claim against — so the signature has to carry the whole decision. That is why
-it is signed with a shared secret, expires in five minutes, and is scoped to a single document
-name. See [Edge engines](/docs/collaboration/engines/edge).
+The self-hosted token is *also* not a grant: the process that issued it re-runs `authorize` when
+the socket arrives, so a revocation between issue and connect still bites. The signature answers a
+different question — *who is this?* — and it is the question the old format could not answer.
+
+The edge JWT is a grant as well as an identity. A Durable Object has no database, cannot call
+`authorize`, and has nothing to check the claim against — so the signature carries the whole
+decision. See [Edge engines](/docs/collaboration/engines/edge).
+
+<Callout type="warn" title="Upgrading from 0.12 or earlier">
+The self-hosted token used to be an unsigned base64 of `{ userId }` with no expiry. Anyone could
+write one: no session, no cookie, no login — send someone else's id and the handshake authorized
+you as them, on any document. Tokens in that format are no longer accepted. Clients reconnect and
+fetch a new one, so the visible cost of upgrading is one reconnect.
+</Callout>
+
+## Where the signing key comes from
+
+Nothing to configure in a normal app: the library derives its key from the app's `appKey`
+(domain-separated, so the same bytes are not doing double duty as a cookie signer). It resolves, in
+order:
+
+1. `tokenSecret` passed to `CollaborationManager` (how a test or a non-Adonis embedder supplies one);
+2. `tokenSecret` in `config/collaboration.ts`;
+3. the app's `appKey`.
+
+With none of the three the library **refuses to issue and refuses to accept** tokens, and says so —
+there is no fallback to an unsigned format, because a fallback is how the old hole would come back.
+The issuer and the driver read the same source through the manager, so they cannot end up on
+different keys.
+
+Rotating the key invalidates every outstanding token; clients fetch a new one on their next
+reconnect.
 
 ## Expiry is the feature
 
@@ -85,6 +115,64 @@ If it *throws* — the database it queries is down — that is reported as a
 [the error stream](/docs/collaboration/troubleshooting). The distinction matters: a client told
 "forbidden" should stop, and a client told "unavailable" may back off and retry, which is the
 difference between a blip and a reconnect storm.
+</Callout>
+
+## Issuing it before the browser asks
+
+Steps 1 to 4 are a round-trip to a server that, moments earlier, rendered the page — and already knew
+every part of the answer. `issueCollaborationToken` lets that render hand the token over directly, so
+the browser opens the socket on mount instead of waiting for an HTTP request first:
+
+```ts title="app/controllers/writing_controller.ts"
+import { issueCollaborationToken } from '@adonis-agora/collaboration'
+
+export default class WritingController {
+  async show(ctx: HttpContext) {
+    const docName = `researches/${ctx.params.id}/writing`
+    const collabToken = await issueCollaborationToken({ ctx, docName })
+
+    return ctx.inertia.render('writing', { docName, collabToken })
+  }
+}
+```
+
+```tsx title="inertia/pages/writing.tsx"
+<CollaborationProvider initialTokens={{ [docName]: collabToken }}>
+  <Editor docName={docName} />
+</CollaborationProvider>
+```
+
+`useCollabDoc({ docName, token })` takes one directly too. Prefer `initialTokens` when more than one
+hook touches the same document (`useAwareness`, `useCollabEditor`): whichever mounts first is the one
+that creates the session, and the provider's token is available to all of them.
+
+It is the **same** token. `issueCollaborationToken` runs `authorize`, resolves the document's engine
+through the manager and builds `wsUrl` exactly as the route does — a credential minted from a
+controller is indistinguishable from one the endpoint would have issued for the same caller. A
+shortcut that skipped the permission check because it was reached from a controller would not be a
+shortcut, it would be a hole.
+
+It **throws** instead of returning a response, because in a page controller there is no response to
+return: `CollabUnauthorizedError` with no caller, `CollabForbiddenError` when `authorize` denies
+`canRead`. Letting both bubble fails the render, which is the honest outcome — an editor rendered for
+someone who may not read the document is worse than an error page.
+
+Pass `user` instead of `ctx` when the controller already resolved the caller:
+
+```ts
+await issueCollaborationToken({ user: { id: String(user.id), name: user.fullName }, docName })
+```
+
+<Callout title="Used once, on purpose">
+A pre-issued token covers the **first** connection and nothing else. Reconnects go back to
+`GET /collaboration/token`, because a token minted at render time is precisely the one that has
+expired by the time a socket drops an hour later — and because re-fetching is what re-runs
+`authorize`, which is what makes revocation take effect at all.
+
+A pre-issued token that is malformed or already expired is discarded by the client, which then
+fetches one as it always did. The response carries `expiresAt` for the formats that have an expiry,
+so a page prop that sat in a sleeping tab can be recognised as dead without opening a socket to find
+out. A bad prop can cost the first paint; it can never leave the document unable to connect.
 </Callout>
 
 ## Failure modes

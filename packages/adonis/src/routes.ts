@@ -1,11 +1,17 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { type AuthorizeFn, CollabForbiddenError, issueToken } from './auth/token.js';
+import {
+  type AuthorizeFn,
+  CollabForbiddenError,
+  type IssuedToken,
+  issueToken,
+} from './auth/token.js';
 import {
   type CollabHttpContext,
   type CollabManagerLike,
   type CollabRoutesRuntime,
   type CollabRouteUser,
   CollabUnauthorizedError,
+  type ResolveUserFn,
 } from './http/types.js';
 import type { CollabPermission } from './types.js';
 
@@ -68,6 +74,7 @@ interface AppConfigShape {
   path?: string;
   partykit?: { roomHost?: string; jwtSecret?: string; party?: string };
   authorize?: AuthorizeFn;
+  routes?: { resolveUser?: ResolveUserFn };
 }
 
 let cachedAppConfig: AppConfigShape | undefined;
@@ -234,6 +241,52 @@ function isDenied(result: object): result is { denied: unknown } {
 
 /* ───────────────────────────── handlers ───────────────────────────── */
 
+/**
+ * The whole of what issuing a credential means here: the document's engine
+ * (per-document, via the manager), the browser-facing ws URL, and `authorize`
+ * enforced before anything is signed.
+ *
+ * Extracted so the HTTP route and {@link issueCollaborationToken} cannot
+ * drift: a token minted outside the route has to be the same token, checked
+ * the same way, or the pre-issued path becomes a way around the permission
+ * seam.
+ */
+async function issueFor(
+  runtime: Runtime,
+  user: CollabRouteUser,
+  docName: string,
+): Promise<IssuedToken> {
+  const settings = await runtime.settings();
+  const manager = await runtime.manager();
+  const engine = manager.engineFor ? await manager.engineFor({ docName }) : settings.engine;
+
+  // Asked of the manager, not resolved here: the manager is what the driver's
+  // handshake verifies against, and a second resolution order living in the
+  // routes is how an app ends up signing with one key and checking with
+  // another. A manager with no opinion (a test double) leaves it undefined and
+  // `issueToken` falls back to the same config/appKey lookup the driver does.
+  //
+  // Skipped for the edge engine, which signs with `partykit.jwtSecret`: asking
+  // for a key it will not use would fail a partykit-only deployment that never
+  // configured one.
+  const selfHostedSecret =
+    engine === 'partykit' || engine === 'partyserver' || !manager.tokenSecret
+      ? undefined
+      : await manager.tokenSecret();
+
+  return issueToken(
+    {
+      engine,
+      path: settings.path,
+      partykit: settings.partykit,
+      ...(selfHostedSecret ? { tokenSecret: selfHostedSecret } : {}),
+    },
+    user,
+    docName,
+    runtime.authorize,
+  );
+}
+
 async function handleToken(
   ctx: CollabHttpContext,
   runtime: Runtime,
@@ -258,15 +311,7 @@ async function handleToken(
   }
 
   try {
-    const settings = await runtime.settings();
-    const manager = await runtime.manager();
-    const engine = manager.engineFor ? await manager.engineFor({ docName }) : settings.engine;
-    return await issueToken(
-      { engine, path: settings.path, partykit: settings.partykit },
-      user,
-      docName,
-      runtime.authorize,
-    );
+    return await issueFor(runtime, user, docName);
   } catch (error) {
     if (error instanceof CollabForbiddenError) {
       return ctx.response.status(403).json({ error: error.message });
@@ -541,6 +586,38 @@ function registerRoute(
 }
 
 /**
+ * Auth stacks that never populate `ctx.auth.user`.
+ *
+ * `@adonis-agora/authkit` resolves the user **on demand**: `check()` verifies
+ * the session and returns `true`, but the user itself only materialises when
+ * something asks for it — `getUserOrFail()`, which is what the app's own
+ * controllers call. Reading `auth.user` after `check()` therefore finds
+ * `undefined`, and this resolver answered 401 for a caller the app considered
+ * perfectly authenticated. Every app hitting it wrote the same three-line
+ * `resolveUser` by hand.
+ *
+ * `getUser()` is tried first because it reports absence by returning nothing;
+ * `getUserOrFail()` reports it by throwing, and a throw here is still just an
+ * absent user — never a 500.
+ */
+async function resolveUserOnDemand(auth: {
+  getUser?(): unknown;
+  getUserOrFail?(): unknown;
+}): Promise<unknown> {
+  for (const method of ['getUser', 'getUserOrFail'] as const) {
+    const resolver = auth[method];
+    if (typeof resolver !== 'function') continue;
+    try {
+      const resolved = await resolver.call(auth);
+      if (resolved) return resolved;
+    } catch {
+      // Absent user, reported as 401 by the caller.
+    }
+  }
+  return undefined;
+}
+
+/**
  * Default auth resolution.
  *
  * Reads `ctx.auth.user` — but *authenticates first* when the auth stack has
@@ -550,7 +627,16 @@ function registerRoute(
  * `/collaboration` prefix. Here `check()` is preferred because it reports
  * failure by returning `false` instead of throwing.
  *
- * Still fails closed: no user, no request.
+ * Then, when `auth.user` is *still* empty, it asks the guard for the user
+ * instead of assuming the guard would have left it lying around — see
+ * {@link resolveUserOnDemand}. Both steps are needed: one auth stack fills
+ * `user` as a side effect of `check()`, another only answers a direct
+ * question, and this resolver exists precisely so no app has to know which
+ * one it installed.
+ *
+ * Still fails closed. No user is a 401, an id that stringifies to nothing is
+ * a 401 (an "empty" user must never reach `authorize`, where a blank id could
+ * match a rule), and no path out of here is a 500.
  */
 export const defaultResolveUser: NonNullable<CollabRoutesRuntime['resolveUser']> = async (ctx) => {
   const auth = ctx.auth as
@@ -559,6 +645,8 @@ export const defaultResolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>
         isAuthenticated?: boolean;
         check?(): Promise<boolean>;
         authenticate?(): Promise<unknown>;
+        getUser?(): unknown;
+        getUserOrFail?(): unknown;
       }
     | undefined;
 
@@ -575,11 +663,110 @@ export const defaultResolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>
     }
   }
 
-  const user = auth?.user as { id?: unknown; name?: unknown } | undefined;
-  if (!user || user.id === undefined || user.id === null) {
+  let user = auth?.user as { id?: unknown; name?: unknown } | undefined;
+  if (auth && !user) {
+    user = (await resolveUserOnDemand(auth)) as { id?: unknown; name?: unknown } | undefined;
+  }
+
+  const id = user?.id === undefined || user?.id === null ? '' : String(user.id).trim();
+  if (!user || !id) {
     throw new CollabUnauthorizedError(
       'no authenticated user on context — protect these routes with your auth middleware or provide routes.resolveUser in config/collaboration.ts',
     );
   }
-  return { id: String(user.id), name: (user.name as string | undefined) ?? null };
+  return { id, name: (user.name as string | undefined) ?? null };
 };
+
+/* ──────────────────────── pre-issued tokens ──────────────────────── */
+
+/** Who the credential is for, and on which document. */
+export interface IssueCollaborationTokenInput {
+  docName: string;
+  /**
+   * The caller, when the app already resolved it (a controller that has
+   * `auth.user` in hand). Takes precedence over `ctx`.
+   */
+  user?: CollabRouteUser;
+  /**
+   * The request, when the lib should resolve the caller — with the same
+   * resolver the routes use: `routes.resolveUser` from
+   * `config/collaboration.ts`, else {@link defaultResolveUser}.
+   */
+  ctx?: CollabHttpContext;
+}
+
+/** Runtime overrides; every one of them defaults exactly as the routes do. */
+export type IssueCollaborationTokenOptions = Omit<CollabRoutesRuntime, 'prefix' | 'middleware'> & {
+  managerFallback?: () => Promise<CollabManagerLike>;
+};
+
+/**
+ * Issues a document credential **outside** the token route.
+ *
+ * The problem it removes: `GET /collaboration/token` and the WebSocket are
+ * serialized. The browser cannot open the socket until the token comes back,
+ * so the first byte of the document is two round-trips away — and one of them
+ * is an HTTP request to the same server that just rendered the page and
+ * already knew everything the answer needed.
+ *
+ * Call this while rendering, hand the result to the page, and the client
+ * opens the socket on mount:
+ *
+ * ```ts
+ * // app/controllers/writing_controller.ts
+ * import { issueCollaborationToken } from '@adonis-agora/collaboration'
+ *
+ * const docName = `researches/${research.id}/writing`
+ * const collabToken = await issueCollaborationToken({ ctx, docName })
+ * return ctx.inertia.render('writing', { docName, collabToken })
+ * ```
+ *
+ * ```tsx
+ * <CollaborationProvider initialTokens={{ [docName]: collabToken }}>
+ * ```
+ *
+ * **It is the same token, checked the same way.** Engine resolution, `wsUrl`
+ * and `authorize` all come from {@link issueFor} — the function the route
+ * calls. A door that skipped the permission check because it was opened from
+ * a controller instead of a request would not be a shortcut, it would be a
+ * hole.
+ *
+ * Throws rather than returning a response, because there is no response here
+ * to return: {@link CollabUnauthorizedError} with no caller,
+ * {@link CollabForbiddenError} when `authorize` denies `canRead`. Let both
+ * bubble in a page controller and the page fails to render, which is the
+ * honest outcome — an editor rendered for someone who may not read the
+ * document is worse than an error.
+ *
+ * The result carries `engine` and `wsUrl` alongside the token: a bare token
+ * string is not enough for the client to build a transport, and asking it to
+ * fetch the missing halves would put back the round-trip this removes.
+ */
+export async function issueCollaborationToken(
+  input: IssueCollaborationTokenInput,
+  options: IssueCollaborationTokenOptions = {},
+): Promise<IssuedToken> {
+  const { docName } = input;
+  if (!docName || typeof docName !== 'string') {
+    throw new TypeError('issueCollaborationToken: "docName" is required');
+  }
+  if (!input.user && !input.ctx) {
+    throw new TypeError('issueCollaborationToken: pass either "user" or "ctx"');
+  }
+
+  const runtime = resolveRuntime(options, options.managerFallback);
+
+  let user: CollabRouteUser | null = input.user ?? null;
+  if (!user && input.ctx) {
+    const appConfig = await readAppConfig();
+    const resolveUser = options.resolveUser ?? appConfig.routes?.resolveUser ?? defaultResolveUser;
+    // A resolver that throws CollabUnauthorizedError already says the right
+    // thing; anything else is a genuine failure and stays a failure.
+    user = (await resolveUser(input.ctx)) ?? null;
+  }
+  if (!user) {
+    throw new CollabUnauthorizedError();
+  }
+
+  return issueFor(runtime, user, docName);
+}

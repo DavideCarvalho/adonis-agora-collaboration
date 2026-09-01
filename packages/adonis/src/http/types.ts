@@ -22,15 +22,22 @@ export interface CollabHttpContext {
     header(name: string, value: string): unknown;
   };
   /**
-   * Present when @adonisjs/auth is installed. `user` is only populated once
-   * the guard actually ran, so the default resolver calls `check()` (or
-   * `authenticate()`) itself before reading it.
+   * Present when @adonisjs/auth (or a compatible stack) is installed.
+   *
+   * `user` is only populated once the guard actually ran, so the default
+   * resolver calls `check()` (or `authenticate()`) itself before reading it —
+   * and then falls back to `getUser()`/`getUserOrFail()`, because a guard may
+   * resolve the user on demand and never populate `user` at all (authkit).
    */
   auth?: {
     user?: unknown;
     isAuthenticated?: boolean;
     check?(): Promise<boolean>;
     authenticate?(): Promise<unknown>;
+    /** On-demand resolution; absence is reported by returning nothing. */
+    getUser?(): unknown;
+    /** On-demand resolution; absence is reported by throwing. */
+    getUserOrFail?(): unknown;
   };
 }
 
@@ -71,6 +78,17 @@ export interface CollabManagerLike {
     ctx: { userId: string; user?: { name?: string; avatarUrl?: string | null } },
     docName: string,
   ): Promise<CollabPermission>;
+  /**
+   * The key this app signs collaboration tokens with — the same one the
+   * WebSocket handshake verifies against.
+   *
+   * Asked of the manager for the same reason `authorize` is: both ends of the
+   * credential have to resolve it identically, and a route that resolved it
+   * on its own would eventually sign with a key the driver does not accept —
+   * which shows up as every handshake failing, with nothing in the logs
+   * naming the cause.
+   */
+  tokenSecret?(): Promise<string>;
   getDocumentState(options: { docName: string }): Promise<Uint8Array>;
   createVersion(options: {
     docName: string;

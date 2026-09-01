@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { usablePreIssuedToken } from './pre_issued_token.js';
 import { fetchToken } from './rest_client.js';
 import { defaultTransportFactory } from './transports/index.js';
 import type {
@@ -73,6 +74,13 @@ export interface DocSessionRegistry {
 
 export interface DocSessionOptions {
   registry?: DocSessionRegistry;
+  /**
+   * Token the server already issued for this document (SSR/Inertia prop),
+   * used **once** for the first connection. Falls back to
+   * `config.initialTokens[docName]` when omitted, and to the HTTP endpoint
+   * when neither is usable.
+   */
+  initialToken?: CollabTokenInfo | null | undefined;
 }
 
 /**
@@ -104,6 +112,21 @@ export interface DocSessionOptions {
  * Ephemeral tokens expire, so on `disconnected` (after having connected at
  * least once) the transport is torn down and rebuilt with a fresh token,
  * using exponential backoff.
+ *
+ * ## Pre-issued token
+ *
+ * The first connection may skip the token request entirely when the server
+ * issued one while rendering the page (`issueCollaborationToken`) — that is
+ * one whole round-trip removed from the path between opening a page and
+ * seeing its text.
+ *
+ * It is used **once**, and deliberately: reconnects go back to the HTTP
+ * endpoint, because a token minted at render time is exactly the thing that
+ * has expired by the time a socket drops an hour later, and because
+ * re-fetching is what re-runs `authorize` and makes revocation take effect.
+ * A pre-issued token that is malformed or already dead is dropped by
+ * {@link usablePreIssuedToken} and the session fetches one like it always
+ * did — a bad page prop can slow the first paint, never block the document.
  */
 export class DocSession {
   readonly docName: string;
@@ -124,11 +147,13 @@ export class DocSession {
   #engine: string | undefined;
   #registry: DocSessionRegistry | undefined;
   #snapshot: DocSessionSnapshot | undefined;
+  #preIssuedToken: CollabTokenInfo | undefined;
 
   constructor(docName: string, config: CollaborationClientConfig, options?: DocSessionOptions) {
     this.docName = docName;
     this.#config = config;
     this.#registry = options?.registry;
+    this.#preIssuedToken = options?.initialToken ?? config.initialTokens?.[docName] ?? undefined;
     this.doc = new Y.Doc();
   }
 
@@ -266,7 +291,14 @@ export class DocSession {
     const generation = this.#generation;
     const stale = () => this.#destroyed || this.#detached || generation !== this.#generation;
     try {
-      const info = await fetchToken(this.#config, this.docName);
+      // Single use, and consumed even when unusable: a token that was already
+      // expired at render time stays expired, and re-examining it on every
+      // reconnect only delays the fetch that actually works.
+      const preIssued = this.#preIssuedToken;
+      this.#preIssuedToken = undefined;
+
+      const info =
+        usablePreIssuedToken(preIssued) ?? (await fetchToken(this.#config, this.docName));
       this.#engine = info.engine;
       if (stale()) return;
 

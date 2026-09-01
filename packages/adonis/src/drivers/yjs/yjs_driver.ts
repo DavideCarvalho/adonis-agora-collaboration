@@ -1,4 +1,4 @@
-import type { onConnectPayload, onDisconnectPayload } from '@hocuspocus/server';
+import type { connectedPayload, onDisconnectPayload } from '@hocuspocus/server';
 import {
   Hocuspocus,
   type onAuthenticatePayload,
@@ -10,11 +10,17 @@ import * as Y from 'yjs';
 import {
   CollabAuthorizationError,
   CollabForbiddenError,
-  parseLegacyToken,
+  verifySelfHostedToken,
 } from '../../auth/token.js';
-import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
+import type { CollabDocumentSeed } from '../../documents.js';
+import type {
+  CollaborationDriver,
+  LiveDocumentDriver,
+  SelfHostedDriverOptions,
+} from '../../driver.js';
 import { reportCollaborationError } from '../../observability.js';
 import type {
+  CollabConnectionContext,
   CollabDiffSummary,
   CollaborationStorage,
   CollabPermission,
@@ -49,7 +55,7 @@ function toUint8Array(data: RawData): Uint8Array {
  *  - Anchored comments: delegate to the CommentService (generic anchor).
  */
 
-export class YjsDriver implements CollaborationDriver {
+export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
   readonly engine = 'yjs';
 
   private hocuspocus: Hocuspocus;
@@ -76,9 +82,106 @@ export class YjsDriver implements CollaborationDriver {
      */
     const presenceBySocket = new Map<string, { documentName: string; userId: string }>();
 
+    /**
+     * Seeds in flight, by document name.
+     *
+     * Hocuspocus already serialises its own `createDocument` per name (it
+     * keeps a `loadingDocuments` promise), so two browsers opening the same
+     * new document share one load. That is the only caller today, and it is
+     * exactly the caller we cannot rely on: `onLoadDocument` is a plain
+     * function on the configuration and anything holding the driver can run
+     * it. A second seed is not a harmless repeat — two CRDT updates carrying
+     * the same paragraph merge into two paragraphs, and the app sees its
+     * content duplicated. So the guard lives here too, where the write is.
+     *
+     * In-flight only, not a memo: once the seed is persisted the storage
+     * answers for it, and a `load` that had nothing to give should be asked
+     * again the next time the document is opened.
+     */
+    const seedsInFlight = new Map<string, Promise<Uint8Array | undefined>>();
+
+    const seedDocumentOnce = async (documentName: string): Promise<Uint8Array | undefined> => {
+      const seed = options.seedDocument;
+      if (!seed) return undefined;
+
+      const inFlight = seedsInFlight.get(documentName);
+      if (inFlight) return inFlight;
+
+      const seeding = (async () => {
+        let update: Uint8Array | undefined;
+        try {
+          update = seedUpdate(await seed(documentName));
+        } catch (error) {
+          // The app's `load` failed. Reported, never rethrown: Hocuspocus
+          // turns a throwing onLoadDocument into a closed connection, and a
+          // client cannot tell that apart from a denial — it just reconnects,
+          // forever, running the failing query again each time.
+          reportCollaborationError({
+            scope: 'storage',
+            operation: 'loadDocument',
+            docName: documentName,
+            error,
+          });
+          return undefined;
+        }
+        if (!update) return undefined;
+
+        // Persisted before it is served, so the hook is a one-off per
+        // document instead of a read the app pays for on every connection.
+        // It cannot ride on `onStoreDocument`: the seed is applied while the
+        // document is still loading, before Hocuspocus subscribes to updates,
+        // so nothing marks it dirty and nothing would ever flush it.
+        try {
+          await storage.saveDocument(documentName, update);
+        } catch (error) {
+          reportCollaborationError({
+            scope: 'storage',
+            operation: 'saveDocument',
+            docName: documentName,
+            error,
+          });
+        }
+        return update;
+      })();
+
+      seedsInFlight.set(documentName, seeding);
+      try {
+        return await seeding;
+      } finally {
+        seedsInFlight.delete(documentName);
+      }
+    };
+
     this.hocuspocus = new Hocuspocus({
+      /**
+       * The one place identity is established on this transport.
+       *
+       * The token must be **verified**, not decoded: it used to be a bare
+       * base64 of `{ userId }`, so a client with no session at all could send
+       * the id of anyone it wanted and be authorized as them. Now the
+       * signature, the expiry and the document binding are all checked before
+       * `authorize` is asked anything — and `documentName` comes from the
+       * connection, so a token minted for one document cannot open another.
+       *
+       * What it returns becomes the connection's `context` (Hocuspocus merges
+       * a hook's resolved value into it), which is how every later hook gets
+       * the verified identity instead of re-reading the wire.
+       */
       async onAuthenticate({ documentName, token, connectionConfig }: onAuthenticatePayload) {
-        const ctx = parseLegacyToken(token);
+        let ctx: Awaited<ReturnType<typeof verifySelfHostedToken>>;
+        try {
+          ctx = await verifySelfHostedToken(token, documentName, options.tokenSecret);
+        } catch (error) {
+          // No signing key configured. A server misconfiguration, not a bad
+          // client — reported as such, and still fatal to the handshake.
+          reportCollaborationError({
+            scope: 'authorize',
+            operation: 'onAuthenticate',
+            docName: documentName,
+            error,
+          });
+          throw error;
+        }
         if (!ctx) throw new Error('invalid token');
 
         // "You may not" and "we could not tell" are different answers, and a
@@ -103,11 +206,22 @@ export class YjsDriver implements CollaborationDriver {
         // told it may not write can simply not ask. Hocuspocus drops inbound
         // updates on a read-only connection while still syncing outbound.
         connectionConfig.readOnly = !permission.canWrite;
+
+        return { collab: ctx };
       },
 
-      async onConnect({ documentName, requestParameters, socketId }: onConnectPayload) {
-        const token = requestParameters.get('token');
-        const ctx = token ? parseLegacyToken(token) : null;
+      /**
+       * Presence, from the identity the handshake already proved.
+       *
+       * It used to live in `onConnect` and re-parse `?token=` off the query
+       * string — a second, unauthenticated decode, so the roster would show
+       * whoever the client claimed to be even once `onAuthenticate` started
+       * checking signatures. `connected` runs after authentication and gets
+       * the verified context, and it is the hook that pairs with
+       * `onDisconnect`: a connection that reaches one reaches the other.
+       */
+      async connected({ documentName, socketId, context }: connectedPayload) {
+        const ctx = (context as { collab?: CollabConnectionContext } | undefined)?.collab;
         if (options.presence && ctx?.userId) {
           presenceBySocket.set(socketId, { documentName, userId: ctx.userId });
           await options.presence.join(documentName, {
@@ -136,13 +250,23 @@ export class YjsDriver implements CollaborationDriver {
       // Seed each in-memory doc from the persisted state: without this hook the
       // Hocuspocus doc starts EMPTY on every connection, so a previously saved
       // document comes back blank to clients (and is then overwritten on save).
+      //
+      // Nothing persisted means the document is being opened for the first
+      // time — the one moment the declaration's `load` gets to say what it
+      // should contain. A document that already has state never reaches it.
+      //
+      // The RETURN TYPE is load-bearing: Hocuspocus 4 applies what this hook
+      // resolves to only when it is a `Y.Doc` or a `Uint8Array` (server line
+      // 1477), and drops anything else without a word. This used to return
+      // `{ document }` — the v1 shape — so the hook ran, read the right bytes
+      // and handed them to a branch that ignored them: every socket got the
+      // empty document the persistence fix was written to prevent, and only a
+      // test that called the hook directly could still see it "working".
       async onLoadDocument({ documentName }: onLoadDocumentPayload) {
         const stored = await storage.loadDocument(documentName);
-        if (stored?.state && stored.state.byteLength > 0) {
-          const doc = new Y.Doc();
-          Y.applyUpdate(doc, stored.state);
-          return { document: doc };
-        }
+        if (stored?.state && stored.state.byteLength > 0) return stored.state;
+
+        return seedDocumentOnce(documentName);
       },
 
       async onStoreDocument({ documentName, document }) {
@@ -186,7 +310,17 @@ export class YjsDriver implements CollaborationDriver {
     });
   }
 
-  private liveDoc(name: string): Y.Doc | undefined {
+  /**
+   * The live document, or `undefined` when this process has none open.
+   *
+   * Public because the alternative was worse: apps that have to merge an
+   * external change into what people are currently typing were reaching
+   * `hocuspocus.documents` through a cast on a private field, and a private
+   * name that a consumer depends on is a public name with none of the
+   * guarantees. Reach it through `manager.withLiveDocument` rather than the
+   * driver — see {@link LiveDocumentDriver}.
+   */
+  liveDocument(name: string): Y.Doc | undefined {
     // The Hocuspocus document extends Y.Doc directly.
     return this.hocuspocus.documents.get(name);
   }
@@ -200,7 +334,7 @@ export class YjsDriver implements CollaborationDriver {
   }
 
   private async ensureDoc(name: string): Promise<Y.Doc> {
-    const existing = this.liveDoc(name);
+    const existing = this.liveDocument(name);
     if (existing) return existing;
 
     const stored = await this.storage.loadDocument(name);
@@ -246,7 +380,7 @@ export class YjsDriver implements CollaborationDriver {
   }
 
   async getDocumentState(docName: string): Promise<Uint8Array> {
-    const live = this.liveDoc(docName);
+    const live = this.liveDocument(docName);
     if (live) {
       return Y.encodeStateAsUpdate(live);
     }
@@ -299,7 +433,7 @@ export class YjsDriver implements CollaborationDriver {
   ): Promise<void> {
     // Resolve the target first: a missing version must fail before anything
     // is written, so a bad id never lands a spurious version in the history.
-    const state = await this.versionState(docName, versionId);
+    const state = await this.getVersionState(docName, versionId);
     const restoredDoc = this.hydrate(state);
 
     const live = await this.ensureDoc(docName);
@@ -327,8 +461,8 @@ export class YjsDriver implements CollaborationDriver {
 
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
     const [aState, bState] = await Promise.all([
-      this.versionState(docName, aId),
-      this.versionState(docName, bId),
+      this.getVersionState(docName, aId),
+      this.getVersionState(docName, bId),
     ]);
 
     const textA = tiptapJsonToText(safeTiptapFromYdoc(this.hydrate(aState)));
@@ -337,7 +471,8 @@ export class YjsDriver implements CollaborationDriver {
     return lineDiff(textA, textB);
   }
 
-  private async versionState(docName: string, versionId: string): Promise<Uint8Array> {
+  /** Binary state stored for a version. Throws when the id is unknown. */
+  async getVersionState(docName: string, versionId: string): Promise<Uint8Array> {
     const persisted = await this.storage.loadVersionSnapshot(docName, versionId);
     if (!persisted) throw new Error(`Version ${versionId} not found`);
     return persisted;
@@ -356,6 +491,28 @@ export class YjsDriver implements CollaborationDriver {
 }
 
 /* ───────────────────────── local helpers ───────────────────────── */
+
+/**
+ * Normalises what a declaration's `load` returned into a Yjs update.
+ *
+ * A `Uint8Array` is already one. Everything else is taken as the `Y.Doc` the
+ * type allows and encoded — deliberately without an `instanceof Y.Doc` check
+ * on the way, because an app that ends up with a second copy of `yjs` in its
+ * tree (a transformer pinned to another minor) produces documents that fail
+ * `instanceof` while encoding perfectly well, and a failed check here would
+ * silently seed nothing at all.
+ *
+ * A zero-byte update is treated as no seed: applying it is a no-op, and
+ * persisting it would tell every later connection that this document has
+ * already been seeded. An *empty document* is not the same thing — it encodes
+ * to a real (2-byte) update and does count as seeded, which is why `load`
+ * returns `null` for "there is nothing", not an empty doc.
+ */
+function seedUpdate(seed: CollabDocumentSeed): Uint8Array | undefined {
+  if (!seed) return undefined;
+  const update = seed instanceof Uint8Array ? seed : Y.encodeStateAsUpdate(seed);
+  return update.byteLength > 0 ? update : undefined;
+}
 
 function safeTiptapFromYdoc(doc: Y.Doc): Record<string, unknown> {
   try {

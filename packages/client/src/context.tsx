@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext, useMemo, useRef } from 'react';
 import { DocSession } from './session.js';
-import type { CollaborationClientConfig } from './types.js';
+import type { CollaborationClientConfig, CollabTokenInfo } from './types.js';
 
 interface CollaborationContextValue {
   /** Sempre retorna o config mais recente do render atual. */
@@ -28,6 +28,11 @@ export interface CollaborationProviderProps extends CollaborationClientConfig {
  *   <Editor docName="researches/42/writing" />
  * </CollaborationProvider>
  * ```
+ *
+ * `initialTokens` entrega tokens que o server já emitiu ao renderizar a
+ * página, um por docName: a primeira conexão abre o socket direto, sem o
+ * `GET /collaboration/token` na frente. Reconexão continua buscando token
+ * novo por HTTP.
  */
 export function CollaborationProvider({ children, ...config }: CollaborationProviderProps) {
   const sessionsRef = useRef<Map<string, DocSession> | null>(null);
@@ -58,6 +63,16 @@ export function useCollaborationContext(): CollaborationContextValue {
   return context;
 }
 
+/** Opções aplicadas só quando a sessão é **criada**. */
+export interface GetOrCreateSessionOptions {
+  /**
+   * Token pré-emitido pelo server para a primeira conexão. Ignorado quando a
+   * sessão já existe: ela já está conectada (ou reconectando com token
+   * próprio), e um token de renderização não tem nada a acrescentar ali.
+   */
+  initialToken?: CollabTokenInfo | null | undefined;
+}
+
 /**
  * Pega ou cria a sessão do documento (1 Y.Doc por docName).
  *
@@ -69,12 +84,14 @@ export function useCollaborationContext(): CollaborationContextValue {
 export function getOrCreateSession(
   context: CollaborationContextValue,
   docName: string,
+  options?: GetOrCreateSessionOptions,
 ): DocSession {
   const existing = context.sessions.get(docName);
   if (existing && !existing.isDestroyed) return existing;
 
   const session = new DocSession(docName, context.getConfig(), {
     registry: context.sessions,
+    ...(options?.initialToken ? { initialToken: options.initialToken } : {}),
   });
   context.sessions.set(docName, session);
   return session;

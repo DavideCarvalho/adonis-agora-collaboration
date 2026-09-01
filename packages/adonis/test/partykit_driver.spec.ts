@@ -23,7 +23,7 @@ function makeConfig(overrides?: Partial<PartyKitDriverOptions>): PartyKitDriverO
 describe('PartyKit JWT helpers', () => {
   it('signs and verifies a valid token', () => {
     const token = signPartyKitToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
-    const claims = verifyPartyKitToken(token, SECRET);
+    const claims = verifyPartyKitToken(token, SECRET, 'docs/1');
     expect(claims?.userId).toBe('u1');
     expect(claims?.docName).toBe('docs/1');
     expect(claims!.exp).toBeGreaterThan(Date.now() / 1000);
@@ -31,18 +31,28 @@ describe('PartyKit JWT helpers', () => {
 
   it('rejects a token signed with the wrong secret', () => {
     const token = signPartyKitToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
-    expect(verifyPartyKitToken(token, 'wrong-secret-aaaaaaaaaaaaa')).toBeNull();
+    expect(verifyPartyKitToken(token, 'wrong-secret-aaaaaaaaaaaaa', 'docs/1')).toBeNull();
   });
 
   it('rejects an expired token', () => {
     const token = signPartyKitToken({ userId: 'u1', docName: 'd' }, SECRET, -10);
-    expect(verifyPartyKitToken(token, SECRET)).toBeNull();
+    expect(verifyPartyKitToken(token, SECRET, 'd')).toBeNull();
+  });
+
+  it('rejects a perfectly valid token presented for another room', () => {
+    // The room IS the document on the edge. A token the caller is entitled to
+    // — their own, signed by us, unexpired — must not open a room it was not
+    // issued for, or "may read document A" silently becomes "may read every
+    // room on the worker".
+    const token = signPartyKitToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
+    expect(verifyPartyKitToken(token, SECRET, 'docs/2')).toBeNull();
+    expect(verifyPartyKitToken(token, SECRET, 'docs/1')).not.toBeNull();
   });
 
   it('rejects a malformed payload', () => {
-    expect(verifyPartyKitToken('abc', SECRET)).toBeNull();
+    expect(verifyPartyKitToken('abc', SECRET, 'docs/1')).toBeNull();
     expect(
-      verifyPartyKitToken(`a.${Buffer.from('not-json').toString('base64url')}.c`, SECRET),
+      verifyPartyKitToken(`a.${Buffer.from('not-json').toString('base64url')}.c`, SECRET, 'docs/1'),
     ).toBeNull();
   });
 });

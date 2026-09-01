@@ -23,6 +23,14 @@ export default defineConfig({
   debounce: 2000,
 
   /**
+   * Signing key for the collaboration token (HS256, 5-minute TTL, bound to a
+   * single document). Omitted = derived from the app's appKey, which is what
+   * you want in almost every case. Set it only for a dedicated secret; with
+   * no key anywhere the library refuses to issue or accept tokens.
+   */
+  // tokenSecret: env.get('COLLAB_TOKEN_SECRET'),
+
+  /**
    * Authorization per document. Return canRead/canWrite/canComment; the
    * driver drops the connection when canRead is false.
    */

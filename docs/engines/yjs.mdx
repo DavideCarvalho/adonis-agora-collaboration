@@ -150,7 +150,47 @@ whether or not anyone is editing. A document that is not in the Tiptap layout re
 string rather than throwing — check for it before feeding the result to something that expects
 content.
 
-`getDocumentState` gives you the raw encoded bytes instead, for backup or transfer.
+`getDocumentState` gives you the raw encoded bytes instead, for backup or transfer, and
+`getVersionState({ docName, versionId })` gives you the same bytes for a point in the history —
+what you need to extract the text of a specific version, since `listVersions` only returns
+metadata.
+
+## Writing into a document server-side
+
+`getDocumentState` hands you a **copy**, which is enough to export a document and useless for
+changing one: while you hold it, people are typing into the real one. An external change — a
+webhook from Drive, a nightly import — has to land in the instance the clients are connected to,
+or it loses their keystrokes, or they lose it.
+
+`withLiveDocument` borrows that instance for the duration of a callback:
+
+```ts
+const result = await collaboration.current.withLiveDocument({
+  docName,
+  run: (doc) => {
+    doc.transact(() => applyExternalChange(doc))
+    return doc.getXmlFragment('default').toString()
+  },
+})
+
+if (!result.live) {
+  // Nobody has it open here. Merge into the stored state instead:
+  //   'not-loaded'                 → try persistDocument
+  //   'engine-has-no-live-document' → this engine syncs elsewhere; see the edge page
+}
+```
+
+The callback receives the real `Y.Doc`, and everything it writes inside a `transact` reaches every
+connected client through the sync protocol, exactly like an edit typed by a person. The result is
+`{ live: true, value }` or `{ live: false, reason }` — never a thrown error and never a bare
+`undefined`, because "nobody has this document open" is an ordinary answer that your caller has to
+handle, and a callback may legitimately return `undefined` itself. `hasLiveDocument({ docName })`
+answers the cheap half of the question on its own.
+
+<Callout type="warn" title="Live means live in *this* process">
+The document is only alive where its clients are connected, so this is a same-process API by
+construction — and, on more than one instance, a same-*instance* one. Read the section below.
+</Callout>
 
 ## Running more than one instance
 

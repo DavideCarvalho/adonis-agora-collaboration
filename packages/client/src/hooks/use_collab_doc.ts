@@ -1,13 +1,28 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import * as Y from 'yjs';
 import { getOrCreateSession, useCollaborationContext } from '../context.js';
 import type { CollabDoc } from '../docs/types.js';
 import { YjsCollabDoc } from '../docs/yjs_doc.js';
 import type { DocSessionSnapshot } from '../session.js';
-import type { CollabStatus } from '../types.js';
+import type { CollabStatus, CollabTokenInfo } from '../types.js';
 
 export interface UseCollabDocOptions {
   docName: string;
+  /**
+   * Token que o server já emitiu para este documento — tipicamente uma prop
+   * da página (`issueCollaborationToken` no controller). Com ele o socket
+   * abre no mount, sem o `GET /collaboration/token` antes.
+   *
+   * Vale só para a **primeira** conexão desta sessão: reconexão sempre busca
+   * um token novo, e um token inválido ou expirado é ignorado (a sessão cai
+   * no fluxo HTTP normal).
+   *
+   * Quando mais de um hook toca o mesmo documento (`useAwareness`,
+   * `useCollabEditor`), prefira `initialTokens` no `<CollaborationProvider>`:
+   * quem cria a sessão é o primeiro hook a montar, e do provider o token vale
+   * para qualquer um deles.
+   */
+  token?: CollabTokenInfo | null | undefined;
 }
 
 export interface UseCollabDocResult {
@@ -51,6 +66,9 @@ function getServerDoc(): Y.Doc {
  * ```tsx
  * const { doc, status, synced } = useCollabDoc({ docName: 'researches/42/writing' })
  * ```
+ *
+ * Passe `token` (emitido pelo server junto com a página) para abrir o socket
+ * sem o round-trip do `/collaboration/token` antes.
  */
 export function useCollabDoc(options: UseCollabDocOptions): UseCollabDocResult {
   const { docName } = options;
@@ -61,8 +79,16 @@ export function useCollabDoc(options: UseCollabDocOptions): UseCollabDocResult {
   // do render vazava uma sessão por render de servidor — além de ser um
   // render impuro sob React concorrente.
   const isBrowser = typeof window !== 'undefined';
+
+  // O token só é lido na CRIAÇÃO da sessão, então fica fora das deps: props de
+  // página costumam ser um objeto novo a cada render, e colocá-lo ali faria o
+  // memo recomputar sem que nada tivesse mudado.
+  const tokenRef = useRef(options.token);
+  tokenRef.current = options.token;
+
   const session = useMemo(
-    () => (isBrowser ? getOrCreateSession(context, docName) : null),
+    () =>
+      isBrowser ? getOrCreateSession(context, docName, { initialToken: tokenRef.current }) : null,
     [context, docName, isBrowser],
   );
 

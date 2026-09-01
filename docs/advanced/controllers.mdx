@@ -183,9 +183,10 @@ router
 
 ## The three details that matter
 
-**Use `issueToken`, do not hand-roll it.** It picks the right wire format for the engine (base64
-for self-hosted, a signed JWT for the edge), builds the `wsUrl`, and enforces `canRead`. Writing
-your own means a token the driver or the worker will not accept.
+**Use `issueToken`, do not hand-roll it.** It signs the credential with the key the handshake
+verifies against (the app's own for self-hosted, `partykit.jwtSecret` for the edge), binds it to
+the document, builds the `wsUrl`, and enforces `canRead`. Writing your own means a token the driver
+or the worker will not accept — and, before 0.13, meant a token *anyone* could have written.
 
 **Pass the manager's `authorize`, not the config's.** `this.collaboration.authorize(ctx, docName)`
 resolves declared documents first and falls back to the global callback — handing `issueToken` your

@@ -20,6 +20,7 @@ defineConfig({
   path?: string
   debounce?: number
   redisUrl?: string
+  tokenSecret?: string
   partykit?: PartyKitConfig
   routes?: {
     enabled?: boolean
@@ -40,6 +41,7 @@ defineConfig({
 | `path` | `'/collaboration'` | the WebSocket upgrade path on the Adonis HTTP server |
 | `debounce` | `2000` | ms of quiet before the state is flushed to storage |
 | `redisUrl` | — | enables the cross-instance presence roster |
+| `tokenSecret` | derived from `appKey` | signs the collaboration token; with no key anywhere the library refuses to issue **or** accept one |
 | `partykit` | — | required when the engine is `partykit`/`partyserver` |
 | `routes.enabled` | `true` | `false` skips auto-registration; call `collaborationRoutes` yourself |
 | `routes.prefix` | `'/collaboration'` | |
@@ -66,7 +68,10 @@ type CollabDocumentDeclaration<P> = {
     ctx: CollabConnectionContext,
     info: { docName: string; params: P },
   ) => Promise<CollabPermission>
+  load?: (info: { docName: string; params: P }) => Promise<CollabDocumentSeed>
 }
+
+type CollabDocumentSeed = Uint8Array | Y.Doc | null | undefined
 
 type DocumentParams<Pattern extends string>
 // 'researches/:id/writing'  → { id: string }
@@ -86,6 +91,13 @@ entry sits under, so a plain object literal is all you write:
 
 `defineDocument<P>(declaration)` is an identity helper for declarations that live away from their
 key. Attaching one whose `P` contradicts the key is a compile error at the config.
+
+`load` is the document's **first** content, asked for only when the storage has never stored that
+name, and persisted before the document is served — once per document, not once per connection.
+Return the engine's binary state (`Y.encodeStateAsUpdate`, `A.save`), a `Y.Doc` on the Yjs engine,
+or `null` for "nothing to seed". A throw is reported and the document opens empty; concurrent
+connections on a new document seed it once. See
+[Documents](/docs/collaboration/concepts/documents#the-first-content-of-a-new-document).
 
 ## `defineCollection`
 
@@ -138,6 +150,9 @@ clear message if it is read too early.
 | `engineFor({ docName })` | `Promise<CollaborationEngine>` |
 | `getDocumentState({ docName })` | `Promise<Uint8Array>` — live document if open, else storage |
 | `getDocumentText({ docName })` | `Promise<string>` — plain text; `''` when it is not a text layout |
+| `withLiveDocument({ docName, run })` | `Promise<LiveDocumentResult<T>>` — runs `run(doc)` on the live in-process document; `{ live: false, reason }` when there is none, and then `run` never runs |
+| `hasLiveDocument({ docName })` | `Promise<boolean>` — is this process holding the document open right now |
+| `getVersionState({ docName, versionId })` | `Promise<Uint8Array>` — the binary state of one version; throws on an unknown id |
 | `createVersion({ docName, createdBy, label? })` | `Promise<CollabVersion>` |
 | `listVersions({ docName })` | `Promise<CollabVersion[]>` |
 | `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live; first snapshots the replaced state as a new `restored from #<seq>` version, attributed to `restoredBy` |
@@ -208,7 +223,20 @@ interface PresenceMember {
   name?: string | null
   avatarUrl?: string | null
 }
+
+type LiveDocumentResult<T> =
+  | { live: true; value: T }
+  | { live: false; reason: LiveDocumentAbsence }
+
+type LiveDocumentAbsence =
+  | 'not-loaded'                    // this engine keeps documents here; nobody has this one open
+  | 'engine-has-no-live-document'   // the engine syncs elsewhere (partykit), or is not Yjs
 ```
+
+A result rather than a `T | undefined`: "there is no live document" is an ordinary answer, and
+collapsing it into `undefined` makes it indistinguishable from a callback that returned `undefined`
+itself. The two `reason`s call for different fallbacks — `not-loaded` is temporary,
+`engine-has-no-live-document` never changes for that document.
 
 ## `CollaborationStorage`
 
@@ -235,20 +263,45 @@ Implementations: `lucidStorage({ connection })` / `LucidStorage`, `FileSystemSto
 ## Token helpers
 
 ```ts
-issueToken(config, user, docName, authorize?): Promise<{ token: string; wsUrl: string; engine: string }>
+issueToken(config, user, docName, authorize?): Promise<{ token; wsUrl; engine; expiresAt }>
 buildWsUrl(config, docName): string
-signPartyKitToken(payload, secret, expiresInSeconds?): string
-verifyPartyKitToken(token, secret): { userId; docName; exp } | null
-parseLegacyToken(token): CollabConnectionContext | null
 
-class CollabForbiddenError extends Error       // authorize denied canRead
-class CollabAuthorizationError extends Error   // authorize itself threw — retryable, not a denial
-class CollabUnauthorizedError extends Error    // no user resolved
+// One signed format for every engine; the key is what differs.
+signCollabToken(payload, secret, expiresInSeconds?): string
+verifyCollabToken(token, secret, expectedDocName): { userId; docName; user?; exp } | null
+verifySelfHostedToken(token, docName, secret?): Promise<CollabConnectionContext | null>
+signPartyKitToken   // = signCollabToken, signed with partykit.jwtSecret
+verifyPartyKitToken // = verifyCollabToken
+
+// The signing key: explicit → config/collaboration.ts → appKey → throw.
+resolveTokenSecret(secret?): Promise<string>
+COLLAB_TOKEN_TTL_SECONDS // 300
+
+class CollabForbiddenError extends Error         // authorize denied canRead
+class CollabAuthorizationError extends Error     // authorize itself threw — retryable, not a denial
+class CollabUnauthorizedError extends Error      // no user resolved
+class CollabTokenSecretMissingError extends Error // no signing key anywhere — issue and verify both refuse
 ```
+
+`expectedDocName` is not optional on the verifiers: the client picks the document it connects to,
+so a token that is not checked against it opens every document its holder can name.
 
 `issueToken` **requires** an `authorize` and throws `CollabForbiddenError` without one: an absent
 rule is a misconfiguration, not a grant. Pass the **manager's**, not your config's, so per-document
 rules apply.
+
+```ts
+issueCollaborationToken(
+  { docName: string; user?: { id: string; name?: string | null }; ctx?: HttpContext },
+  options?: { authorize?; manager?; engine?; path?; partykit?; resolveUser? },
+): Promise<{ token: string; wsUrl: string; engine: string; expiresAt?: number }>
+```
+
+Issues a credential **outside** the route — for a server-rendered page that hands it to the client,
+so the browser opens the socket without `GET /collaboration/token` in front of it. Same `authorize`,
+same per-document engine, same `wsUrl`; every option defaults exactly as the routes' do. Throws
+`CollabUnauthorizedError` (no caller) or `CollabForbiddenError` (denied) instead of returning a
+response. See [Token flow](/docs/collaboration/routes/token-flow#issuing-it-before-the-browser-asks).
 
 ## Observability
 
@@ -338,13 +391,19 @@ CollabDocumentNameFor<'researches/:id/writing'>       // `researches/${string}/w
   getHeaders?={() => Record<string, string> | Promise<Record<string, string>>}
   createTransport?={(info, doc, docName) => CollabTransport}
   fetchImpl?={typeof fetch}
+  initialTokens?={Record<string, CollabTokenInfo>}  // pre-issued, by docName
 />
 ```
+
+`initialTokens` carries tokens the server issued while rendering the page
+(`issueCollaborationToken`), keyed by document name. Each is used for that document's **first**
+connection only; reconnects fetch a fresh one, and an expired or malformed entry falls back to the
+HTTP endpoint.
 
 ### Hooks
 
 ```ts
-useCollabDoc({ docName }): {
+useCollabDoc({ docName, token? }): {   // token: pre-issued, first connection only
   doc: Y.Doc                 // stable for the provider's lifetime
   collabDoc: CollabDoc       // the same document behind read/write/onUpdate
   status: CollabStatus

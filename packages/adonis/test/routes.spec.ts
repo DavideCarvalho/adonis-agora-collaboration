@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { verifyCollabToken } from '../src/auth/token.js';
 import { verifyPartyKitToken } from '../src/drivers/partykit/partykit_driver.js';
 import type { CollabHttpContext, CollabManagerLike, CollabRouteUser } from '../src/http/types.js';
 import { CollabUnauthorizedError } from '../src/http/types.js';
 import { collaborationRoutes } from '../src/routes.js';
+import { TEST_TOKEN_SECRET } from './helpers/token.js';
 
 const SECRET = 'test-secret-32-chars-minimum-ok!';
 
@@ -12,6 +14,11 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
+    // The routes ask the manager for the signing key, exactly as they ask it
+    // for `authorize` — one source for both ends of the credential.
+    async tokenSecret() {
+      return TEST_TOKEN_SECRET;
+    },
     async getDocumentState({ docName }: { docName: string }) {
       calls.push(`state:${docName}`);
       return new Uint8Array([1, 2, 3]);
@@ -219,7 +226,7 @@ describe('collaborationRoutes registration', () => {
 /* ── handlers behavior ───────────────────────────────────────────────── */
 
 describe('token endpoint', () => {
-  it('returns a base64 token for self-hosted engines', async () => {
+  it('returns a signed, document-bound token for self-hosted engines', async () => {
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(makeManager()));
 
@@ -228,11 +235,19 @@ describe('token endpoint', () => {
       token: string;
       wsUrl: string;
       engine: string;
+      expiresAt: number;
     };
 
     expect(result).toMatchObject({ wsUrl: '/collaboration', engine: 'yjs' });
-    const decoded = JSON.parse(Buffer.from(result.token, 'base64').toString());
-    expect(decoded).toMatchObject({ userId: '7', user: { name: 'Ana' } });
+    // Verified, not decoded: the point of the format is that reading it
+    // without the key proves nothing.
+    expect(verifyCollabToken(result.token, TEST_TOKEN_SECRET, 'docs/1')).toMatchObject({
+      userId: '7',
+      docName: 'docs/1',
+      user: { name: 'Ana' },
+    });
+    expect(verifyCollabToken(result.token, TEST_TOKEN_SECRET, 'docs/2')).toBeNull();
+    expect(result.expiresAt).toBeGreaterThan(Date.now());
   });
 
   it('signs a JWT and points to the party room for engine=partykit', async () => {
@@ -251,7 +266,7 @@ describe('token endpoint', () => {
     };
     expect(payload.engine).toBe('partykit');
     expect(payload.wsUrl).toBe('wss://my-app.partykit.dev/parties/main/docs%2F2');
-    expect(verifyPartyKitToken(payload.token, SECRET)?.docName).toBe('docs/2');
+    expect(verifyPartyKitToken(payload.token, SECRET, 'docs/2')?.docName).toBe('docs/2');
   });
 
   it('rejects missing doc with 400', async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CollabForbiddenError, issueToken } from '../src/auth/token.js';
 import type { CollabHttpContext, CollabManagerLike } from '../src/http/types.js';
 import { collaborationRoutes, defaultResolveUser } from '../src/routes.js';
+import { TEST_TOKEN_SECRET } from './helpers/token.js';
 
 /**
  * Manual registration — `collaborationRoutes(router)` from `start/routes.ts` —
@@ -209,7 +210,7 @@ describe('issueToken', () => {
 
   it('mints one when the rule grants read', async () => {
     const issued = await issueToken(
-      { engine: 'yjs', path: '/collaboration' },
+      { engine: 'yjs', path: '/collaboration', tokenSecret: TEST_TOKEN_SECRET },
       { id: 'u_1' },
       DOC,
       async () => ({ canRead: true, canWrite: true, canComment: true }),
@@ -287,6 +288,95 @@ describe('defaultResolveUser', () => {
     };
 
     await expect(defaultResolveUser({ auth } as unknown as CollabHttpContext)).rejects.toThrow(
+      /no authenticated user on context/,
+    );
+  });
+
+  /**
+   * The authkit case. `@adonis-agora/authkit` resolves the user on demand:
+   * `check()` returns true and `ctx.auth.user` stays `undefined` forever, so
+   * a resolver that only reads `.user` answered 401 for a caller the app
+   * considered authenticated — and every app hit by it wrote the same
+   * `getUserOrFail()` resolver by hand.
+   */
+  it('asks a guard that resolves the user on demand instead of populating .user', async () => {
+    const auth = {
+      user: undefined as unknown,
+      async check() {
+        // Session verified — and `user` deliberately left alone.
+        return true;
+      },
+      async getUserOrFail() {
+        return { id: 77, name: 'Ana' };
+      },
+    };
+
+    const user = await defaultResolveUser({ auth } as unknown as CollabHttpContext);
+    expect(user).toEqual({ id: '77', name: 'Ana' });
+    expect(auth.user).toBeUndefined();
+  });
+
+  it('prefers getUser() — absence reported by returning, not by throwing', async () => {
+    const calls: string[] = [];
+    const auth = {
+      async getUser() {
+        calls.push('getUser');
+        return { id: 5 };
+      },
+      async getUserOrFail() {
+        calls.push('getUserOrFail');
+        return { id: 6 };
+      },
+    };
+
+    expect(await defaultResolveUser({ auth } as unknown as CollabHttpContext)).toEqual({
+      id: '5',
+      name: null,
+    });
+    expect(calls).toEqual(['getUser']);
+  });
+
+  it('falls through to getUserOrFail when getUser has nobody', async () => {
+    const auth = {
+      async getUser() {
+        return null;
+      },
+      getUserOrFail() {
+        return { id: 8, name: 'Bo' };
+      },
+    };
+
+    expect(await defaultResolveUser({ auth } as unknown as CollabHttpContext)).toEqual({
+      id: '8',
+      name: 'Bo',
+    });
+  });
+
+  it('turns a throwing getUserOrFail into a 401, never a 500', async () => {
+    const auth = {
+      async check() {
+        return false;
+      },
+      async getUserOrFail() {
+        throw new Error('E_UNAUTHORIZED_ACCESS: Unauthorized access');
+      },
+    };
+
+    await expect(defaultResolveUser({ auth } as unknown as CollabHttpContext)).rejects.toThrow(
+      /no authenticated user on context/,
+    );
+  });
+
+  it('refuses a user whose id is empty — an empty caller must never reach authorize', async () => {
+    const auth = { user: { id: '   ', name: 'Ghost' } };
+
+    await expect(defaultResolveUser({ auth } as unknown as CollabHttpContext)).rejects.toThrow(
+      /no authenticated user on context/,
+    );
+  });
+
+  it('fails closed with no auth stack at all', async () => {
+    await expect(defaultResolveUser({} as unknown as CollabHttpContext)).rejects.toThrow(
       /no authenticated user on context/,
     );
   });

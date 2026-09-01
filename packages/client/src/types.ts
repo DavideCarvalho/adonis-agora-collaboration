@@ -8,13 +8,30 @@ import type * as Y from 'yjs';
 /** Estado da conexão WebSocket com o sync engine. */
 export type CollabStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
-/** Resposta de GET /collaboration/token. */
+/**
+ * Resposta de GET /collaboration/token — e a forma de um token que o server
+ * emitiu adiantado (`issueCollaborationToken`) e mandou junto com a página.
+ */
 export interface CollabTokenInfo {
   token: string;
   /** URL do WS (self-hosted: path relativo; partykit: origin remoto). */
   wsUrl: string;
   /** Engine informado pelo server (yjs | automerge | partykit). */
   engine: string;
+  /**
+   * Epoch em ms em que a credencial deixa de ser aceita. Toda engine reporta:
+   * self-hosted e partykit emitem o MESMO formato assinado, com validade
+   * curta (5 min). Antes o self-hosted era um base64 sem assinatura e sem
+   * expiração — um token que nunca morria e que qualquer um podia forjar.
+   *
+   * Opcional porque um emissor customizado pode não ter validade a reportar;
+   * nada que a lib emite vem sem ela.
+   *
+   * Só importa para um token pré-emitido: ele pode ficar no HTML enquanto a
+   * aba estiver aberta, e o client precisa distinguir "já morreu" de "vale
+   * tentar" sem abrir um socket pra descobrir.
+   */
+  expiresAt?: number | null | undefined;
 }
 
 /** Comentário persistido (espelho do CollabComment do server). */
@@ -93,4 +110,21 @@ export interface CollaborationClientConfig {
   createTransport?: TransportFactory;
   /** Override de fetch (testes/SSR). */
   fetchImpl?: typeof fetch;
+  /**
+   * Tokens que o server já emitiu para esta renderização, por docName.
+   *
+   * Corta o `GET /collaboration/token` do caminho crítico: o socket abre no
+   * mount, sem esperar um round-trip para o mesmo servidor que renderizou a
+   * página e já sabia a resposta.
+   *
+   * **Usado uma vez, na primeira conexão.** Toda reconexão volta a buscar um
+   * token novo por HTTP — é assim que a expiração vira revogação, porque cada
+   * reconexão re-executa `authorize`. Um token pré-emitido inválido ou já
+   * expirado é ignorado e a sessão cai no fluxo HTTP normal.
+   *
+   * ```tsx
+   * <CollaborationProvider initialTokens={{ [docName]: collabToken }}>
+   * ```
+   */
+  initialTokens?: Record<string, CollabTokenInfo | null | undefined> | undefined;
 }

@@ -23,7 +23,20 @@ interface CollabToken {
   exp: number;
 }
 
-function verifyToken(token: string | null, secret: string): Promise<CollabToken | null> {
+/**
+ * Signature + expiry + **document binding**.
+ *
+ * `expectedDocName` is not optional decoration: the room IS the document, and
+ * a token is issued for one document only. Without this comparison a token
+ * legitimately obtained for a document the caller may read would open every
+ * other room on the worker — the client picks the room, the server only
+ * checked that the signature was ours.
+ */
+async function verifyToken(
+  token: string | null,
+  secret: string,
+  expectedDocName: string,
+): Promise<CollabToken | null> {
   if (!token) return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;
@@ -45,10 +58,23 @@ function verifyToken(token: string | null, secret: string): Promise<CollabToken 
   try {
     const parsed = JSON.parse(Buffer.from(body, 'base64url').toString()) as CollabToken;
     if (!parsed.userId || !parsed.docName || parsed.exp * 1000 < Date.now()) return null;
+    if (parsed.docName !== expectedDocName) return null;
     return parsed;
   } catch {
     return null;
   }
+}
+
+/**
+ * The room being addressed, read from the URL: `/parties/<party>/<room>`.
+ *
+ * Taken from the path rather than from the token, obviously — the whole point
+ * is to compare the two. Rejoined because a document name contains slashes
+ * (`researches/42/writing`) and travels percent-encoded in that last segment.
+ */
+function roomFromUrl(url: string): string {
+  const segments = new URL(url).pathname.split('/').slice(3).filter(Boolean);
+  return decodeURIComponent(segments.join('/'));
 }
 
 export default class CollabParty implements PartyServer {
@@ -60,7 +86,7 @@ export default class CollabParty implements PartyServer {
   static async onBeforeConnect(request: PartyRequest, lobby: { context: PartyConnectionContext }) {
     const secret = lobby.context.party.env.COLLAB_JWT_SECRET as string | undefined;
     const token = new URL(request.url).searchParams.get('token');
-    const claims = await verifyToken(token, secret ?? '');
+    const claims = await verifyToken(token, secret ?? '', roomFromUrl(request.url));
     if (!claims) {
       return new Response('invalid or expired token', { status: 401 });
     }
@@ -109,9 +135,14 @@ export default class CollabParty implements PartyServer {
   async onRequest(request: PartyRequest): Promise<Response> {
     const secret = this.party.env.COLLAB_JWT_SECRET as string | undefined;
     const url = new URL(request.url);
+    const room = this.docName;
     const claims =
-      (await verifyToken(url.searchParams.get('token'), secret ?? '')) ??
-      (await verifyToken(request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '', secret ?? ''));
+      (await verifyToken(url.searchParams.get('token'), secret ?? '', room)) ??
+      (await verifyToken(
+        request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '',
+        secret ?? '',
+        room,
+      ));
     if (!claims) {
       return new Response('unauthenticated', { status: 401 });
     }

@@ -86,6 +86,34 @@ export interface LoadedCollabDocument {
   vector: Uint8Array;
 }
 
+/**
+ * Why {@link CollaborationManager.withLiveDocument} had no document to run on.
+ *
+ * The two are different operational facts and a caller that cannot tell them
+ * apart writes the wrong fallback: `not-loaded` is normal and temporary (open
+ * the document, or fall back to `getDocumentState`), while
+ * `engine-has-no-live-document` never changes for that document and means the
+ * whole approach is wrong for it.
+ */
+export type LiveDocumentAbsence =
+  /** The engine keeps documents in this process, but nobody has this one open here. */
+  | 'not-loaded'
+  /** The engine syncs elsewhere (PartyKit, on the edge): there is no in-process instance. */
+  | 'engine-has-no-live-document';
+
+/**
+ * Outcome of {@link CollaborationManager.withLiveDocument} — what the callback
+ * returned, or why it never ran.
+ *
+ * A result, not an exception and not a bare `undefined`: "there is no live
+ * document" is an ordinary answer here (nobody has the document open), and a
+ * `T | undefined` would collapse it into a callback that legitimately returned
+ * `undefined`.
+ */
+export type LiveDocumentResult<T> =
+  | { live: true; value: T }
+  | { live: false; value?: undefined; reason: LiveDocumentAbsence };
+
 /** A version registered in the document history. */
 export interface CollabVersion {
   /** Opaque reference for the driver (Yjs snapshot / Automerge hash). */
@@ -175,6 +203,20 @@ export interface CollaborationConfig {
    * restart the document) — the rule alone will not do it.
    */
   authorize?: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>;
+  /**
+   * Key that signs and verifies the self-hosted collaboration token.
+   *
+   * Optional because an AdonisJS app already has one: with nothing set here
+   * the library derives its key from the app's `appKey`, so the secure path
+   * is the path that requires no configuration. Set it to use a dedicated
+   * key, or when embedding the manager outside an Adonis app — a manager with
+   * neither refuses to issue or accept tokens rather than falling back to an
+   * unsigned format.
+   *
+   * Rotating it invalidates every outstanding token. Clients reconnect and
+   * fetch a new one, so the visible cost is one reconnect.
+   */
+  tokenSecret?: string;
   /** Redis for cross-instance presence (optional in single-instance dev). */
   redis?: { url: string };
   /** Edge sync via PartyKit (required when engine = 'partykit'). */

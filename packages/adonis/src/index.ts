@@ -2,16 +2,27 @@
 // finds the hook without hitting the ./configure subpath.
 export { configure } from '../configure.js';
 export {
+  type CollabTokenSecret,
+  CollabTokenSecretMissingError,
+  resolveTokenSecret,
+} from './auth/secret.js';
+export {
   type AuthorizeFn,
   buildWsUrl,
+  COLLAB_TOKEN_TTL_SECONDS,
   CollabAuthorizationError,
   CollabForbiddenError,
+  type CollabTokenPayload,
   type IssuedToken,
   issueToken,
-  parseLegacyToken,
+  PARTYKIT_TOKEN_TTL_SECONDS,
+  signCollabToken,
   signPartyKitToken,
   type TokenIssuerConfig,
+  tokenContext,
+  verifyCollabToken,
   verifyPartyKitToken,
+  verifySelfHostedToken,
 } from './auth/token.js';
 export { CollaborationManager } from './collaboration_manager.js';
 export {
@@ -24,6 +35,7 @@ export {
 } from './define_config.js';
 export type {
   CollabDocumentDeclaration,
+  CollabDocumentSeed,
   CollectionPattern,
   DocumentParams,
 } from './documents.js';
@@ -33,6 +45,13 @@ export {
   documentPatternParams,
   matchDocumentPattern,
 } from './documents.js';
+export type {
+  CollaborationDriver,
+  LiveDocumentDriver,
+  PartyKitDriverOptions,
+  SelfHostedDriverOptions,
+} from './driver.js';
+export { supportsLiveDocuments } from './driver.js';
 export { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 export {
   PartyKitDriver,
@@ -61,6 +80,9 @@ export {
   canMutateComment,
   collaborationRoutes,
   defaultResolveUser,
+  type IssueCollaborationTokenInput,
+  type IssueCollaborationTokenOptions,
+  issueCollaborationToken,
   secretsMatch,
 } from './routes.js';
 export {
@@ -82,6 +104,8 @@ export type {
   CollabPermission,
   CollabVersion,
   CommentAnchor,
+  LiveDocumentAbsence,
+  LiveDocumentResult,
   PartyKitConfig,
   PruneVersionsOptions,
 } from './types.js';

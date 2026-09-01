@@ -153,19 +153,26 @@ be refused. That is presentation, not security — the server no longer depends 
 
 ## Token shape and lifetime
 
-Two wire formats, chosen by engine — you never construct either by hand, but knowing which is
-which explains the security properties:
+One wire format for every engine — you never construct it by hand, but knowing what is in it
+explains the security properties:
 
-| Engine | Format | Verified by | Lifetime |
-| --- | --- | --- | --- |
-| `yjs`, `automerge` | base64 JSON of the connection context | your own Adonis process, on the handshake | until the socket closes |
-| `partykit`, `partyserver` | HS256 JWT over `{ userId, docName, iat, exp }` | the edge worker, with the shared secret | 5 minutes |
+| Engine | Format | Signed with | Verified by | Lifetime |
+| --- | --- | --- | --- | --- |
+| `yjs`, `automerge` | HS256 JWT over `{ userId, docName, user?, iat, exp }` | your app's key (`tokenSecret`, else `appKey`) | your own Adonis process, on the handshake | 5 minutes |
+| `partykit`, `partyserver` | the same JWT | `partykit.jwtSecret` | the edge worker | 5 minutes |
 
-The self-hosted format is not a bearer credential in the usual sense — the same process that
-issued it re-runs `authorize` when it is presented, so its contents are a hint, not a grant. The
-edge JWT **is** a grant: the worker has no database and cannot re-check anything, which is why it
-is signed, short-lived and scoped to a single document name. See
+Signature, expiry and **document** are all checked before `authorize` is consulted: a token issued
+for one document does not open another, because the client is the one choosing which document to
+connect to.
+
+On the self-hosted path the token proves *who* is connecting and `authorize` still decides *what*
+they may do — it re-runs on the handshake, so a revocation between issue and connect bites. On the
+edge the JWT is also the grant: the worker has no database and cannot re-check anything. See
 [Edge engines](/docs/collaboration/engines/edge).
+
+Until 0.13 the self-hosted token was an unsigned base64 blob with no expiry, so *anyone* could
+mint one for *anyone* — see [Token flow](/docs/collaboration/routes/token-flow) for what changed
+and what upgrading costs (one reconnect).
 
 Tokens expiring is normal, not exceptional: the client's session rebuilds the transport with a
 **fresh token** on every reconnect, with exponential backoff capped at 15 seconds. Your `authorize`
