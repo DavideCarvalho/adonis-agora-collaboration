@@ -55,6 +55,10 @@ export default class CollaborationServiceProvider {
         path: config.path ?? '/collaboration',
         debounce: config.debounce ?? 2000,
         ...(config.storage ? { storage: config.storage } : {}),
+        // Absent means "derive from appKey" — the manager resolves it, and it
+        // must be the manager doing so, because the token route asks it for
+        // the same key.
+        ...(config.tokenSecret ? { tokenSecret: config.tokenSecret } : {}),
         ...(config.redisUrl ? { redis: { url: config.redisUrl } } : {}),
         ...(config.partykit ? { partykit: config.partykit } : {}),
       };

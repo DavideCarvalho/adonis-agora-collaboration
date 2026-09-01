@@ -14,6 +14,11 @@ export type CollaborationAppConfig = {
   path?: string;
   redisUrl?: string;
   debounce?: number;
+  /**
+   * Signing key for collaboration tokens. Defaults to a key derived from the
+   * app's `appKey` — set this only for a dedicated secret.
+   */
+  tokenSecret?: string;
   authorize?: CollaborationConfig['authorize'];
   /** Omitted = in-memory (dev only). Production passes a persistent storage. */
   storage?: CollaborationConfig['storage'];

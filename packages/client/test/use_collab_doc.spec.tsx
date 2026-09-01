@@ -72,6 +72,106 @@ describe('useCollabDoc', () => {
     expect(result.current[0]?.error?.message).toContain('401');
   });
 
+  it('abre o socket com o token pré-emitido, sem passar pelo /token', async () => {
+    const { factory, created } = fakeTransportFactory();
+    const fetchMock = vi.fn();
+
+    function Probe() {
+      useCollabDoc({
+        docName: 'docs/pre',
+        token: { token: 'pre-issued', wsUrl: '/collaboration', engine: 'yjs' },
+      });
+      return null;
+    }
+
+    await act(async () => {
+      render(
+        createElement(
+          CollaborationProvider,
+          { baseUrl: 'https://api.app', createTransport: factory, fetchImpl: fetchMock },
+          createElement(Probe),
+        ),
+      );
+    });
+
+    // O texto do documento não espera mais um round-trip HTTP antes do socket.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(created).toHaveLength(1);
+    expect(created[0]?.info.token).toBe('pre-issued');
+  });
+
+  it('initialTokens no provider vale para qualquer hook que crie a sessão', async () => {
+    const { factory, created } = fakeTransportFactory();
+    const fetchMock = vi.fn();
+
+    function Probe() {
+      // useAwareness monta primeiro e é quem cria a sessão — por isso o token
+      // do provider, e não só o da prop do useCollabDoc, precisa valer.
+      useAwareness({ docName: 'docs/shared' });
+      useCollabDoc({ docName: 'docs/shared' });
+      return null;
+    }
+
+    await act(async () => {
+      render(
+        createElement(
+          CollaborationProvider,
+          {
+            baseUrl: 'https://api.app',
+            createTransport: factory,
+            fetchImpl: fetchMock,
+            initialTokens: {
+              'docs/shared': { token: 'from-provider', wsUrl: '/collaboration', engine: 'yjs' },
+            },
+          },
+          createElement(Probe),
+        ),
+      );
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(created).toHaveLength(1);
+    expect(created[0]?.info.token).toBe('from-provider');
+  });
+
+  it('token pré-emitido expirado cai no fluxo HTTP em vez de travar', async () => {
+    const { factory, created } = fakeTransportFactory();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ token: 'fetched', wsUrl: '/collaboration', engine: 'yjs' }),
+      );
+
+    let seen: ReturnType<typeof useCollabDoc> | undefined;
+    function Probe() {
+      seen = useCollabDoc({
+        docName: 'docs/stale',
+        token: {
+          token: 'stale',
+          wsUrl: '/collaboration',
+          engine: 'yjs',
+          expiresAt: Date.now() - 60_000,
+        },
+      });
+      return null;
+    }
+
+    await act(async () => {
+      render(
+        createElement(
+          CollaborationProvider,
+          { baseUrl: 'https://api.app', createTransport: factory, fetchImpl: fetchMock },
+          createElement(Probe),
+        ),
+      );
+    });
+
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(created[0]?.info.token).toBe('fetched');
+    expect(seen?.status).not.toBe('error');
+  });
+
   it('useAwareness expõe peers vazios sem awareness ativa', async () => {
     const { factory } = fakeTransportFactory();
     let awarenessResult: { peers: unknown[]; status: string } | undefined;

@@ -4,6 +4,7 @@ import * as Y from 'yjs';
 import { AutomergeDriver } from '../src/drivers/automerge/automerge_driver.js';
 import { YjsDriver } from '../src/drivers/yjs/yjs_driver.js';
 import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.js';
+import { TEST_TOKEN_SECRET } from './helpers/token.js';
 
 /**
  * `CollaborationDriver.restoreVersion` promises, in so many words, to create a
@@ -31,7 +32,7 @@ describe('YjsDriver.restoreVersion', () => {
 
   it('records the replaced state as a new version, attributed to the restorer', async () => {
     const { storage, write } = await seed();
-    const driver = new YjsDriver({ authorize: allow, storage });
+    const driver = new YjsDriver({ authorize: allow, tokenSecret: TEST_TOKEN_SECRET, storage });
 
     await write('draft one');
     const v1 = await driver.createVersion(DOC, 'u_author', 'before review');
@@ -58,7 +59,7 @@ describe('YjsDriver.restoreVersion', () => {
 
   it('falls back to the version id when the restored version has no label', async () => {
     const { storage, write } = await seed();
-    const driver = new YjsDriver({ authorize: allow, storage });
+    const driver = new YjsDriver({ authorize: allow, tokenSecret: TEST_TOKEN_SECRET, storage });
 
     await write('draft one');
     const v1 = await driver.createVersion(DOC, 'u_author', null);
@@ -73,7 +74,7 @@ describe('YjsDriver.restoreVersion', () => {
 
   it('writes nothing when the version does not exist', async () => {
     const { storage, write } = await seed();
-    const driver = new YjsDriver({ authorize: allow, storage });
+    const driver = new YjsDriver({ authorize: allow, tokenSecret: TEST_TOKEN_SECRET, storage });
 
     await write('draft one');
     await driver.createVersion(DOC, 'u_author', 'v1');
@@ -94,7 +95,11 @@ describe('AutomergeDriver.restoreVersion', () => {
     let doc = A.from<{ content: string }>({ content: 'draft one' });
     await storage.saveDocument(DOC, A.save(doc));
 
-    const first = new AutomergeDriver({ authorize: allow, storage });
+    const first = new AutomergeDriver({
+      authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage,
+    });
     const v1 = await first.createVersion(DOC, 'u_author', 'before review');
     await first.close();
 
@@ -104,7 +109,11 @@ describe('AutomergeDriver.restoreVersion', () => {
     });
     await storage.saveDocument(DOC, A.save(doc));
 
-    const second = new AutomergeDriver({ authorize: allow, storage });
+    const second = new AutomergeDriver({
+      authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage,
+    });
     await second.restoreVersion(DOC, v1.id, 'u_restorer');
 
     const versions = await second.listVersions(DOC);

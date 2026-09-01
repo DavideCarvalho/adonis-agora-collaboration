@@ -146,8 +146,7 @@ export class PartyKitDriver implements CollaborationDriver {
     restoredBy: string | null,
   ): Promise<void> {
     void restoredBy;
-    const snapshot = await this.storage.loadVersionSnapshot(docName, versionId);
-    if (!snapshot) throw new Error(`Version ${versionId} not found`);
+    const snapshot = await this.getVersionState(docName, versionId);
 
     // POSTs the full snapshot: the worker applies the update to the live
     // doc (idempotent CRDT merge) and the protocol fans out to clients.
@@ -162,12 +161,21 @@ export class PartyKitDriver implements CollaborationDriver {
     await this.storage.saveDocument(docName, snapshot);
   }
 
+  /**
+   * Binary state stored for a version. Local storage answers it, not the
+   * worker: the edge room only holds the present, the history is Adonis's.
+   */
+  async getVersionState(docName: string, versionId: string): Promise<Uint8Array> {
+    const persisted = await this.storage.loadVersionSnapshot(docName, versionId);
+    if (!persisted) throw new Error(`Version ${versionId} not found`);
+    return persisted;
+  }
+
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
     const [aBytes, bBytes] = await Promise.all([
-      this.storage.loadVersionSnapshot(docName, aId),
-      this.storage.loadVersionSnapshot(docName, bId),
+      this.getVersionState(docName, aId),
+      this.getVersionState(docName, bId),
     ]);
-    if (!aBytes || !bBytes) throw new Error('Version not found');
 
     const textOf = (bytes: Uint8Array): string => {
       try {

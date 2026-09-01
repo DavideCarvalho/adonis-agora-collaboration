@@ -64,6 +64,38 @@ documents: {
 For a shape that is not `<prefix>/<id>` — `researches/:id/writing`, two params — write the pattern
 out, `:segment` included. See [Documents](/docs/collaboration/concepts/documents).
 
+## The editor opens empty on a document whose text is in the database
+
+The document is new to the library — nothing has ever been stored under that name — so the CRDT
+document it hands the editor is empty, and the editor shows what the CRDT says. The row in your
+database is not consulted by anyone.
+
+This is worth treating as urgent rather than cosmetic: the editor's autosave writes what it is
+showing, so the next flush replaces the real text with the empty one. It is a deletion with a
+blank screen in front of it.
+
+Declare a `load` on the document, and the first client to open it gets the content already in it:
+
+```ts
+documents: {
+  'researches/:id/writing': {
+    async load({ params }) {
+      const research = await Research.find(params.id)
+      return research?.body ? TiptapTransformer.toYdoc(research.body, 'default') : null
+    },
+  },
+}
+```
+
+Seeding it yourself from the controller that renders the page works right up until something
+opens the socket without going through that page. See
+[Documents](/docs/collaboration/concepts/documents#the-first-content-of-a-new-document).
+
+If a `load` **is** declared and the document still opens empty, check the logs for a
+`storage.loadDocument failed` report: a hook that throws is reported and the document opens empty
+on purpose, because failing the handshake instead would only make the client reconnect and run the
+failing query again.
+
 ## `401` from the token endpoint on a request that is clearly logged in
 
 `routes.resolveUser` defaults to reading `ctx.auth.user`, which is only populated when
@@ -77,6 +109,12 @@ routes: {
   resolveUser: (ctx) => ({ id: String(ctx.currentUser.id), name: ctx.currentUser.name }),
 }
 ```
+
+Since 0.13.0 the default resolver also calls `check()`/`authenticate()` itself, and then asks
+`getUser()`/`getUserOrFail()` when `ctx.auth.user` is still empty — which is what auth stacks that
+resolve the user **on demand** (`@adonis-agora/authkit`) need, since they verify the session and
+never populate `user` at all. If you wrote a `resolveUser` that only called `getUserOrFail()`, you no
+longer need it.
 
 ## Coming back to the page gives a blank editor stuck on `connecting`
 

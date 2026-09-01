@@ -158,6 +158,15 @@ out-of-band archive.
 
 ## Secrets
 
+Every collaboration token is signed, on every engine. Self-hosted documents use the app's own key:
+`tokenSecret` in `config/collaboration.ts` if you set one, otherwise a key derived from `appKey`.
+An app with `APP_KEY` set therefore needs no extra configuration — and an app with neither refuses
+to issue or accept tokens rather than falling back to anything weaker, so a missing key is a loud
+failure at the first handshake, not a silent one.
+
+Rotating it (or `APP_KEY`) invalidates every outstanding token; clients fetch a new one on their
+next reconnect, within a backoff window.
+
 Running an [edge engine](/docs/collaboration/engines/edge) adds one secret with real reach:
 `config.partykit.jwtSecret`, shared with the worker.
 

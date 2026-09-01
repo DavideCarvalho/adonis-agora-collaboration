@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CollaborationManager } from '../src/collaboration_manager.js';
 import type { PresenceMember, PresenceStore } from '../src/services/presence_service.js';
 import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.js';
+import { TEST_TOKEN_SECRET, testToken } from './helpers/token.js';
 
 /**
  * Presence had two independent defects that produced the same wrong answer.
@@ -18,6 +19,13 @@ import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.j
  *
  * The test drives the real Hocuspocus hooks the driver registers, so it fails
  * if either regresses.
+ *
+ * It drives them **in order** — `onAuthenticate` and then `connected` — which
+ * is the third defect: presence used to be filled from `onConnect`, decoding
+ * `?token=` off the query string a second time and without checking anything.
+ * A roster built that way shows whoever the client claimed to be, even with a
+ * handshake that verifies signatures. Identity is established once, and every
+ * later hook reads it from the connection context.
  */
 
 class FakeStore implements PresenceStore {
@@ -36,15 +44,9 @@ class FakeStore implements PresenceStore {
   async close(): Promise<void> {}
 }
 
-/** The legacy base64 payload the self-hosted handshake speaks. */
-function token(userId: string, name?: string): string {
-  return Buffer.from(JSON.stringify({ userId, ...(name ? { user: { name } } : {}) })).toString(
-    'base64',
-  );
-}
-
 interface Hooks {
-  onConnect(payload: unknown): Promise<unknown>;
+  onAuthenticate(payload: unknown): Promise<unknown>;
+  connected(payload: unknown): Promise<unknown>;
   onDisconnect(payload: unknown): Promise<unknown>;
 }
 
@@ -53,6 +55,7 @@ async function buildManager(store?: PresenceStore) {
     {
       engine: 'yjs',
       storage: new InMemoryCollaborationStorage(),
+      tokenSecret: TEST_TOKEN_SECRET,
       authorize: async () => ({ canRead: true, canWrite: true, canComment: true }),
     },
     store,
@@ -67,17 +70,33 @@ async function buildManager(store?: PresenceStore) {
     hocuspocus: { configuration: Hooks };
   };
 
-  const connect = (docName: string, socketId: string, userId: string, name?: string) =>
-    driver.hocuspocus.configuration.onConnect({
+  // The real sequence: the token is verified once, and what that verification
+  // returns is the context every later hook reads.
+  const connect = async (docName: string, socketId: string, userId: string, name?: string) => {
+    const context = await driver.hocuspocus.configuration.onAuthenticate({
       documentName: docName,
       socketId,
-      requestParameters: new URLSearchParams({ token: token(userId, name) }),
+      token: testToken(docName, userId, name ? { name } : {}),
+      connectionConfig: { readOnly: false },
+    });
+    return driver.hocuspocus.configuration.connected({ documentName: docName, socketId, context });
+  };
+
+  /** A socket that never authenticated — nothing may put it on the roster. */
+  const connectUnverified = (docName: string, socketId: string, userId: string) =>
+    driver.hocuspocus.configuration.connected({
+      documentName: docName,
+      socketId,
+      context: {},
+      requestParameters: new URLSearchParams({
+        token: Buffer.from(JSON.stringify({ userId })).toString('base64'),
+      }),
     });
 
   const disconnect = (docName: string, socketId: string) =>
     driver.hocuspocus.configuration.onDisconnect({ documentName: docName, socketId });
 
-  return { manager, connect, disconnect };
+  return { manager, connect, connectUnverified, disconnect };
 }
 
 const DOC = 'researches/42/writing';
@@ -140,6 +159,17 @@ describe('presence is actually fed by the driver', () => {
     expect((await manager.listPresence({ docName: 'whiteboards/9' })).map((m) => m.userId)).toEqual(
       ['u_2'],
     );
+  });
+
+  it('never records an identity the handshake did not verify', async () => {
+    const { manager, connectUnverified } = await buildManager(new FakeStore());
+    close = () => manager.close();
+
+    // The forged claim that used to work: base64 JSON in the query string,
+    // read by `onConnect` before anything checked a signature.
+    await connectUnverified(DOC, 'socket-forged', 'u_victim');
+
+    expect(await manager.listPresence({ docName: DOC })).toEqual([]);
   });
 
   it('stays quiet with no store configured (single-instance dev)', async () => {

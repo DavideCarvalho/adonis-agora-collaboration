@@ -7,6 +7,7 @@
  * `string`, or `params` widens back to `Record<string, string>`, the
  * suppression becomes unused and tsc reports error 2578.
  */
+import * as Y from 'yjs';
 import type {
   CollabDocumentNameFor,
   CollaborationAppConfig,
@@ -32,10 +33,24 @@ const config = defineConfig({
         expectString(params.researchId);
         return allow;
       },
+      // `load` reads its params from the same key, with the same consequences.
+      async load({ docName, params }) {
+        expectString(docName);
+        expectString(params.id);
+        // @ts-expect-error the pattern declares `:id`, not `:researchId`
+        expectString(params.researchId);
+        return new Y.Doc();
+      },
     },
     // Two params, one of them not named `id`.
     'workspaces/:workspaceId/whiteboards/:boardId': {
       engine: 'automerge',
+      // Every seed shape the type allows, and nothing else.
+      async load({ params }) {
+        expectString(params.boardId);
+        if (params.workspaceId === 'none') return null;
+        return new Uint8Array();
+      },
       async authorize(_ctx, { params }) {
         expectString(params.workspaceId);
         expectString(params.boardId);
@@ -63,6 +78,13 @@ const config = defineConfig({
       },
     }),
     ...defineCollection('announcements/pinned'),
+    // A seed the engines cannot read is a compile error, not a runtime shrug.
+    'imports/:id': {
+      // @ts-expect-error a seed is binary state or a Y.Doc, never the app's own JSON
+      async load({ params }) {
+        return { type: 'doc', id: params.id };
+      },
+    },
     // `defineDocument` still works inline and infers `P` from the key.
     'forms/:id': defineDocument({
       async authorize(_ctx, { params }) {
@@ -90,6 +112,7 @@ const widened: CollaborationAppConfig = config;
 type Names = InferCollabDocumentNames<typeof config>;
 
 const declared: Names = 'researches/:id/writing';
+const seeded: Names = 'imports/:id';
 const alsoDeclared: Names = 'workspaces/:workspaceId/whiteboards/:boardId';
 const collection: Names = 'boards/:id';
 const nestedCollection: Names = 'announcements/pinned/:id';
@@ -120,6 +143,7 @@ const runtime: DocumentParams<string> = { anything: 'goes' };
 export const used = [
   widened,
   declared,
+  seeded,
   alsoDeclared,
   collection,
   nestedCollection,

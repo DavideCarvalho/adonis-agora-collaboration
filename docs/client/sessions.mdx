@@ -106,6 +106,26 @@ there is genuinely nothing to edit yet, and leave it alone after that.
 On engines whose transport cannot separate the two (partykit, partyserver, a test double),
 `synced` falls back to reporting `connected` — never less informative than the status.
 
+## Skipping the first token request
+
+The token request and the socket are serialized: nothing of the document can arrive until the first
+finishes. When the server rendered the page it already knew the answer, so it can just say it —
+`issueCollaborationToken` in the controller, `initialTokens` on the provider:
+
+```tsx
+<CollaborationProvider initialTokens={{ [docName]: collabToken }}>
+  <Editor docName={docName} />
+</CollaborationProvider>
+```
+
+`useCollabDoc({ docName, token })` accepts one directly as well. Either way the session builds its
+transport at mount with no HTTP request in front of it.
+
+The token is used **once**. Everything below still happens exactly as it did: a reconnect fetches a
+fresh token, and a pre-issued token that is malformed or already expired is ignored in favour of the
+ordinary fetch — a stale page prop costs the first paint, never the connection. See
+[Token flow](/docs/collaboration/routes/token-flow#issuing-it-before-the-browser-asks).
+
 ## Reconnecting, and why the token is refetched
 
 [Tokens expire](/docs/collaboration/routes/token-flow). So on a disconnect the session does not

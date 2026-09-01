@@ -1,6 +1,6 @@
 export type { ExcalidrawBoardProps } from './components/excalidraw_board.js';
 export { ExcalidrawBoard } from './components/excalidraw_board.js';
-export type { CollaborationProviderProps } from './context.js';
+export type { CollaborationProviderProps, GetOrCreateSessionOptions } from './context.js';
 export { CollaborationProvider, useCollaborationContext } from './context.js';
 export type { AutomergeDocHost, CollabDoc, RichTextDoc } from './docs/index.js';
 export { AutomergeCollabDoc, YjsCollabDoc } from './docs/index.js';
@@ -36,6 +36,11 @@ export type { ExcalidrawAPIHandle, UseExcalidrawSyncOptions } from './hooks/use_
 export { useExcalidrawSync } from './hooks/use_excalidraw_sync.js';
 export type { UseVersionsResult } from './hooks/use_versions.js';
 export { useVersions } from './hooks/use_versions.js';
+export {
+  PRE_ISSUED_TOKEN_MIN_TTL_MS,
+  preIssuedTokenExpiry,
+  usablePreIssuedToken,
+} from './pre_issued_token.js';
 export {
   CollabRestError,
   collabFetch,

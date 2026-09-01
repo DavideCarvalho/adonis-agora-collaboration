@@ -37,9 +37,9 @@ read:
 | Code | Meaning |
 | --- | --- |
 | `4000` | no `doc` in the query string |
-| `4001` | no token, or a token that does not parse |
+| `4001` | no token, or one that fails verification — bad signature, expired, or issued for another document |
 | `4003` | `authorize` said `canRead: false` — **final**, do not retry |
-| `4503` | `authorize` itself threw — the rule could not be evaluated, **retry with backoff** |
+| `4503` | `authorize` itself threw, or the server has no signing key configured — **retry with backoff** |
 | `4500` | the document could not be loaded from storage |
 
 `4003` and `4503` are deliberately different. "You may not" is an answer a client should respect;

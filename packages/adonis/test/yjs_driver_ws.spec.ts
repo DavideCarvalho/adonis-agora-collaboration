@@ -6,6 +6,7 @@ import * as Y from 'yjs';
 import { YjsDriver } from '../src/drivers/yjs/yjs_driver.js';
 import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.js';
 import type { CollaborationStorage } from '../src/types.js';
+import { TEST_TOKEN_SECRET, testToken } from './helpers/token.js';
 
 /**
  * The WebSocket the driver mounts has to actually reach Hocuspocus.
@@ -51,7 +52,13 @@ describe('YjsDriver attach(): the socket feeds Hocuspocus', () => {
 
   it('authenticates, syncs, stores what the client writes and snapshots a non-empty version', async () => {
     const storage: CollaborationStorage = new InMemoryCollaborationStorage();
-    const driver = new YjsDriver({ authorize: allow, storage, path: '/collab', debounce: 25 });
+    const driver = new YjsDriver({
+      authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
+      storage,
+      path: '/collab',
+      debounce: 25,
+    });
     teardown.push(() => driver.close());
 
     const server = createServer((_request, response) => {
@@ -74,8 +81,9 @@ describe('YjsDriver attach(): the socket feeds Hocuspocus', () => {
         url: `ws://127.0.0.1:${port}/collab`,
         name: docName,
         document: doc,
-        // Legacy self-hosted token: base64 JSON with the user id.
-        token: Buffer.from(JSON.stringify({ userId: 'user-1' })).toString('base64'),
+        // A real credential: signed with the server's key, bound to this
+        // document, minted seconds ago.
+        token: testToken(docName, 'user-1'),
         onSynced: ({ state }) => {
           if (!state) return;
           clearTimeout(timer);
@@ -119,6 +127,7 @@ describe('YjsDriver attach(): the socket feeds Hocuspocus', () => {
   it('rejects a bad token by closing the socket instead of leaving it hanging', async () => {
     const driver = new YjsDriver({
       authorize: allow,
+      tokenSecret: TEST_TOKEN_SECRET,
       storage: new InMemoryCollaborationStorage(),
       path: '/collab',
     });

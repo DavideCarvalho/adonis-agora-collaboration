@@ -1,3 +1,4 @@
+import type { Doc as YDoc } from 'yjs';
 import type { CollabConnectionContext, CollaborationEngine, CollabPermission } from './types.js';
 
 /**
@@ -18,6 +19,28 @@ type DocumentParamNames<Pattern extends string> = Pattern extends `${infer Head}
   : Pattern extends `:${infer Name}`
     ? Name
     : never;
+
+/**
+ * What {@link CollabDocumentDeclaration.load} may hand back.
+ *
+ * A `Uint8Array` is the document's state in its **engine's own** binary format
+ * — a Yjs update (`Y.encodeStateAsUpdate(doc)`), an Automerge save
+ * (`A.save(doc)`). It is the only form every engine understands, so it is the
+ * one to reach for.
+ *
+ * A `Y.Doc` is accepted as a shortcut for the Yjs engine, because building a
+ * seed there usually means running the app's own content through a transformer
+ * that already returns one (`TiptapTransformer.toYdoc(json, 'default')`), and
+ * encoding it by hand is a line of ceremony with nothing to decide in it. The
+ * type is Yjs's because the convenience is Yjs's: an Automerge seed arrives as
+ * `A.save(doc)`, and a `Y.Doc` handed to a non-Yjs document is reported and
+ * ignored instead of guessed at. Nothing here mentions Tiptap — the editor is
+ * the app's business, the bytes are ours.
+ *
+ * `null`/`undefined` means "nothing to seed": the document opens empty and the
+ * hook is asked again the next time it is opened.
+ */
+export type CollabDocumentSeed = Uint8Array | YDoc | null | undefined;
 
 /**
  * Declaração declarativa de um documento colaborativo.
@@ -42,6 +65,11 @@ type DocumentParamNames<Pattern extends string> = Pattern extends `${infer Head}
  *         ? { canRead: true, canWrite: true, canComment: true }
  *         : { canRead: false, canWrite: false, canComment: false }
  *     },
+ *     async load({ params }) {
+ *       const research = await Research.find(params.id)
+ *       if (!research?.body) return null
+ *       return TiptapTransformer.toYdoc(research.body, 'default')
+ *     },
  *   },
  * }
  */
@@ -60,6 +88,35 @@ export interface CollabDocumentDeclaration<
     ctx: CollabConnectionContext,
     info: { docName: string; params: P },
   ) => Promise<CollabPermission>;
+  /**
+   * Initial content for a document the storage has **never** stored — the
+   * `params` are typed from the key, exactly like `authorize`'s.
+   *
+   * Called when the document is opened and the storage has nothing under its
+   * name; the result is persisted right away, so the next connection loads it
+   * from storage and the hook is never asked about that document again. It is
+   * how a document whose real content lives elsewhere (a `researches.body`
+   * column, an imported file) is born holding that content instead of empty.
+   *
+   * Without it, seeding is the app's problem, and the app can only solve it
+   * from a request it *knows* precedes the WebSocket — which is a race
+   * dressed up as an ordering. Losing that race is not merely wrong, it is
+   * destructive: the editor mounts against an empty CRDT document, the CRDT
+   * is what the editor shows, and the first autosave writes that emptiness
+   * over the text in the database. That is a real dissertation, lost on
+   * 2026-08-28.
+   *
+   * It receives the document, not the connection. The first client to open a
+   * new document decides what every later one sees, so a seed that varied
+   * with `ctx` would freeze whoever arrived first into everyone else's
+   * document — a per-user document is a different document, with a different
+   * name.
+   *
+   * A `load` that throws is reported on the observability seam and the
+   * document opens empty: a broken seed must not become a failed
+   * handshake that the client then retries forever.
+   */
+  load?: (info: { docName: string; params: P }) => Promise<CollabDocumentSeed>;
 }
 
 /**
