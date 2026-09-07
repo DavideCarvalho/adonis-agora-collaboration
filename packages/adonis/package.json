@@ -119,7 +119,7 @@
     }
   },
   "devDependencies": {
-    "@adonisjs/assembler": "8.5.0",
+    "@adonisjs/assembler": "8.5.1",
     "@adonisjs/core": "7.5.0",
     "@adonisjs/lucid": "22.4.2",
     "@hocuspocus/provider": "^4.6.0",
