@@ -145,13 +145,35 @@ export interface PruneVersionsOptions {
 }
 
 /**
+ * Limit/offset pagination bounds accepted by the list-shaped storage reads
+ * ({@link CollaborationStorage.listVersions}, {@link CollaborationStorage.listComments}).
+ *
+ * Deliberately optional and separate from the required params: a caller that
+ * omits it (every internal driver call computing the next `seq` or resolving
+ * a restore target) gets the historical "every row" behaviour, while the HTTP
+ * routes — the only place an unbounded result becomes a client-facing
+ * problem — always pass one. Implementations should clamp the values
+ * themselves (see `clampLimit`/`clampOffset` in `storage/shared.js`) rather
+ * than trust the caller's numbers.
+ */
+export interface ListPageOptions {
+  limit?: number;
+  offset?: number;
+}
+
+/**
  * Persistence of documents + versions + comments. The host app implements
  * this (database, S3...) and the library only knows the interface.
  */
 export interface CollaborationStorage {
   loadDocument(docName: string): Promise<{ state: Uint8Array } | null>;
   saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void>;
-  listVersions(docName: string): Promise<CollabVersion[]>;
+  /**
+   * Versions of a document, oldest first. `page` bounds the result — omit it
+   * to get every version (what version-numbering and restore need
+   * internally); the HTTP route always supplies one.
+   */
+  listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]>;
   saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>;
   loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>;
   /**
@@ -159,8 +181,11 @@ export interface CollaborationStorage {
    * many versions were removed (or would be, with `dryRun`).
    */
   pruneVersions(options: PruneVersionsOptions): Promise<number>;
-  /** Comments of a document (by space). */
-  listComments(docName: string, space?: string): Promise<CollabComment[]>;
+  /**
+   * Comments of a document (by space), oldest first. `page` bounds the
+   * result the same way it does for {@link listVersions}.
+   */
+  listComments(docName: string, space?: string, page?: ListPageOptions): Promise<CollabComment[]>;
   /**
    * One comment by id. Optional: a storage that cannot look one up directly is
    * served by {@link CommentService.get} falling back to a filtered list — the

@@ -10,6 +10,7 @@ import type {
   CollaborationStorage,
   CollabPermission,
   CollabVersion,
+  ListPageOptions,
   PartyKitConfig,
 } from './types.js';
 
@@ -38,8 +39,8 @@ export interface CollaborationDriver {
     label: string | null,
   ): Promise<CollabVersion>;
 
-  /** Lists the versions in the history. */
-  listVersions(docName: string): Promise<CollabVersion[]>;
+  /** Lists the versions in the history. `page` bounds the result — omit it for every version. */
+  listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]>;
 
   /** Restores the document to a version (creates a new "restored from X" version). */
   restoreVersion(docName: string, versionId: string, restoredBy: string | null): Promise<void>;

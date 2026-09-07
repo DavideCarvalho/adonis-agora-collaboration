@@ -4,9 +4,17 @@ import type {
   CollabComment,
   CollaborationStorage,
   CollabVersion,
+  ListPageOptions,
   PruneVersionsOptions,
 } from '../types.js';
-import { assertPruneKeep, versionsToPrune } from './shared.js';
+import { assertPruneKeep, clampLimit, clampOffset, versionsToPrune } from './shared.js';
+
+/** Applies an opt-in `{ limit, offset }` page to an already-ordered array. */
+function paginate<T>(items: T[], page?: ListPageOptions): T[] {
+  if (!page) return items;
+  const offset = clampOffset(page.offset);
+  return items.slice(offset, offset + clampLimit(page.limit));
+}
 
 /**
  * Disk storage for local development of the library (one file per doc +
@@ -54,8 +62,9 @@ export class FileSystemStorage implements CollaborationStorage {
     await writeFile(this.docPath(docName), state);
   }
 
-  async listVersions(docName: string): Promise<CollabVersion[]> {
+  async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
     void docName;
+    void page;
     return [];
   }
 
@@ -116,11 +125,16 @@ export class FileSystemStorage implements CollaborationStorage {
     return removed;
   }
 
-  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
+  async listComments(
+    docName: string,
+    space?: string,
+    page?: ListPageOptions,
+  ): Promise<CollabComment[]> {
     try {
       const content = await readFile(this.commentsPath(docName), 'utf-8');
       const all = JSON.parse(content) as CollabComment[];
-      return space ? all.filter((comment) => comment.space === space) : all;
+      const filtered = space ? all.filter((comment) => comment.space === space) : all;
+      return paginate(filtered, page);
     } catch {
       return [];
     }

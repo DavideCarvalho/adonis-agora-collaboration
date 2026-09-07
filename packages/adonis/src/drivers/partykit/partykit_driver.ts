@@ -1,7 +1,12 @@
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import * as Y from 'yjs';
 import type { CollaborationDriver, PartyKitDriverOptions } from '../../driver.js';
-import type { CollabDiffSummary, CollaborationStorage, CollabVersion } from '../../types.js';
+import type {
+  CollabDiffSummary,
+  CollaborationStorage,
+  CollabVersion,
+  ListPageOptions,
+} from '../../types.js';
 import { createVersionMetadata, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
 
@@ -136,8 +141,8 @@ export class PartyKitDriver implements CollaborationDriver {
     return version;
   }
 
-  async listVersions(docName: string): Promise<CollabVersion[]> {
-    return this.storage.listVersions(docName);
+  async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
+    return this.storage.listVersions(docName, page);
   }
 
   async restoreVersion(

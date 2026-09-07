@@ -3,9 +3,10 @@ import type {
   CollabComment,
   CollaborationStorage,
   CollabVersion,
+  ListPageOptions,
   PruneVersionsOptions,
 } from '../types.js';
-import { assertPruneKeep, versionsToPrune } from './shared.js';
+import { assertPruneKeep, clampLimit, clampOffset, versionsToPrune } from './shared.js';
 
 /**
  * Minimal structural contract for the lucid connection — avoids the
@@ -131,30 +132,38 @@ export class LucidStorage implements CollaborationStorage {
   ): Promise<void> {
     await this.ensure();
     const knex = await this.knex();
-    const existing = await knex.from('collab_documents').where('doc_name', docName).first();
-    const payload = {
-      state: Buffer.from(state),
-      meta: meta ?? null,
-      updated_at: new Date(),
-    };
-    if (existing) {
-      await knex.from('collab_documents').where('doc_name', docName).update(payload);
-    } else {
-      await knex.table('collab_documents').insert({
+    const now = new Date();
+    // Single upsert instead of a SELECT to decide insert-vs-update: the old
+    // shape ran two round-trips per save, on every debounce flush of every
+    // actively-edited document. `doc_name` is the table's primary key (see
+    // `ensureSchema`/the published migration), so it is the only possible
+    // conflict target. `created_at` is deliberately left out of `.merge()` —
+    // an update must not look like the row was created just now.
+    await knex
+      .table('collab_documents')
+      .insert({
         doc_name: docName,
-        ...payload,
-        created_at: new Date(),
-      });
-    }
+        state: Buffer.from(state),
+        meta: meta ?? null,
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflict('doc_name')
+      .merge(['state', 'meta', 'updated_at']);
   }
 
-  async listVersions(docName: string): Promise<CollabVersion[]> {
+  async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
     await this.ensure();
     const knex = await this.knex();
-    const rows = await knex
-      .from('collab_versions')
-      .where('doc_name', docName)
-      .orderBy('seq', 'asc');
+    let query = knex.from('collab_versions').where('doc_name', docName).orderBy('seq', 'asc');
+    // `page` is opt-in: internal callers computing the next `seq` or a
+    // restore target need every version, and only pass none. The HTTP route
+    // always passes one, which is what keeps a long history from coming back
+    // as one ever-growing JSON array.
+    if (page) {
+      query = query.limit(clampLimit(page.limit)).offset(clampOffset(page.offset));
+    }
+    const rows = await query;
     return rows.map((row) => ({
       id: row.id as string,
       createdBy: (row.created_by as string | null) ?? null,
@@ -229,11 +238,22 @@ export class LucidStorage implements CollaborationStorage {
     return removed;
   }
 
-  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
+  async listComments(
+    docName: string,
+    space?: string,
+    page?: ListPageOptions,
+  ): Promise<CollabComment[]> {
     await this.ensure();
     const knex = await this.knex();
-    let query = knex.from('collab_comments').where('doc_name', docName);
+    let query = knex
+      .from('collab_comments')
+      .where('doc_name', docName)
+      .orderBy('created_at', 'asc');
     if (space) query = query.where('space', space);
+    // Same opt-in pagination as `listVersions` — see the comment there.
+    if (page) {
+      query = query.limit(clampLimit(page.limit)).offset(clampOffset(page.offset));
+    }
     const rows = await query;
     return rows.map((row) => this.toComment(row));
   }
@@ -279,7 +299,6 @@ export class LucidStorage implements CollaborationStorage {
   async saveComment(docName: string, comment: CollabComment): Promise<void> {
     await this.ensure();
     const knex = await this.knex();
-    const existing = await knex.from('collab_comments').where('id', comment.id).first();
     const payload = {
       doc_name: comment.documentName,
       space: comment.space,
@@ -290,15 +309,18 @@ export class LucidStorage implements CollaborationStorage {
       resolved_at: comment.resolvedAt ? new Date(comment.resolvedAt) : null,
       updated_at: new Date(),
     };
-    if (existing) {
-      await knex.from('collab_comments').where('id', comment.id).update(payload);
-    } else {
-      await knex.table('collab_comments').insert({
+    // Same single-upsert shape as `saveDocument` — `id` is the table's primary
+    // key, and `created_at` is excluded from `.merge()` so an edit does not
+    // reset when the comment was created.
+    await knex
+      .table('collab_comments')
+      .insert({
         id: comment.id,
         ...payload,
         created_at: new Date(comment.createdAt),
-      });
-    }
+      })
+      .onConflict('id')
+      .merge(Object.keys(payload));
     void docName;
   }
 

@@ -13,7 +13,18 @@ import {
   CollabUnauthorizedError,
   type ResolveUserFn,
 } from './http/types.js';
+import { clampLimit, clampOffset } from './storage/shared.js';
 import type { CollabPermission } from './types.js';
+
+/** Parses `limit`/`offset` off a query string, clamped to a sane page. */
+function pageOf(qs: Record<string, unknown>): { limit: number; offset: number } {
+  const toNumber = (value: unknown): number | undefined => {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string' && value.trim() !== '') return Number(value);
+    return undefined;
+  };
+  return { limit: clampLimit(toNumber(qs.limit)), offset: clampOffset(toNumber(qs.offset)) };
+}
 
 /**
  * Built-in REST endpoints for the collaboration package.
@@ -325,12 +336,13 @@ async function handleListComments(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const { doc, space } = ctx.request.qs() as { doc?: string; space?: string };
+  const qs = ctx.request.qs() as { doc?: string; space?: string; limit?: string; offset?: string };
+  const { doc, space } = qs;
   const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
   if (isDenied(allowed)) return allowed.denied;
 
   const manager = await runtime.manager();
-  return manager.comments.list(allowed.docName, space);
+  return manager.comments.list(allowed.docName, space, pageOf(qs));
 }
 
 async function handleCreateComment(
@@ -428,12 +440,13 @@ async function handleListVersions(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const doc = ctx.request.qs().doc as string | undefined;
-  const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
+  const qs = ctx.request.qs() as { doc?: string; limit?: string; offset?: string };
+  const allowed = await guard(ctx, runtime, resolveUser, qs.doc, 'canRead');
   if (isDenied(allowed)) return allowed.denied;
 
   const manager = await runtime.manager();
-  return manager.listVersions({ docName: allowed.docName });
+  const { limit, offset } = pageOf(qs);
+  return manager.listVersions({ docName: allowed.docName, limit, offset });
 }
 
 async function handleCreateVersion(

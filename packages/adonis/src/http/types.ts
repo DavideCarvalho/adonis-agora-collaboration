@@ -95,7 +95,7 @@ export interface CollabManagerLike {
     createdBy: string | null;
     label?: string | null;
   }): Promise<unknown>;
-  listVersions(options: { docName: string }): Promise<unknown[]>;
+  listVersions(options: { docName: string; limit?: number; offset?: number }): Promise<unknown[]>;
   restoreVersion(options: {
     docName: string;
     versionId: string;
@@ -103,7 +103,11 @@ export interface CollabManagerLike {
   }): Promise<void>;
   persistDocument?(options: { docName: string; state: Uint8Array }): Promise<void>;
   comments: {
-    list(docName: string, space?: string): Promise<unknown[]>;
+    list(
+      docName: string,
+      space?: string,
+      page?: { limit?: number; offset?: number },
+    ): Promise<unknown[]>;
     get(docName: string, commentId: string): Promise<unknown>;
     create(docName: string, comment: Record<string, unknown>): Promise<unknown>;
     resolve(docName: string, commentId: string, resolved: boolean): Promise<unknown>;
