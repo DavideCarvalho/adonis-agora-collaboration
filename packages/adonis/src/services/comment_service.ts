@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { CollabComment, CollaborationStorage } from '../types.js';
+import type { CollabComment, CollaborationStorage, ListPageOptions } from '../types.js';
 
 /**
  * Anchored comments service — generic over content type.
@@ -12,8 +12,8 @@ import type { CollabComment, CollaborationStorage } from '../types.js';
 export class CommentService {
   constructor(private storage: CollaborationStorage) {}
 
-  async list(docName: string, space?: string): Promise<CollabComment[]> {
-    const comments = await this.storage.listComments(docName, space);
+  async list(docName: string, space?: string, page?: ListPageOptions): Promise<CollabComment[]> {
+    const comments = await this.storage.listComments(docName, space, page);
     return comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 

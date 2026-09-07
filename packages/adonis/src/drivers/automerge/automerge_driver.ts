@@ -9,6 +9,7 @@ import type {
   CollaborationStorage,
   CollabPermission,
   CollabVersion,
+  ListPageOptions,
 } from '../../types.js';
 import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
 import { lineDiff, resolveStorage } from '../shared.js';
@@ -333,8 +334,8 @@ export class AutomergeDriver implements CollaborationDriver {
     return version;
   }
 
-  async listVersions(docName: string): Promise<CollabVersion[]> {
-    return this.storage.listVersions(docName);
+  async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
+    return this.storage.listVersions(docName, page);
   }
 
   /**

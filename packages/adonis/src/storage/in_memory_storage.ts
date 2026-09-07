@@ -2,9 +2,17 @@ import type {
   CollabComment,
   CollaborationStorage,
   CollabVersion,
+  ListPageOptions,
   PruneVersionsOptions,
 } from '../types.js';
-import { assertPruneKeep, versionsToPrune } from './shared.js';
+import { assertPruneKeep, clampLimit, clampOffset, versionsToPrune } from './shared.js';
+
+/** Applies an opt-in `{ limit, offset }` page to an already-ordered array. */
+function paginate<T>(items: T[], page?: ListPageOptions): T[] {
+  if (!page) return items;
+  const offset = clampOffset(page.offset);
+  return items.slice(offset, offset + clampLimit(page.limit));
+}
 
 /**
  * In-memory storage — development fallback when the app doesn't configure
@@ -25,8 +33,9 @@ export class InMemoryCollaborationStorage implements CollaborationStorage {
     this.docs.set(docName, state);
   }
 
-  async listVersions(docName: string): Promise<CollabVersion[]> {
-    return (this.versions.get(docName) ?? []).map((entry) => entry.version);
+  async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
+    const all = (this.versions.get(docName) ?? []).map((entry) => entry.version);
+    return paginate(all, page);
   }
 
   async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
@@ -64,9 +73,14 @@ export class InMemoryCollaborationStorage implements CollaborationStorage {
     return removed;
   }
 
-  async listComments(docName: string, space?: string): Promise<CollabComment[]> {
+  async listComments(
+    docName: string,
+    space?: string,
+    page?: ListPageOptions,
+  ): Promise<CollabComment[]> {
     const all = this.comments.get(docName) ?? [];
-    return space ? all.filter((comment) => comment.space === space) : all;
+    const filtered = space ? all.filter((comment) => comment.space === space) : all;
+    return paginate(filtered, page);
   }
 
   async saveComment(docName: string, comment: CollabComment): Promise<void> {

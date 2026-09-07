@@ -21,6 +21,7 @@ import type {
   CollaborationEngine,
   CollabPermission,
   CollabVersion,
+  ListPageOptions,
   LiveDocumentResult,
   PruneVersionsOptions,
 } from './types.js';
@@ -293,8 +294,25 @@ export class CollaborationManager {
     );
   }
 
-  listVersions({ docName }: { docName: string }): Promise<CollabVersion[]> {
-    return this.#driverFor(docName).then((driver) => driver.listVersions(docName));
+  listVersions({
+    docName,
+    limit,
+    offset,
+  }: {
+    docName: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<CollabVersion[]> {
+    // Omitting `page` entirely (rather than `{ limit: undefined, offset: undefined }`)
+    // matters: the storage treats an absent page as "every version", which is what a
+    // caller with no pagination opinion (a driver computing the next `seq`) needs.
+    let page: ListPageOptions | undefined;
+    if (limit !== undefined || offset !== undefined) {
+      page = {};
+      if (limit !== undefined) page.limit = limit;
+      if (offset !== undefined) page.offset = offset;
+    }
+    return this.#driverFor(docName).then((driver) => driver.listVersions(docName, page));
   }
 
   /**
