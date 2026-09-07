@@ -16,11 +16,11 @@ Adonis routes, Tuyau types them for your frontend like any other.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/collaboration/token?doc=` | mint a WebSocket credential for a document |
-| `GET` | `/collaboration/comments?doc=&space=` | list a document's comments, optionally one space |
+| `GET` | `/collaboration/comments?doc=&space=&limit=&offset=` | list a document's comments, optionally one space |
 | `POST` | `/collaboration/comments` | create an anchored comment |
 | `PATCH` | `/collaboration/comments/:id?doc=` | resolve or reopen a comment |
 | `DELETE` | `/collaboration/comments/:id?doc=` | remove a comment |
-| `GET` | `/collaboration/versions?doc=` | list a document's versions |
+| `GET` | `/collaboration/versions?doc=&limit=&offset=` | list a document's versions |
 | `POST` | `/collaboration/versions` | create a named version |
 | `POST` | `/collaboration/versions/restore` | restore a version into the live document |
 | `GET` | `/collaboration/state?doc=` | read the raw document binary |
@@ -59,7 +59,9 @@ GET /collaboration/token?doc=researches/42/writing
 GET /collaboration/comments?doc=researches/42/writing&space=text
 ```
 
-Returns `CollabComment[]`, oldest first. Omit `space` for every space.
+Returns `CollabComment[]`, oldest first. Omit `space` for every space. `limit`/`offset` page the
+result — offset-based, clamped server-side to `1..200` (default `50`); omit both for the first
+page.
 
 ```http
 POST /collaboration/comments
@@ -97,8 +99,9 @@ POST /collaboration/versions            { "docName": "…", "label": "before rev
 POST /collaboration/versions/restore    { "docName": "…", "versionId": "…" }
 ```
 
-`POST /versions` returns the created `CollabVersion`; like a comment, its `createdBy` is the
-authenticated caller and a `userId` in the body is ignored. `POST /versions/restore` returns `204`
+`GET /versions` takes the same `limit`/`offset` paging as `GET /comments`. `POST /versions` returns
+the created `CollabVersion`; like a comment, its `createdBy` is the authenticated caller and a
+`userId` in the body is ignored. `POST /versions/restore` returns `204`
 and takes effect **live** — every connected client receives the restored content through the sync
 protocol, and the state the restore replaced is written to the history first as
 `restored from #<seq>`, attributed to the caller. See
