@@ -17,12 +17,12 @@ interface CollaborationStorage {
   loadDocument(docName): Promise<{ state: Uint8Array } | null>
   saveDocument(docName, state, meta?): Promise<void>
 
-  listVersions(docName): Promise<CollabVersion[]>
+  listVersions(docName, page?): Promise<CollabVersion[]>
   saveVersion(docName, version, snapshot): Promise<void>
   loadVersionSnapshot(docName, versionId): Promise<Uint8Array | null>
   pruneVersions({ keep, docName?, dryRun? }): Promise<number>
 
-  listComments(docName, space?): Promise<CollabComment[]>
+  listComments(docName, space?, page?): Promise<CollabComment[]>
   saveComment(docName, comment): Promise<void>
   deleteComment(docName, commentId): Promise<void>
 }

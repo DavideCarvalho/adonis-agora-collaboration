@@ -245,12 +245,12 @@ interface CollaborationStorage {
   loadDocument(docName: string): Promise<{ state: Uint8Array } | null>
   saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void>
 
-  listVersions(docName: string): Promise<CollabVersion[]>
+  listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]>
   saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>
   loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>
   pruneVersions(options: { keep: number; docName?: string; dryRun?: boolean }): Promise<number>
 
-  listComments(docName: string, space?: string): Promise<CollabComment[]>
+  listComments(docName: string, space?: string, page?: ListPageOptions): Promise<CollabComment[]>
   getComment?(docName: string, commentId: string): Promise<CollabComment | null>  // optional
   saveComment(docName: string, comment: CollabComment): Promise<void>
   deleteComment(docName: string, commentId: string): Promise<void>
