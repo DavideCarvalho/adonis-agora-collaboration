@@ -351,15 +351,18 @@ rule through the manager — the same one the handshake uses — and deny when n
 | Method | Path | Body / query |
 | --- | --- | --- |
 | `GET` | `/token` | `?doc=` |
-| `GET` | `/comments` | `?doc=&space=` |
+| `GET` | `/comments` | `?doc=&space=&limit=&offset=` |
 | `POST` | `/comments` | `{ docName, space, anchor, body, authorName? }` — author is the caller |
 | `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) — author or `canWrite` |
 | `DELETE` | `/comments/:id` | `?doc=` — author or `canWrite` |
-| `GET` | `/versions` | `?doc=` |
+| `GET` | `/versions` | `?doc=&limit=&offset=` |
 | `POST` | `/versions` | `{ docName, label? }` — `createdBy` is the caller |
 | `POST` | `/versions/restore` | `{ docName, versionId }` → `204` |
 | `GET` | `/state` | `?doc=` → `application/octet-stream` |
 | `POST` | `/state` | `?doc=` · raw body · `x-collab-worker-secret` |
+
+`GET /comments` and `GET /versions` page with `limit`/`offset` — offset-based, clamped server-side
+to `1..200` (default `50`).
 
 Also exported: `defaultResolveUser` (authenticates via `ctx.auth.check()` before reading the user),
 `canMutateComment({ comment, userId, permission })` and `secretsMatch(received, expected)`.
