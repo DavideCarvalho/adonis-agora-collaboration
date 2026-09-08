@@ -257,6 +257,17 @@ interface CollaborationStorage {
 }
 ```
 
+```ts
+interface ListPageOptions {
+  page?: number  // 1-based, default 1
+  size?: number  // default 50, capped at 200
+}
+```
+
+`ListPageOptions` mirrors `@adonis-agora/filter`'s pagination shape (`page`/`size`) so every
+`@adonis-agora/*` package pages identically. Omit it entirely to get every row — that is what the
+internal `seq` and restore lookups rely on; the HTTP routes always supply one.
+
 Implementations: `lucidStorage({ connection })` / `LucidStorage`, `FileSystemStorage(baseDir?)`,
 `InMemoryCollaborationStorage`.
 
@@ -351,18 +362,19 @@ rule through the manager — the same one the handshake uses — and deny when n
 | Method | Path | Body / query |
 | --- | --- | --- |
 | `GET` | `/token` | `?doc=` |
-| `GET` | `/comments` | `?doc=&space=&limit=&offset=` |
+| `GET` | `/comments` | `?doc=&space=&page=&size=` |
 | `POST` | `/comments` | `{ docName, space, anchor, body, authorName? }` — author is the caller |
 | `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) — author or `canWrite` |
 | `DELETE` | `/comments/:id` | `?doc=` — author or `canWrite` |
-| `GET` | `/versions` | `?doc=&limit=&offset=` |
+| `GET` | `/versions` | `?doc=&page=&size=` |
 | `POST` | `/versions` | `{ docName, label? }` — `createdBy` is the caller |
 | `POST` | `/versions/restore` | `{ docName, versionId }` → `204` |
 | `GET` | `/state` | `?doc=` → `application/octet-stream` |
 | `POST` | `/state` | `?doc=` · raw body · `x-collab-worker-secret` |
 
-`GET /comments` and `GET /versions` page with `limit`/`offset` — offset-based, clamped server-side
-to `1..200` (default `50`).
+`GET /comments` and `GET /versions` page with `page`/`size` — offset-based, `page` **1-based**
+(default `1`) and `size` clamped server-side to `1..200` (default `50`). Same shape as
+`@adonis-agora/filter`, so every Agora list endpoint pages identically.
 
 Also exported: `defaultResolveUser` (authenticates via `ctx.auth.check()` before reading the user),
 `canMutateComment({ comment, userId, permission })` and `secretsMatch(received, expected)`.

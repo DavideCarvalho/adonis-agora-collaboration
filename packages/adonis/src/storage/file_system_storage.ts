@@ -7,13 +7,15 @@ import type {
   ListPageOptions,
   PruneVersionsOptions,
 } from '../types.js';
-import { assertPruneKeep, clampLimit, clampOffset, versionsToPrune } from './shared.js';
+import { assertPruneKeep, resolvePage, versionsToPrune } from './shared.js';
 
-/** Applies an opt-in `{ limit, offset }` page to an already-ordered array. */
+/** Applies an opt-in `{ page, size }` page to an already-ordered array. */
 function paginate<T>(items: T[], page?: ListPageOptions): T[] {
   if (!page) return items;
-  const offset = clampOffset(page.offset);
-  return items.slice(offset, offset + clampLimit(page.limit));
+  // Same `(page - 1) * size` the SQL store computes — the 0-based offset is
+  // derived here, it is never part of the interface.
+  const { size, offset } = resolvePage(page);
+  return items.slice(offset, offset + size);
 }
 
 /**

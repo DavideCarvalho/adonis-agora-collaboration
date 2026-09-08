@@ -35,16 +35,8 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
       calls.push(`version:${docName}:${createdBy}:${label}`);
       return { id: 'v1', seq: 1 };
     },
-    async listVersions({
-      docName,
-      limit,
-      offset,
-    }: {
-      docName: string;
-      limit?: number;
-      offset?: number;
-    }) {
-      calls.push(`versions:${docName}:${limit}:${offset}`);
+    async listVersions({ docName, page, size }: { docName: string; page?: number; size?: number }) {
+      calls.push(`versions:${docName}:${page}:${size}`);
       return [];
     },
     async restoreVersion() {},
@@ -53,7 +45,7 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
     },
     comments: {
       async list(docName, space, page) {
-        calls.push(`comments:${docName}:${space}:${page?.limit}:${page?.offset}`);
+        calls.push(`comments:${docName}:${space}:${page?.page}:${page?.size}`);
         return [{ id: 'c1' }];
       },
       async create(docName, comment) {
@@ -343,12 +335,15 @@ describe('comments + versions endpoints', () => {
 /**
  * `GET /versions` and `GET /comments` used to hand the manager `docName`
  * alone — every version/comment of a long-lived document came back as one
- * JSON array. The route now always clamps a page (default 50, max 200) and
- * passes it through, so an unbounded query string can't select the whole
+ * JSON array. The route now always clamps a page (default size 50, max 200)
+ * and passes it through, so an unbounded query string can't select the whole
  * table even for a caller who never heard of pagination.
+ *
+ * The wire format is `?page=1&size=25` — 1-based, matching
+ * `@adonis-agora/filter` so every Agora endpoint pages identically.
  */
 describe('list pagination (versions + comments)', () => {
-  it('defaults to limit 50 / offset 0 when the query string has none', async () => {
+  it('defaults to page 1 / size 50 when the query string has none', async () => {
     const manager = makeManager();
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(manager));
@@ -356,50 +351,50 @@ describe('list pagination (versions + comments)', () => {
     await find('GET', '/versions').handler(makeCtx({ qs: { doc: 'd/1' }, user: { id: 'u1' } }));
     await find('GET', '/comments').handler(makeCtx({ qs: { doc: 'd/1' }, user: { id: 'u1' } }));
 
-    expect(manager.calls).toContain('versions:d/1:50:0');
-    expect(manager.calls).toContain('comments:d/1:undefined:50:0');
+    expect(manager.calls).toContain('versions:d/1:1:50');
+    expect(manager.calls).toContain('comments:d/1:undefined:1:50');
   });
 
-  it('passes through a requested limit/offset within bounds', async () => {
+  it('passes through a requested page/size within bounds', async () => {
     const manager = makeManager();
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(manager));
 
     await find('GET', '/versions').handler(
-      makeCtx({ qs: { doc: 'd/1', limit: '10', offset: '20' }, user: { id: 'u1' } }),
+      makeCtx({ qs: { doc: 'd/1', page: '3', size: '10' }, user: { id: 'u1' } }),
     );
     await find('GET', '/comments').handler(
-      makeCtx({ qs: { doc: 'd/1', space: 'text', limit: '5', offset: '15' }, user: { id: 'u1' } }),
+      makeCtx({ qs: { doc: 'd/1', space: 'text', page: '4', size: '5' }, user: { id: 'u1' } }),
     );
 
-    expect(manager.calls).toContain('versions:d/1:10:20');
-    expect(manager.calls).toContain('comments:d/1:text:5:15');
+    expect(manager.calls).toContain('versions:d/1:3:10');
+    expect(manager.calls).toContain('comments:d/1:text:4:5');
   });
 
-  it('clamps an oversized limit and a negative offset instead of trusting the client', async () => {
+  it('clamps an oversized size and a page below one instead of trusting the client', async () => {
     const manager = makeManager();
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(manager));
 
     await find('GET', '/versions').handler(
-      makeCtx({ qs: { doc: 'd/1', limit: '999999', offset: '-5' }, user: { id: 'u1' } }),
+      makeCtx({ qs: { doc: 'd/1', page: '-5', size: '999999' }, user: { id: 'u1' } }),
     );
 
-    // 200 is COLLAB_LIST_MAX_LIMIT; a negative offset clamps to 0 rather than
-    // erroring or being passed straight to the database.
-    expect(manager.calls).toContain('versions:d/1:200:0');
+    // 200 is COLLAB_LIST_MAX_SIZE; a page below 1 clamps to the first page
+    // rather than erroring or producing a negative offset in the database.
+    expect(manager.calls).toContain('versions:d/1:1:200');
   });
 
-  it('falls back to the default on a garbage (non-numeric) limit/offset', async () => {
+  it('falls back to the default on a garbage (non-numeric) page/size', async () => {
     const manager = makeManager();
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(manager));
 
     await find('GET', '/versions').handler(
-      makeCtx({ qs: { doc: 'd/1', limit: 'not-a-number', offset: 'nope' }, user: { id: 'u1' } }),
+      makeCtx({ qs: { doc: 'd/1', page: 'not-a-number', size: 'nope' }, user: { id: 'u1' } }),
     );
 
-    expect(manager.calls).toContain('versions:d/1:50:0');
+    expect(manager.calls).toContain('versions:d/1:1:50');
   });
 });
 

@@ -38,7 +38,8 @@ that fail quietly rather than loudly:
 3. **`saveComment` is an upsert.** Resolving and reopening call it with an existing `id`.
 4. **`listComments` filters by space when given one**, and returns every space when not. Sorting is
    handled above you. Both `listVersions` and `listComments` accept an optional `page`
-   (`{ limit?, offset? }`): omit it and return every row — the HTTP routes always supply one, so
+   (`{ page?, size? }` — a **1-based** page number and a page size, the same shape
+   `@adonis-agora/filter` uses): omit it and return every row — the HTTP routes always supply one, so
    honour it or a long history comes back as one ever-growing array. `getComment` is **optional**: implement it when your backend can look one
    comment up by id, and `manager.comments.get` — which the route guard calls on every comment
    PATCH and DELETE — stops loading a document's whole thread to authorize one row. Leave it out and
@@ -99,8 +100,10 @@ export class S3CollabStorage implements CollaborationStorage {
     const query = db.from('collab_versions').where('doc_name', docName).orderBy('seq', 'asc')
     // `page` is optional: omit it and return every row (what version-numbering
     // and restore need internally); the HTTP route always supplies one.
+    // `page.page` is 1-based — derive the 0-based SQL offset yourself.
     if (page) {
-      query.limit(Math.min(Math.max(page.limit ?? 100, 1), 500)).offset(Math.max(page.offset ?? 0, 0))
+      const size = Math.min(Math.max(page.size ?? 100, 1), 500)
+      query.limit(size).offset((Math.max(page.page ?? 1, 1) - 1) * size)
     }
     const rows = await query
     return rows.map((row) => ({
@@ -170,7 +173,8 @@ export class S3CollabStorage implements CollaborationStorage {
     const query = db.from('collab_comments').where('doc_name', docName)
     if (space) query.andWhere('space', space)
     if (page) {
-      query.limit(Math.min(Math.max(page.limit ?? 100, 1), 500)).offset(Math.max(page.offset ?? 0, 0))
+      const size = Math.min(Math.max(page.size ?? 100, 1), 500)
+      query.limit(size).offset((Math.max(page.page ?? 1, 1) - 1) * size)
     }
     return (await query).map(toComment)
   }

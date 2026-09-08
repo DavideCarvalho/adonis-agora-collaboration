@@ -104,6 +104,7 @@ export type {
   CollabPermission,
   CollabVersion,
   CommentAnchor,
+  ListPageOptions,
   LiveDocumentAbsence,
   LiveDocumentResult,
   PartyKitConfig,
