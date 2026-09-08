@@ -8,10 +8,11 @@ import { createIntegrationDatabase, type IntegrationDatabase } from './harness.j
  * published migrations create.
  *
  * `lucid_prune.spec.ts` already proves the batched-delete SQL is valid; this file proves
- * the other half of the same class — that `.limit()`/`.offset()` land on the actual query
- * (not just get computed and dropped), that the result stays correctly ordered across
- * pages, and that an OMITTED page still returns the full history (what
- * `YjsDriver.createVersion`'s `seqVersions` and `restoreVersion`'s target lookup rely on).
+ * the other half of the same class — that the `{ page, size }` request lands on the actual
+ * query as `LIMIT/OFFSET` (not just gets computed and dropped), that the 1-based page maps to
+ * the right `(page - 1) * size` rows, that the result stays correctly ordered across pages, and
+ * that an OMITTED page still returns the full history (what `YjsDriver.createVersion`'s
+ * `seqVersions` and `restoreVersion`'s target lookup rely on).
  */
 const SCHEMA = 'collab_pagination';
 
@@ -73,27 +74,35 @@ describe('LucidStorage list pagination (Postgres)', () => {
     );
   });
 
-  it('limits and offsets versions server-side', async () => {
-    expect((await storage.listVersions(DOC, { limit: 3, offset: 4 })).map((v) => v.seq)).toEqual([
-      5, 6, 7,
+  it('pages versions server-side off the 1-based page number', async () => {
+    // page 3 of size 3 is `(3 - 1) * 3 = 6` rows in.
+    expect((await storage.listVersions(DOC, { page: 3, size: 3 })).map((v) => v.seq)).toEqual([
+      7, 8, 9,
+    ]);
+    expect((await storage.listVersions(DOC, { page: 1, size: 3 })).map((v) => v.seq)).toEqual([
+      1, 2, 3,
     ]);
   });
 
-  it('limits and offsets comments server-side, ordered by creation time', async () => {
+  it('pages comments server-side, ordered by creation time', async () => {
     expect(
-      (await storage.listComments(DOC, undefined, { limit: 3, offset: 4 })).map((c) => c.id),
-    ).toEqual(['c5', 'c6', 'c7']);
+      (await storage.listComments(DOC, undefined, { page: 3, size: 3 })).map((c) => c.id),
+    ).toEqual(['c7', 'c8', 'c9']);
   });
 
   it('two consecutive pages cover the whole history with no gap or overlap', async () => {
-    const first = await storage.listVersions(DOC, { limit: 6, offset: 0 });
-    const second = await storage.listVersions(DOC, { limit: 6, offset: 6 });
+    const first = await storage.listVersions(DOC, { page: 1, size: 6 });
+    const second = await storage.listVersions(DOC, { page: 2, size: 6 });
     expect([...first, ...second].map((v) => v.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
-  it('clamps an oversized limit and a negative offset rather than trusting the caller', async () => {
+  it('defaults an omitted page number to the first page', async () => {
+    expect((await storage.listVersions(DOC, { size: 4 })).map((v) => v.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('clamps an oversized size and a page below one rather than trusting the caller', async () => {
     expect(
-      (await storage.listVersions(DOC, { limit: 999_999, offset: -100 })).map((v) => v.seq),
+      (await storage.listVersions(DOC, { page: -100, size: 999_999 })).map((v) => v.seq),
     ).toEqual(Array.from({ length: 10 }, (_, index) => index + 1));
   });
 
@@ -103,7 +112,7 @@ describe('LucidStorage list pagination (Postgres)', () => {
       space: 'canvas',
     });
 
-    const page = await storage.listComments(DOC, 'text', { limit: 2, offset: 0 });
+    const page = await storage.listComments(DOC, 'text', { page: 1, size: 2 });
     expect(page.map((c) => c.id)).toEqual(['c1', 'c2']);
     expect(page.every((c) => c.space === 'text')).toBe(true);
   });

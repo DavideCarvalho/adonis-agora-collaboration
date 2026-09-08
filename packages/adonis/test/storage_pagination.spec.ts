@@ -56,25 +56,39 @@ describe('InMemoryCollaborationStorage pagination', () => {
     expect((await storage.listVersions(DOC)).map((v) => v.seq)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  it('slices to the requested limit/offset', async () => {
+  it('slices to the requested 1-based page/size', async () => {
     const storage = new InMemoryCollaborationStorage();
     for (let seq = 1; seq <= 5; seq++) {
       await storage.saveVersion(DOC, version(seq), new Uint8Array([seq]));
     }
 
-    expect((await storage.listVersions(DOC, { limit: 2, offset: 1 })).map((v) => v.seq)).toEqual([
-      2, 3,
+    // page 2 of size 2 is `(2 - 1) * 2 = 2` rows in — the 0-based offset is the
+    // store's business, never the caller's.
+    expect((await storage.listVersions(DOC, { page: 2, size: 2 })).map((v) => v.seq)).toEqual([
+      3, 4,
+    ]);
+    expect((await storage.listVersions(DOC, { page: 1, size: 2 })).map((v) => v.seq)).toEqual([
+      1, 2,
     ]);
   });
 
-  it('clamps an oversized limit and a negative offset', async () => {
+  it('treats an omitted page as the first one', async () => {
+    const storage = new InMemoryCollaborationStorage();
+    for (let seq = 1; seq <= 5; seq++) {
+      await storage.saveVersion(DOC, version(seq), new Uint8Array([seq]));
+    }
+
+    expect((await storage.listVersions(DOC, { size: 2 })).map((v) => v.seq)).toEqual([1, 2]);
+  });
+
+  it('clamps an oversized size and a page below one', async () => {
     const storage = new InMemoryCollaborationStorage();
     for (let seq = 1; seq <= 5; seq++) {
       await storage.saveVersion(DOC, version(seq), new Uint8Array([seq]));
     }
 
     expect(
-      (await storage.listVersions(DOC, { limit: 999_999, offset: -3 })).map((v) => v.seq),
+      (await storage.listVersions(DOC, { page: -3, size: 999_999 })).map((v) => v.seq),
     ).toEqual([1, 2, 3, 4, 5]);
   });
 
@@ -85,8 +99,12 @@ describe('InMemoryCollaborationStorage pagination', () => {
     await storage.saveComment(DOC, comment('c', 'text', 3));
     await storage.saveComment(DOC, comment('d', 'text', 4));
 
-    const page = await storage.listComments(DOC, 'text', { limit: 2, offset: 1 });
-    expect(page.map((c) => c.id)).toEqual(['c', 'd']);
+    // Space filter first, then the page — `b` is a canvas comment and must not
+    // occupy a slot on the text thread's first page.
+    const first = await storage.listComments(DOC, 'text', { page: 1, size: 2 });
+    const second = await storage.listComments(DOC, 'text', { page: 2, size: 2 });
+    expect(first.map((c) => c.id)).toEqual(['a', 'c']);
+    expect(second.map((c) => c.id)).toEqual(['d']);
   });
 
   it('does not truncate the history a live driver uses to compute the next seq', async () => {
@@ -124,7 +142,7 @@ describe('FileSystemStorage pagination', () => {
 
       expect((await storage.listComments(DOC)).map((c) => c.id)).toEqual(['a', 'b', 'c']);
       expect(
-        (await storage.listComments(DOC, undefined, { limit: 1, offset: 1 })).map((c) => c.id),
+        (await storage.listComments(DOC, undefined, { page: 2, size: 1 })).map((c) => c.id),
       ).toEqual(['b']);
     } finally {
       await rm(baseDir, { recursive: true, force: true });

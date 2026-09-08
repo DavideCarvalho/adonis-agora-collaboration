@@ -6,7 +6,7 @@ import type {
   ListPageOptions,
   PruneVersionsOptions,
 } from '../types.js';
-import { assertPruneKeep, clampLimit, clampOffset, versionsToPrune } from './shared.js';
+import { assertPruneKeep, resolvePage, versionsToPrune } from './shared.js';
 
 /**
  * Minimal structural contract for the lucid connection — avoids the
@@ -161,7 +161,10 @@ export class LucidStorage implements CollaborationStorage {
     // always passes one, which is what keeps a long history from coming back
     // as one ever-growing JSON array.
     if (page) {
-      query = query.limit(clampLimit(page.limit)).offset(clampOffset(page.offset));
+      // `{ page, size }` in, `LIMIT/OFFSET` out: the 0-based offset is computed
+      // here from the 1-based page rather than being asked of the caller.
+      const { size, offset } = resolvePage(page);
+      query = query.limit(size).offset(offset);
     }
     const rows = await query;
     return rows.map((row) => ({
@@ -252,7 +255,8 @@ export class LucidStorage implements CollaborationStorage {
     if (space) query = query.where('space', space);
     // Same opt-in pagination as `listVersions` — see the comment there.
     if (page) {
-      query = query.limit(clampLimit(page.limit)).offset(clampOffset(page.offset));
+      const { size, offset } = resolvePage(page);
+      query = query.limit(size).offset(offset);
     }
     const rows = await query;
     return rows.map((row) => this.toComment(row));

@@ -31,6 +31,14 @@ interface CollaborationStorage {
 Ten methods, no transactions, no query language. That narrowness is deliberate: it is what makes a
 Postgres backend, an S3 backend and a test double interchangeable.
 
+The optional `page` on the two list reads is `{ page?: number; size?: number }` — a **1-based**
+page number (default `1`) and a page size (default `50`, capped at `200`). It intentionally mirrors
+`@adonis-agora/filter`'s pagination shape so every `@adonis-agora/*` package pages the same way; the
+0-based SQL offset is derived inside the implementation as `(page - 1) * size` and never appears on
+the interface. Omit the argument entirely and you get **every** row — internal callers computing the
+next version `seq` or resolving a restore target depend on that, and only the HTTP routes always
+supply a page.
+
 ## What calls what
 
 - `saveDocument` is called by the driver on its **debounce**, again when the last client leaves a

@@ -145,20 +145,28 @@ export interface PruneVersionsOptions {
 }
 
 /**
- * Limit/offset pagination bounds accepted by the list-shaped storage reads
+ * Offset pagination bounds accepted by the list-shaped storage reads
  * ({@link CollaborationStorage.listVersions}, {@link CollaborationStorage.listComments}).
+ *
+ * Intentionally mirrors `@adonis-agora/filter`'s pagination shape
+ * (`FilterInput.page`/`.size`, `ResolvedPagination`) so every `@adonis-agora/*`
+ * package pages the same way. Structural match only — this package does not
+ * depend on `@adonis-agora/filter`.
  *
  * Deliberately optional and separate from the required params: a caller that
  * omits it (every internal driver call computing the next `seq` or resolving
  * a restore target) gets the historical "every row" behaviour, while the HTTP
  * routes — the only place an unbounded result becomes a client-facing
  * problem — always pass one. Implementations should clamp the values
- * themselves (see `clampLimit`/`clampOffset` in `storage/shared.js`) rather
- * than trust the caller's numbers.
+ * themselves (see `clampPage`/`clampSize`/`resolvePage` in `storage/shared.js`)
+ * rather than trust the caller's numbers, and derive the 0-based SQL offset as
+ * `(page - 1) * size` internally.
  */
 export interface ListPageOptions {
-  limit?: number;
-  offset?: number;
+  /** 1-based page number for offset pagination. Defaults to `1`. */
+  page?: number;
+  /** Page size for offset pagination. Defaults to `50`, capped at `200`. */
+  size?: number;
 }
 
 /**

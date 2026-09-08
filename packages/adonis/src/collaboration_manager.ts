@@ -296,23 +296,24 @@ export class CollaborationManager {
 
   listVersions({
     docName,
-    limit,
-    offset,
+    page,
+    size,
   }: {
     docName: string;
-    limit?: number;
-    offset?: number;
+    /** 1-based page number — see {@link ListPageOptions}. */
+    page?: number;
+    size?: number;
   }): Promise<CollabVersion[]> {
-    // Omitting `page` entirely (rather than `{ limit: undefined, offset: undefined }`)
+    // Omitting the page entirely (rather than `{ page: undefined, size: undefined }`)
     // matters: the storage treats an absent page as "every version", which is what a
     // caller with no pagination opinion (a driver computing the next `seq`) needs.
-    let page: ListPageOptions | undefined;
-    if (limit !== undefined || offset !== undefined) {
-      page = {};
-      if (limit !== undefined) page.limit = limit;
-      if (offset !== undefined) page.offset = offset;
+    let options: ListPageOptions | undefined;
+    if (page !== undefined || size !== undefined) {
+      options = {};
+      if (page !== undefined) options.page = page;
+      if (size !== undefined) options.size = size;
     }
-    return this.#driverFor(docName).then((driver) => driver.listVersions(docName, page));
+    return this.#driverFor(docName).then((driver) => driver.listVersions(docName, options));
   }
 
   /**
