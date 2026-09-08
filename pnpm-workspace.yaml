@@ -13,3 +13,6 @@ allowBuilds:
   cpu-features: false
   protobufjs: false
   ssh2: false
+minimumReleaseAgeExclude:
+  - '@types/node@26.5.0'
+  - unplugin-swc@1.6.0
