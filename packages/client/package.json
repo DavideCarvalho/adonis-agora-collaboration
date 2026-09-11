@@ -34,12 +34,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@automerge/automerge": "^3.4.1",
-    "@hocuspocus/provider": "^4.6.0",
-    "y-partykit": "^0.0.33",
-    "y-partyserver": "^2.2.0",
-    "y-protocols": "^1.0.7",
-    "yjs": "^13.6.32"
+    "@automerge/automerge": "3.4.1",
+    "@hocuspocus/provider": "4.6.0",
+    "y-partykit": "0.0.33",
+    "y-partyserver": "2.2.0",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.32"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
