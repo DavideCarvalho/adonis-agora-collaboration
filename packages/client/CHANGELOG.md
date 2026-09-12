@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration-client
 
+## 0.8.1
+
+### Patch Changes
+
+- 9ac2e62: Describe when `preIssuedTokenExpiry` can return `undefined` in terms of what the issuer reports today
+
 ## 0.8.0
 
 ### Minor Changes
