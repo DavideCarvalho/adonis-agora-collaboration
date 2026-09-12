@@ -139,9 +139,8 @@ jobs:
           title: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Deliberately empty: setup-node writes .npmrc with _authToken=${NODE_AUTH_TOKEN},
-          # and a real token there wins over OIDC -- npm uses the token and never exchanges
-          # the id-token for a credential. Empty, npm sees no auth and falls back to trusted
-          # publishing. The NPM_TOKEN secret still exists; put back `${{ secrets.NPM_TOKEN }}`
-          # here to revert to the token if trusted publishing isn't configured on npmjs.com yet.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # No NODE_AUTH_TOKEN and no NPM_TOKEN: publish auth is npm trusted publishing over
+          # OIDC. setup-node writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into
+          # ~/.npmrc regardless, so a token here wins over OIDC and an unset secret leaves an
+          # EMPTY credential npm sends instead of reaching for the exchange. Absent is the only
+          # value that works. The NPM_TOKEN secret still exists; a rollback puts it back on both.
