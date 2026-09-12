@@ -32,9 +32,9 @@ export const PRE_ISSUED_TOKEN_MIN_TTL_MS = 5_000;
  * would mean trusting a token this function can see is dead.
  *
  * `undefined` stays a legitimate answer for a token from some other issuer
- * that reports no expiry and is not a readable JWT. It used to be the normal
- * case: the self-hosted format was an unsigned base64 blob with no expiry at
- * all, which is exactly why it stopped being a format.
+ * that reports no expiry and is not a readable JWT. Nothing this package
+ * issues lands there: both the edge and the self-hosted engines return
+ * `expiresAt` alongside a signed JWT that carries its own `exp`.
  */
 export function preIssuedTokenExpiry(info: CollabTokenInfo): number | undefined {
   if (typeof info.expiresAt === 'number' && Number.isFinite(info.expiresAt)) {
