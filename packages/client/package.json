@@ -8,6 +8,19 @@
     "url": "git+https://github.com/DavideCarvalho/adonis-agora-collaboration.git",
     "directory": "packages/client"
   },
+  "homepage": "https://davidecarvalho.github.io/agora/docs/collaboration",
+  "bugs": {
+    "url": "https://github.com/DavideCarvalho/adonis-agora-collaboration/issues"
+  },
+  "keywords": [
+    "adonisjs",
+    "crdt",
+    "yjs",
+    "collaboration",
+    "realtime",
+    "react-hooks",
+    "agora"
+  ],
   "author": "Davi Carvalho <davi@goflip.ai>",
   "type": "module",
   "main": "./dist/src/index.js",
@@ -68,14 +81,5 @@
   },
   "engines": {
     "node": ">=20.6.0"
-  },
-  "keywords": [
-    "adonisjs",
-    "crdt",
-    "yjs",
-    "collaboration",
-    "realtime",
-    "react-hooks",
-    "agora"
-  ]
+  }
 }
