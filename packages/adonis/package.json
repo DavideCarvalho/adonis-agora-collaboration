@@ -113,7 +113,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@automerge/automerge": "3.4.1",
+    "@automerge/automerge": "3.5.0",
     "@hocuspocus/server": "4.7.0",
     "@hocuspocus/transformer": "4.7.0",
     "ioredis": "6.0.0",
