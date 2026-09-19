@@ -47,7 +47,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@automerge/automerge": "3.4.1",
+    "@automerge/automerge": "3.5.0",
     "@hocuspocus/provider": "4.7.0",
     "y-partykit": "0.0.33",
     "y-partyserver": "2.2.0",
