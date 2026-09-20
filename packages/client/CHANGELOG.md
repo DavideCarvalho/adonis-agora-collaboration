@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration-client
 
+## 0.8.2
+
+### Patch Changes
+
+- fix(deps): update dependency @automerge/automerge to v3.5.0 ([#60](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/60))
+
 ## 0.8.1
 
 ### Patch Changes
