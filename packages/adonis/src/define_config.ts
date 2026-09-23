@@ -20,6 +20,8 @@ export type CollaborationAppConfig = {
    */
   tokenSecret?: string;
   authorize?: CollaborationConfig['authorize'];
+  beginAdmission?: CollaborationConfig['beginAdmission'];
+  isEphemeralRoom?: CollaborationConfig['isEphemeralRoom'];
   /** Omitted = in-memory (dev only). Production passes a persistent storage. */
   storage?: CollaborationConfig['storage'];
   /** Required when engine = 'partykit' (edge sync). */

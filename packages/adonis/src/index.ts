@@ -98,6 +98,7 @@ export type {
   CollabComment,
   CollabConnectionContext,
   CollabDiffSummary,
+  CollaborationAdmission,
   CollaborationConfig,
   CollaborationEngine,
   CollaborationStorage,

@@ -6,6 +6,7 @@ import { type CollabLogger, setCollaborationLogger } from '../src/observability.
 import { collaborationRoutes } from '../src/routes.js';
 import { setBootedApp } from '../src/services/booted_app.js';
 import { RedisPresenceStore } from '../src/services/presence_service.js';
+import type { CollaborationConfig } from '../src/types.js';
 
 /**
  * Wires `@adonis-agora/collaboration` into the AdonisJS application:
@@ -47,23 +48,7 @@ export default class CollaborationServiceProvider {
           ? new RedisPresenceStore(new Redis(config.redisUrl))
           : undefined;
 
-      const managerConfig = {
-        engine: config.engine ?? 'yjs',
-        ...(config.engineFor ? { engineFor: config.engineFor } : {}),
-        ...(config.documents ? { documents: config.documents } : {}),
-        ...(config.authorize ? { authorize: config.authorize } : {}),
-        path: config.path ?? '/collaboration',
-        debounce: config.debounce ?? 2000,
-        ...(config.storage ? { storage: config.storage } : {}),
-        // Absent means "derive from appKey" — the manager resolves it, and it
-        // must be the manager doing so, because the token route asks it for
-        // the same key.
-        ...(config.tokenSecret ? { tokenSecret: config.tokenSecret } : {}),
-        ...(config.redisUrl ? { redis: { url: config.redisUrl } } : {}),
-        ...(config.partykit ? { partykit: config.partykit } : {}),
-      };
-
-      return new CollaborationManager(managerConfig, presenceStore);
+      return new CollaborationManager(managerConfigFrom(config), presenceStore);
     });
   }
 
@@ -139,4 +124,44 @@ export default class CollaborationServiceProvider {
     const manager = await this.app.container.make(CollaborationManager);
     await manager.close();
   }
+}
+
+/**
+ * App-config keys the manager does not take: `routes` is consumed by `boot()`,
+ * and `redisUrl` becomes the manager's `redis`. Every other key is forwarded.
+ */
+type AppOnlyConfigKey = 'routes' | 'redisUrl';
+
+/**
+ * Fails the build when the app config gains a key the manager config does not
+ * have and nobody decided what to do with it. This used to be an allowlist, and
+ * `beginAdmission` / `isEphemeralRoom` were added to both configs but not to the
+ * list: declared in `config/collaboration.ts`, accepted by the manager, and
+ * silently dropped in between — the app never admitted nor classified a room.
+ */
+type UnforwardedConfigKey = Exclude<
+  keyof CollaborationAppConfig,
+  keyof CollaborationConfig | AppOnlyConfigKey
+>;
+const everyAppConfigKeyIsForwarded: [UnforwardedConfigKey] extends [never] ? true : never = true;
+void everyAppConfigKeyIsForwarded;
+
+/** The manager config the provider builds from `config/collaboration.ts`. */
+export function managerConfigFrom(config: CollaborationAppConfig): CollaborationConfig {
+  const { routes: _routes, redisUrl, ...rest } = config;
+  // Absent and explicitly `undefined` mean the same thing here, and the
+  // manager's optional keys do not accept an explicit `undefined`.
+  const forwarded = Object.fromEntries(
+    Object.entries(rest).filter(([, value]) => value !== undefined),
+  ) as Partial<CollaborationConfig>;
+  return {
+    ...forwarded,
+    engine: config.engine ?? 'yjs',
+    path: config.path ?? '/collaboration',
+    debounce: config.debounce ?? 2000,
+    // Absent tokenSecret means "derive from appKey" — the manager resolves it,
+    // and it must be the manager doing so, because the token route asks it for
+    // the same key.
+    ...(redisUrl ? { redis: { url: redisUrl } } : {}),
+  };
 }

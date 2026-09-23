@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import CollaborationServiceProvider from '../providers/collaboration_provider.js';
+import CollaborationServiceProvider, {
+  managerConfigFrom,
+} from '../providers/collaboration_provider.js';
 import { CollaborationManager } from '../src/collaboration_manager.js';
 import type { CollaborationAppConfig } from '../src/define_config.js';
 import { defineDocument } from '../src/documents.js';
@@ -70,6 +72,39 @@ describe('provider → manager wiring', () => {
       canWrite: false,
       canComment: false,
     });
+  });
+
+  it('forwards beginAdmission and isEphemeralRoom — they used to be dropped between config and manager', () => {
+    const beginAdmission = async () => ({ connected: async () => {}, closed: async () => {} });
+    const isEphemeralRoom = (docName: string) => docName.startsWith('writing/');
+    const config = managerConfigFrom({ engine: 'yjs', beginAdmission, isEphemeralRoom });
+
+    expect(config.beginAdmission).toBe(beginAdmission);
+    expect(config.isEphemeralRoom).toBe(isEphemeralRoom);
+  });
+
+  it('keeps app-only keys out and still translates redisUrl', () => {
+    const config = managerConfigFrom({
+      engine: 'yjs',
+      redisUrl: 'redis://localhost:6379',
+      routes: { enabled: false },
+    });
+
+    expect(config).not.toHaveProperty('routes');
+    expect(config).not.toHaveProperty('redisUrl');
+    expect(config.redis).toEqual({ url: 'redis://localhost:6379' });
+    expect(config).toMatchObject({ engine: 'yjs', path: '/collaboration', debounce: 2000 });
+  });
+
+  it('a manager built by the provider refuses to persist an ephemeral room', async () => {
+    const manager = buildManager({
+      engine: 'yjs',
+      isEphemeralRoom: (docName) => docName.startsWith('writing/'),
+    });
+
+    await expect(
+      manager.persistDocument({ docName: 'writing/1', state: new Uint8Array([0, 0]) }),
+    ).rejects.toThrow(/Ephemeral rooms/);
   });
 });
 
