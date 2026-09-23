@@ -237,6 +237,29 @@ export interface CollaborationConfig {
    */
   authorize?: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>;
   /**
+   * Handshake barrier, opened for every self-hosted Yjs connection after its
+   * token is verified and **before** `authorize` runs.
+   *
+   * The returned admission ends exactly once: `connected()` when the socket
+   * finishes the handshake, or `closed()` when it never gets there (authorize
+   * failed or denied, the socket dropped mid-handshake, the server shut down).
+   * It is not a session lifecycle — nothing is called when a connected socket
+   * later disconnects. Use it to keep the document from being swapped while a
+   * client is joining; use `withLiveDocument` for "is this room open here".
+   */
+  beginAdmission?: (
+    ctx: CollabConnectionContext,
+    docName: string,
+    socketId: string,
+  ) => Promise<CollaborationAdmission>;
+  /**
+   * Rooms whose durable state is owned by the host application. The Yjs driver
+   * still loads them through `storage.loadDocument`, but never seeds, stores,
+   * flushes on unload, versions or restores them: the app persists them its own
+   * way (for example by committing client updates through an HTTP endpoint).
+   */
+  isEphemeralRoom?: (docName: string) => boolean;
+  /**
    * Key that signs and verifies the self-hosted collaboration token.
    *
    * Optional because an AdonisJS app already has one: with nothing set here
@@ -258,4 +281,10 @@ export interface CollaborationConfig {
   path?: string;
   /** Persistence debounce in ms (default 2000). */
   debounce?: number;
+}
+
+/** See {@link CollaborationConfig.beginAdmission}: ends with exactly one of the two calls. */
+export interface CollaborationAdmission {
+  connected(): Promise<void>;
+  closed(): Promise<void>;
 }

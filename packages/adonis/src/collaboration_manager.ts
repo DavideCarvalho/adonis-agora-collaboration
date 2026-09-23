@@ -164,6 +164,15 @@ export class CollaborationManager {
     }
     const shared: SelfHostedDriverOptions = {
       authorize: (ctx, docName) => this.authorize(ctx, docName),
+      ...(this.config.beginAdmission
+        ? {
+            beginAdmission: (ctx, docName, socketId) =>
+              this.config.beginAdmission!(ctx, docName, socketId),
+          }
+        : {}),
+      ...(this.config.isEphemeralRoom
+        ? { isEphemeralRoom: (docName) => this.config.isEphemeralRoom!(docName) }
+        : {}),
       // Deferred, not resolved here: the default key is the app's `appKey`,
       // and drivers are built before the app is necessarily booted. Passing
       // the same accessor the token route uses is what keeps the two ends of
@@ -360,6 +369,9 @@ export class CollaborationManager {
 
   /** Persists an external snapshot (e.g. PartyKit worker post-debounce). */
   async persistDocument({ docName, state }: { docName: string; state: Uint8Array }): Promise<void> {
+    if (this.config.isEphemeralRoom?.(docName)) {
+      throw new Error('Ephemeral rooms cannot persist through collaboration storage');
+    }
     if (!this.config.storage) {
       throw new Error(
         'persistDocument requires a storage backend — configure storage in config/collaboration.ts',

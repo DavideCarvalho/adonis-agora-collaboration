@@ -6,6 +6,7 @@ import type {
   CollabComment,
   CollabConnectionContext,
   CollabDiffSummary,
+  CollaborationAdmission,
   CollaborationConfig,
   CollaborationStorage,
   CollabPermission,
@@ -97,6 +98,14 @@ import type { PresenceService } from './services/presence_service.js';
 export interface SelfHostedDriverOptions {
   storage?: CollaborationStorage;
   authorize: AuthorizeFn;
+  /** See {@link CollaborationConfig.beginAdmission}. */
+  beginAdmission?: (
+    ctx: CollabConnectionContext,
+    docName: string,
+    socketId: string,
+  ) => Promise<CollaborationAdmission>;
+  /** See {@link CollaborationConfig.isEphemeralRoom}. */
+  isEphemeralRoom?: (docName: string) => boolean;
   /**
    * Key the handshake verifies tokens against — the same one the issuer
    * signs with, resolved through `auth/secret.ts`.

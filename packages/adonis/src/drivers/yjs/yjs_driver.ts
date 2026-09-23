@@ -22,6 +22,7 @@ import { reportCollaborationError } from '../../observability.js';
 import type {
   CollabConnectionContext,
   CollabDiffSummary,
+  CollaborationAdmission,
   CollaborationStorage,
   CollabPermission,
   CollabVersion,
@@ -63,6 +64,14 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
   private wss?: WebSocketServer;
   private readonly options: SelfHostedDriverOptions;
   private readonly storage: CollaborationStorage;
+  /**
+   * Admissions still inside their handshake, by socket and by the upgrade
+   * request (the only handle the raw `ws` close event has before Hocuspocus
+   * assigns a socket id). An entry leaves both maps on the admission's single
+   * terminal call — see `CollaborationConfig.beginAdmission`.
+   */
+  private readonly admissionsBySocket = new Map<string, PendingAdmission>();
+  private readonly admissionsByRequest = new WeakMap<Request, PendingAdmission>();
 
   constructor(options: SelfHostedDriverOptions) {
     this.options = options;
@@ -83,6 +92,17 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
      */
     const presenceBySocket = new Map<string, { documentName: string; userId: string }>();
 
+    const admissionsBySocket = this.admissionsBySocket;
+    const admissionsByRequest = this.admissionsByRequest;
+    /** Removes the pending admission of `socketId` and returns it, so only one caller ends it. */
+    const takeAdmission = (socketId: string): PendingAdmission | undefined => {
+      const pending = admissionsBySocket.get(socketId);
+      if (!pending) return undefined;
+      admissionsBySocket.delete(socketId);
+      admissionsByRequest.delete(pending.request);
+      return pending;
+    };
+
     /**
      * Seeds in flight, by document name.
      *
@@ -102,6 +122,9 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
     const seedsInFlight = new Map<string, Promise<Uint8Array | undefined>>();
 
     const seedDocumentOnce = async (documentName: string): Promise<Uint8Array | undefined> => {
+      // The host owns an ephemeral room's durable state; a seed written here
+      // would be a second writer the host never sees.
+      if (options.isEphemeralRoom?.(documentName)) return undefined;
       const seed = options.seedDocument;
       if (!seed) return undefined;
 
@@ -168,7 +191,13 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
        * a hook's resolved value into it), which is how every later hook gets
        * the verified identity instead of re-reading the wire.
        */
-      async onAuthenticate({ documentName, token, connectionConfig }: onAuthenticatePayload) {
+      async onAuthenticate({
+        documentName,
+        token,
+        connectionConfig,
+        socketId,
+        request,
+      }: onAuthenticatePayload) {
         let ctx: Awaited<ReturnType<typeof verifySelfHostedToken>>;
         try {
           ctx = await verifySelfHostedToken(token, documentName, options.tokenSecret);
@@ -185,12 +214,22 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         }
         if (!ctx) throw new Error('invalid token');
 
+        // Opened before `authorize`, so the barrier already holds while the
+        // app decides; every path below that rejects the socket ends it.
+        const admission = await options.beginAdmission?.(ctx, documentName, socketId);
+        if (admission) {
+          const pending = { socketId, admission, request };
+          admissionsBySocket.set(socketId, pending);
+          admissionsByRequest.set(request, pending);
+        }
+
         // "You may not" and "we could not tell" are different answers, and a
         // client that cannot distinguish them retries the first one forever.
         let permission: CollabPermission;
         try {
           permission = await options.authorize(ctx, documentName);
         } catch (error) {
+          await takeAdmission(socketId)?.admission.closed();
           reportCollaborationError({
             scope: 'authorize',
             operation: 'onAuthenticate',
@@ -201,6 +240,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         }
 
         if (!permission.canRead) {
+          await takeAdmission(socketId)?.admission.closed();
           throw new CollabForbiddenError(documentName);
         }
         // canWrite has to bind the connection itself: a client that is only
@@ -223,16 +263,25 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
        */
       async connected({ documentName, socketId, context }: connectedPayload) {
         const ctx = (context as { collab?: CollabConnectionContext } | undefined)?.collab;
-        if (options.presence && ctx?.userId) {
-          presenceBySocket.set(socketId, { documentName, userId: ctx.userId });
-          await options.presence.join(documentName, {
-            userId: ctx.userId,
-            ...(ctx.user ? { name: ctx.user.name } : {}),
-          });
+        const pending = takeAdmission(socketId);
+        try {
+          if (options.presence && ctx?.userId) {
+            presenceBySocket.set(socketId, { documentName, userId: ctx.userId });
+            await options.presence.join(documentName, {
+              userId: ctx.userId,
+              ...(ctx.user ? { name: ctx.user.name } : {}),
+            });
+          }
+        } catch (error) {
+          await pending?.admission.closed();
+          throw error;
         }
+        await pending?.admission.connected();
       },
 
       async onDisconnect({ socketId }: onDisconnectPayload) {
+        // Only a socket that never finished its handshake still holds one.
+        await takeAdmission(socketId)?.admission.closed();
         const entry = presenceBySocket.get(socketId);
         if (!entry) return;
         presenceBySocket.delete(socketId);
@@ -271,6 +320,10 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       },
 
       async onStoreDocument({ documentName, document }) {
+        // Not an error for an ephemeral room: throwing here makes Hocuspocus
+        // keep the document in memory forever, and the next connection is then
+        // served that stale copy instead of what the host loads.
+        if (options.isEphemeralRoom?.(documentName)) return;
         // Hocuspocus swallows what this hook throws, so a storage outage was
         // completely silent — indistinguishable from a healthy save.
         try {
@@ -294,6 +347,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       // to persist synchronously before the doc is destroyed, regardless of
       // debouncer state. This makes F5 reliable.
       async beforeUnloadDocument({ documentName, document }) {
+        if (options.isEphemeralRoom?.(documentName)) return;
         try {
           await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
         } catch (error) {
@@ -370,7 +424,17 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         ws.on('message', (data) => {
           connection.handleMessage(toUint8Array(data));
         });
-        ws.on('close', (code, reason) => {
+        ws.on('close', async (code, reason) => {
+          // A socket that drops mid-handshake reaches no Hocuspocus hook that
+          // knows its admission; the upgrade request is the handle that does.
+          const pending = this.admissionsByRequest.get(fetchRequest);
+          if (pending) {
+            this.admissionsBySocket.delete(pending.socketId);
+            this.admissionsByRequest.delete(fetchRequest);
+            await pending.admission.closed().catch((error: unknown) => {
+              reportCollaborationError({ scope: 'transport', operation: 'websocket', error });
+            });
+          }
           connection.handleClose({ code, reason: reason.toString() });
         });
         ws.on('error', (error) => {
@@ -407,6 +471,9 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
     createdBy: string | null,
     label: string | null,
   ): Promise<CollabVersion> {
+    if (this.options.isEphemeralRoom?.(docName)) {
+      throw new Error('Ephemeral rooms cannot version live collaboration state');
+    }
     const doc = await this.ensureDoc(docName);
     const existing = await this.storage.listVersions(docName);
     const version = createVersionMetadata(createdBy, label, seqVersions(existing));
@@ -432,6 +499,9 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
     versionId: string,
     restoredBy: string | null,
   ): Promise<void> {
+    if (this.options.isEphemeralRoom?.(docName)) {
+      throw new Error('Ephemeral rooms cannot restore through collaboration storage');
+    }
     // Resolve the target first: a missing version must fail before anything
     // is written, so a bad id never lands a spurious version in the history.
     const state = await this.getVersionState(docName, versionId);
@@ -483,6 +553,10 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
     // Persists pending docs and closes connections (the Hocuspocus class has
     // no destroy — the embedded Server does).
     this.hocuspocus.flushPendingStores();
+    const pending = [...this.admissionsBySocket.values()];
+    this.admissionsBySocket.clear();
+    for (const entry of pending) this.admissionsByRequest.delete(entry.request);
+    await Promise.allSettled(pending.map(({ admission }) => admission.closed()));
     this.hocuspocus.closeConnections();
     if (!this.wss) return;
     return new Promise((resolve) => {
@@ -492,6 +566,12 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
 }
 
 /* ───────────────────────── local helpers ───────────────────────── */
+
+interface PendingAdmission {
+  socketId: string;
+  admission: CollaborationAdmission;
+  request: Request;
+}
 
 /**
  * Normalises what a declaration's `load` returned into a Yjs update.

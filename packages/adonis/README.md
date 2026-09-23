@@ -38,6 +38,26 @@ PartyKit setup:
 
 Then run `collaboration:init --engine=partykit` to scaffold the worker into `partykit-worker/` and deploy with `npx partykit deploy`.
 
+### Admission and host-owned rooms (`yjs`)
+
+Two optional hooks for apps that own a room's durable state themselves:
+
+```ts
+// config/collaboration.ts
+{
+  // Opened after the token is verified and before `authorize`. It ends exactly once:
+  // `connected()` when the handshake completes, `closed()` when it never does
+  // (denied, authorize threw, socket dropped, shutdown). A later disconnect of a
+  // connected socket is not an admission event.
+  async beginAdmission(ctx, docName, socketId) {
+    return { connected: async () => {}, closed: async () => {} }
+  },
+  // Loaded through `storage.loadDocument`, but never seeded, stored, flushed on
+  // unload, versioned or restored by the driver — the app persists it its own way.
+  isEphemeralRoom: (docName) => docName.startsWith('projects/'),
+}
+```
+
 ## Server API
 
 ```ts
