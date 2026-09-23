@@ -237,6 +237,8 @@ export interface CollaborationConfig {
    */
   authorize?: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>;
   /**
+   * **Self-hosted `yjs` engine only** — other engines ignore it.
+   *
    * Handshake barrier, opened for every self-hosted Yjs connection after its
    * token is verified and **before** `authorize` runs.
    *
@@ -253,6 +255,9 @@ export interface CollaborationConfig {
     socketId: string,
   ) => Promise<CollaborationAdmission>;
   /**
+   * **Self-hosted `yjs` engine only** — other engines still seed, store and
+   * version these rooms; only `persistDocument` refuses them for every engine.
+   *
    * Rooms whose durable state is owned by the host application. The Yjs driver
    * still loads them through `storage.loadDocument`, but never seeds, stores,
    * flushes on unload, versions or restores them: the app persists them its own

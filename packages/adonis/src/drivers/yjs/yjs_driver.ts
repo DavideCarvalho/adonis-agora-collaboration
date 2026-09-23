@@ -216,7 +216,20 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
 
         // Opened before `authorize`, so the barrier already holds while the
         // app decides; every path below that rejects the socket ends it.
-        const admission = await options.beginAdmission?.(ctx, documentName, socketId);
+        let admission: CollaborationAdmission | undefined;
+        try {
+          admission = await options.beginAdmission?.(ctx, documentName, socketId);
+        } catch (error) {
+          // A barrier that breaks must stay observable, like every other
+          // failure on this hook — not a bare closed socket.
+          reportCollaborationError({
+            scope: 'authorize',
+            operation: 'onAuthenticate',
+            docName: documentName,
+            error,
+          });
+          throw error;
+        }
         if (admission) {
           const pending = { socketId, admission, request };
           admissionsBySocket.set(socketId, pending);
@@ -273,6 +286,8 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
             });
           }
         } catch (error) {
+          // The join never succeeded: no `leave` is owed for it on disconnect.
+          presenceBySocket.delete(socketId);
           await pending?.admission.closed();
           throw error;
         }
@@ -559,6 +574,9 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
     await Promise.allSettled(pending.map(({ admission }) => admission.closed()));
     this.hocuspocus.closeConnections();
     if (!this.wss) return;
+    // `closeConnections` only reaches sockets Hocuspocus finished admitting; one
+    // still in its handshake would keep `wss.close` from ever calling back.
+    for (const client of this.wss.clients) client.terminate();
     return new Promise((resolve) => {
       this.wss?.close(() => resolve());
     });

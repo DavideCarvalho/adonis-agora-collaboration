@@ -163,6 +163,86 @@ describe('YjsDriver admission and ephemeral rooms (real socket)', () => {
     expect(admissions.events.map((entry) => entry.event)).toEqual(['begin', 'closed']);
   });
 
+  /** An authorize that holds the socket mid-handshake until the test releases it. */
+  function gatedAuthorize() {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    return {
+      release,
+      reached,
+      async authorize(): Promise<CollabPermission> {
+        entered();
+        await gate;
+        return allow();
+      },
+    };
+  }
+
+  it('closes the admission exactly once when the socket drops mid-handshake', async () => {
+    const admissions = recordingAdmissions();
+    const gated = gatedAuthorize();
+    const { url } = await serve({
+      authorize: gated.authorize,
+      storage: new InMemoryCollaborationStorage(),
+      beginAdmission: admissions.beginAdmission,
+    });
+    const client = connect(url, 'rooms/dropped');
+    await gated.reached;
+
+    client.provider.destroy();
+    await waitFor(
+      () => admissions.events.some((entry) => entry.event === 'closed'),
+      'the admission to close',
+    );
+    gated.release();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(admissions.events.map((entry) => entry.event)).toEqual(['begin', 'closed']);
+  });
+
+  it('closes every pending admission on shutdown, and none connects afterwards', async () => {
+    const admissions = recordingAdmissions();
+    const gated = gatedAuthorize();
+    const { driver, url } = await serve({
+      authorize: gated.authorize,
+      storage: new InMemoryCollaborationStorage(),
+      beginAdmission: admissions.beginAdmission,
+    });
+    connect(url, 'rooms/shutdown');
+    await gated.reached;
+
+    await driver.close();
+    gated.release();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(admissions.events.map((entry) => entry.event)).toEqual(['begin', 'closed']);
+  });
+
+  it('refuses the handshake when beginAdmission itself throws', async () => {
+    let authorized = false;
+    const { url } = await serve({
+      authorize: async () => {
+        authorized = true;
+        return allow();
+      },
+      storage: new InMemoryCollaborationStorage(),
+      beginAdmission: async () => {
+        throw new Error('barrier store unavailable');
+      },
+    });
+    const client = connect(url, 'rooms/broken-barrier');
+    await waitFor(() => client.failure(), 'the handshake to be refused');
+
+    expect(client.synced()).toBe(false);
+    expect(authorized).toBe(false);
+  });
+
   it('never writes an ephemeral room to storage and unloads it when the last client leaves', async () => {
     const storage = new InMemoryCollaborationStorage();
     const saved: string[] = [];

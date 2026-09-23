@@ -153,7 +153,7 @@ export function managerConfigFrom(config: CollaborationAppConfig): Collaboration
   // manager's optional keys do not accept an explicit `undefined`.
   const forwarded = Object.fromEntries(
     Object.entries(rest).filter(([, value]) => value !== undefined),
-  ) as Omit<CollaborationConfig, 'engine'>;
+  ) as Partial<CollaborationConfig>;
   return {
     ...forwarded,
     engine: config.engine ?? 'yjs',

@@ -40,7 +40,7 @@ Then run `collaboration:init --engine=partykit` to scaffold the worker into `par
 
 ### Admission and host-owned rooms (`yjs`)
 
-Two optional hooks for apps that own a room's durable state themselves:
+Two optional hooks for apps that own a room's durable state themselves. Both apply to the self-hosted `yjs` engine only; other engines ignore them (except that `persistDocument` refuses an ephemeral room on any engine):
 
 ```ts
 // config/collaboration.ts
