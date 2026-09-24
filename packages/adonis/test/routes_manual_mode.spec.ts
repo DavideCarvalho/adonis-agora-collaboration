@@ -131,7 +131,7 @@ function makeCtx(input: { qs?: Record<string, unknown>; user?: unknown }) {
     __responses: responses,
     request: {
       qs: () => input.qs ?? {},
-      params: {},
+      params: () => ({}),
       body: <T>() => ({}) as T,
       raw: () => undefined,
       header: () => undefined,

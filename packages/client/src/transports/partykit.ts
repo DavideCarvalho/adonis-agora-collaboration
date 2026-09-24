@@ -2,7 +2,6 @@ import * as PartyKitModule from 'y-partykit/provider';
 import type * as AwarenessProtocol from 'y-protocols/awareness.js';
 import * as Y from 'yjs';
 import type { CollabStatus, CollabTokenInfo, CollabTransport } from '../types.js';
-import { normalizeStatus } from './normalize_status.js';
 
 /**
  * Transporte pra engine `partykit`: conecta direto ao room no worker

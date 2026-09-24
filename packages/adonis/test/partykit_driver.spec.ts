@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { PartyKitDriverOptions } from '../src/driver.js';
 import {
+  PARTYKIT_SERVER_IDENTITY,
   PartyKitDriver,
   PartyKitRoomError,
   signPartyKitToken,
@@ -89,6 +90,33 @@ describe('PartyKitDriver', () => {
     expect(url).toBe('http://localhost:1999/parties/main/researches%2F42%2Fwriting');
     expect(init.method).toBe('GET');
     expect((init.headers as Record<string, string>)['x-collab-return']).toBe('update');
+  });
+
+  it('signs every worker call with a JWT bound to the room', async () => {
+    stubFetch();
+    fetchMock.mockResolvedValue(new Response(new Uint8Array(), { status: 200 }));
+
+    const driver = new PartyKitDriver(makeConfig());
+    await driver.getDocumentState('researches/42/writing');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const authorization = (init.headers as Record<string, string>).authorization;
+    expect(authorization).toMatch(/^Bearer /);
+    const token = authorization.replace(/^Bearer /, '');
+    expect(verifyPartyKitToken(token, SECRET, 'researches/42/writing')?.userId).toBe(
+      PARTYKIT_SERVER_IDENTITY,
+    );
+    // Bound to this document: it opens no other room on the worker.
+    expect(verifyPartyKitToken(token, SECRET, 'researches/43/writing')).toBeNull();
+  });
+
+  it('refuses to call the worker without a jwtSecret instead of collecting a 401', async () => {
+    stubFetch();
+    const driver = new PartyKitDriver(
+      makeConfig({ partykit: { roomHost: 'localhost:1999', party: 'main' } }),
+    );
+    await expect(driver.getDocumentState('doc')).rejects.toThrow(/jwtSecret/);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('getDocumentText GETs with the text header', async () => {

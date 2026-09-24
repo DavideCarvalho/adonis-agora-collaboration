@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { CollaborationManager } from '../src/collaboration_manager.js';
 import type { CollaborationConfig } from '../src/types.js';
 

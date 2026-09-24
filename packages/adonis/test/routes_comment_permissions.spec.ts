@@ -104,9 +104,11 @@ function makeCtx(commentId: string) {
   const responses: Array<{ status: number; payload: unknown }> = [];
   return {
     __responses: responses,
+    // Where Adonis puts route params; there `request.params` is a method, not the params.
+    params: { id: commentId },
     request: {
       qs: () => ({ doc: DOC }),
-      params: { id: commentId },
+      params: () => ({}),
       body: <T>() => ({}) as T,
       raw: () => undefined,
       header: () => undefined,

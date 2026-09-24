@@ -621,22 +621,6 @@ function safeTiptapFromYdoc(doc: Y.Doc): Record<string, unknown> {
   }
 }
 
-/** Per-line diff, simple enough for the summary (+added / -removed). */
-function simpleLineDiff(a: string, b: string): CollabDiffSummary {
-  const linesA = new Set(a.split('\n'));
-  const linesB = new Set(b.split('\n'));
-
-  let added = 0;
-  for (const line of linesB) {
-    if (!linesA.has(line)) added++;
-  }
-  let removed = 0;
-  for (const line of linesA) {
-    if (!linesB.has(line)) removed++;
-  }
-  return { added, removed };
-}
-
 /**
  * Replaces the live doc's content by applying the restored doc's full update
  * (CRDT merge is idempotent; the preceding delete removes the divergent state

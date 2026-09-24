@@ -36,11 +36,11 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
         calls.push(`comment-create:${docName}:${(comment as { userId: string }).userId}`);
         return { id: 'c1', ...comment };
       },
-      async resolve(docName, commentId) {
+      async resolve(_docName, commentId) {
         calls.push(`comment-resolve:${commentId}`);
         return null;
       },
-      async remove(docName, commentId) {
+      async remove(_docName, commentId) {
         calls.push(`comment-remove:${commentId}`);
         return true;
       },
@@ -87,7 +87,7 @@ function makeCtx(input: { qs?: Record<string, unknown>; body?: unknown; user?: u
     __responses: responses,
     request: {
       qs: () => input.qs ?? {},
-      params: {},
+      params: () => ({}),
       body: <T>() => (input.body ?? {}) as T,
       raw: () => undefined,
       header: () => undefined,

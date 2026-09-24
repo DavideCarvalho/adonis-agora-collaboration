@@ -1,7 +1,6 @@
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import * as Y from 'yjs';
 import type { CollabTokenInfo, CollabTransport } from '../types.js';
-import { normalizeStatus } from './normalize_status.js';
 
 /**
  * Transporte pra engine `yjs` self-hosted: Hocuspocus rodando embutido no

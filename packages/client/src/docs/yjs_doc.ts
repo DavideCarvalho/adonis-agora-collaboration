@@ -1,5 +1,5 @@
 import type * as Y from 'yjs';
-import type { CollabDoc, RichTextDoc } from './types.js';
+import type { RichTextDoc } from './types.js';
 
 /**
  * Implementação Yjs do contrato CollabDoc — envolve o Y.Doc da sessão e usa

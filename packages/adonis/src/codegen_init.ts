@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { hooks } from '@adonisjs/core/app';
-import { documentKeyFromVfsKey, renderDocumentsRegistry } from './codegen/documents_registry.js';
+import { renderDocumentsRegistry } from './codegen/documents_registry.js';
 
 /**
  * Assembler `init` hook (AdonisJS v7 codegen).

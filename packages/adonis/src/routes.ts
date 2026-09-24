@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   type AuthorizeFn,
@@ -353,13 +354,13 @@ async function handleCreateComment(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const body = ctx.request.body<{
+  const body = ctx.request.body() as {
     docName: string;
     space: string;
     anchor: unknown;
     body: string;
     authorName?: string | null;
-  }>();
+  };
   const allowed = await guard(ctx, runtime, resolveUser, body.docName, 'canComment');
   if (isDenied(allowed)) return allowed.denied;
 
@@ -409,8 +410,8 @@ async function handleResolveComment(
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
   const doc = ctx.request.qs().doc as string | undefined;
-  const commentId = String((ctx.request.params as Record<string, unknown> | undefined)?.id ?? '');
-  const resolved = Boolean(ctx.request.body<{ resolved?: boolean }>().resolved ?? true);
+  const commentId = String(ctx.params?.id ?? '');
+  const resolved = Boolean((ctx.request.body() as { resolved?: boolean }).resolved ?? true);
   const allowed = await guard(ctx, runtime, resolveUser, doc, 'canComment');
   if (isDenied(allowed)) return allowed.denied;
 
@@ -427,7 +428,7 @@ async function handleDeleteComment(
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
   const doc = ctx.request.qs().doc as string | undefined;
-  const commentId = String((ctx.request.params as Record<string, unknown> | undefined)?.id ?? '');
+  const commentId = String(ctx.params?.id ?? '');
   const allowed = await guard(ctx, runtime, resolveUser, doc, 'canComment');
   if (isDenied(allowed)) return allowed.denied;
 
@@ -457,7 +458,7 @@ async function handleCreateVersion(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const body = ctx.request.body<{ docName: string; label?: string }>();
+  const body = ctx.request.body() as { docName: string; label?: string };
   const allowed = await guard(ctx, runtime, resolveUser, body.docName, 'canWrite');
   if (isDenied(allowed)) return allowed.denied;
 
@@ -474,7 +475,7 @@ async function handleRestoreVersion(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const body = ctx.request.body<{ docName: string; versionId: string }>();
+  const body = ctx.request.body() as { docName: string; versionId: string };
   const allowed = await guard(ctx, runtime, resolveUser, body.docName, 'canWrite');
   if (isDenied(allowed)) return allowed.denied;
 
@@ -518,9 +519,34 @@ async function handleSaveState(ctx: CollabHttpContext, runtime: Runtime): Promis
       error: 'persisting worker snapshots requires a configured storage backend',
     });
   }
-  const raw = ctx.request.raw();
-  await manager.persistDocument({ docName: doc, state: new Uint8Array(raw ?? new ArrayBuffer(0)) });
+  const state = await binaryBody(ctx);
+  // A Yjs update is never zero bytes; persisting one would overwrite the stored document.
+  if (!state || state.byteLength === 0) {
+    return ctx.response.status(400).json({ error: 'a binary Yjs state body is required' });
+  }
+  await manager.persistDocument({ docName: doc, state });
   return ctx.response.noContent();
+}
+
+/**
+ * The worker posts `application/octet-stream`, which Adonis's body parser leaves unread, so
+ * `raw()` is `null` there and the bytes are still on the Node stream. `raw()` is used when a
+ * host (or a test) already buffered them as binary; a string is never trusted, since it was
+ * decoded as text and binary does not survive that.
+ */
+async function binaryBody(ctx: CollabHttpContext): Promise<Uint8Array | null> {
+  const raw = ctx.request.raw();
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (raw instanceof Uint8Array) return raw;
+  const stream = ctx.request.request;
+  if (!stream || stream.readableEnded) return null;
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    // A text chunk means something upstream decoded the stream: the bytes are already gone.
+    if (!(chunk instanceof Uint8Array)) return null;
+    chunks.push(chunk);
+  }
+  return new Uint8Array(Buffer.concat(chunks));
 }
 
 /* ───────────────────────────── registration ───────────────────────────── */
@@ -528,7 +554,10 @@ async function handleSaveState(ctx: CollabHttpContext, runtime: Runtime): Promis
 /** Minimal structural contract satisfied by the Adonis Router. */
 export interface CollabRouteGroupContract {
   prefix(prefix: string): this;
-  middleware(middleware: unknown[]): this;
+  // `any[]`, not `unknown[]`: Adonis takes `OneOrMore<MiddlewareFn | ParsedNamedMiddleware>`,
+  // which no `unknown[]` parameter accepts, and the app's own middleware is passed through as is.
+  // biome-ignore lint/suspicious/noExplicitAny: must accept the host router's middleware type
+  middleware(middleware: any[]): this;
 }
 
 export interface CollaborationRouterContract {
