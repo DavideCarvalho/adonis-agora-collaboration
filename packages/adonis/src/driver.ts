@@ -1,4 +1,3 @@
-import type { WebSocket } from 'ws';
 import type { CollabTokenSecret } from './auth/secret.js';
 import type { AuthorizeFn } from './auth/token.js';
 import type { CollabDocumentSeed } from './documents.js';

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import CollaborationServiceProvider from '../providers/collaboration_provider.js';
-import { CollaborationManager } from '../src/collaboration_manager.js';
 import type { CollaborationAppConfig } from '../src/define_config.js';
 import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.js';
 

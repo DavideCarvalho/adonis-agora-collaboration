@@ -37,7 +37,9 @@ async function verifyToken(
   secret: string,
   expectedDocName: string,
 ): Promise<CollabToken | null> {
-  if (!token) return null;
+  // No secret configured: refuse everything. Verifying with an empty key would
+  // accept any token its holder signed with an empty key.
+  if (!token || !secret) return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const [header, body, signature] = parts as [string, string, string];

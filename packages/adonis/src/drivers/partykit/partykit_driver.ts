@@ -1,5 +1,6 @@
 import { TiptapTransformer } from '@hocuspocus/transformer';
 import * as Y from 'yjs';
+import { signCollabToken } from '../../auth/token.js';
 import type { CollaborationDriver, PartyKitDriverOptions } from '../../driver.js';
 import type {
   CollabDiffSummary,
@@ -30,6 +31,9 @@ import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
  */
 
 export { signPartyKitToken, verifyPartyKitToken } from '../../auth/token.js';
+
+/** Identity the driver signs its own worker calls with (not a user of the app). */
+export const PARTYKIT_SERVER_IDENTITY = 'adonis-server';
 
 /** Typed error for non-2xx worker responses. */
 export class PartyKitRoomError extends Error {
@@ -74,18 +78,32 @@ export class PartyKitDriver implements CollaborationDriver {
     return `${scheme}://${host}/parties/${pk.party ?? 'main'}/${encodeURIComponent(docName)}`;
   }
 
-  /** Authenticated HTTP call to the worker's `onRequest`. */
+  /**
+   * Authenticated HTTP call to the worker's `onRequest`.
+   *
+   * The worker answers 401 to anything without a JWT signed with its secret and
+   * bound to the room, so every call carries one — same format the browser
+   * gets, issued to the server's own identity. Without it every state read,
+   * version snapshot and restore failed against a real worker.
+   */
   private async roomRequest(
     docName: string,
     init: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: Uint8Array },
   ): Promise<Response> {
     const pk = this.partyConfig();
+    if (!pk.jwtSecret) {
+      throw new Error(
+        "[@adonis-agora/collaboration] engine 'partykit' requires config.partykit.jwtSecret " +
+          '(the same COLLAB_JWT_SECRET the worker verifies with) to call the worker',
+      );
+    }
+    const token = signCollabToken({ userId: PARTYKIT_SERVER_IDENTITY, docName }, pk.jwtSecret);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), pk.fetchTimeoutMs ?? 10_000);
     try {
       const requestInit: RequestInit = {
         method: init.method,
-        headers: init.headers ?? {},
+        headers: { ...init.headers, authorization: `Bearer ${token}` },
         signal: controller.signal,
       };
       if (init.body) {

@@ -7,11 +7,18 @@ import type { CollabPermission } from '../types.js';
  * @adonisjs/core/http surface across versions.
  */
 export interface CollabHttpContext {
+  /** Route params (`/comments/:id`). On Adonis they live here; `request.params` is a method. */
+  params?: Record<string, unknown>;
   request: {
     qs(): Record<string, unknown>;
-    params: Record<string, unknown>;
-    body<T = Record<string, unknown>>(): T;
-    raw(): ArrayBuffer | undefined;
+    body(): Record<string, unknown>;
+    /**
+     * The buffered body. Adonis returns a `string | null` and only for types its body parser
+     * reads — never `application/octet-stream` — so binary routes read `request` instead.
+     */
+    raw(): unknown;
+    /** The underlying Node request, unread when no body parser claimed the content type. */
+    request?: AsyncIterable<unknown> & { readableEnded?: boolean };
     header(name: string): string | undefined;
   };
   response: {

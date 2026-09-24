@@ -1,0 +1,8 @@
+{
+  // Type-only checks that Adonis's real HttpContext/Router fit the route contracts.
+  // Kept out of tsconfig.json because tsconfig.build.json extends it and would emit them.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "tsBuildInfoFile": ".compat.tsbuildinfo" },
+  "include": ["test/types/**/*.ts"],
+  "exclude": []
+}

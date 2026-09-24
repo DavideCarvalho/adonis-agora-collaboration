@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { verifyCollabToken } from '../src/auth/token.js';
 import { verifyPartyKitToken } from '../src/drivers/partykit/partykit_driver.js';
@@ -48,15 +49,15 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
         calls.push(`comments:${docName}:${space}:${page?.page}:${page?.size}`);
         return [{ id: 'c1' }];
       },
-      async create(docName, comment) {
+      async create(_docName, comment) {
         calls.push(`comment-create:${JSON.stringify(comment)}`);
         return { id: 'c2', ...comment };
       },
-      async resolve(docName, commentId, resolved) {
+      async resolve(_docName, commentId, resolved) {
         calls.push(`comment-resolve:${commentId}:${resolved}`);
         return null;
       },
-      async remove(docName, commentId) {
+      async remove(_docName, commentId) {
         calls.push(`comment-remove:${commentId}`);
         return true;
       },
@@ -118,7 +119,9 @@ function makeCtx(input: {
   qs?: Record<string, unknown>;
   params?: Record<string, unknown>;
   body?: unknown;
-  raw?: ArrayBuffer;
+  raw?: unknown;
+  /** The Node request stream, as Adonis leaves it for a type no body parser reads. */
+  stream?: AsyncIterable<unknown> & { readableEnded?: boolean };
   headers?: Record<string, string>;
   user?: unknown;
 }) {
@@ -134,11 +137,14 @@ function makeCtx(input: {
     get __lastHeader() {
       return headersOut;
     },
+    // Where Adonis puts route params; there `request.params` is a method, not the params.
+    params: input.params ?? {},
     request: {
       qs: () => input.qs ?? {},
-      params: input.params ?? {},
+      params: () => ({}),
       body: <T>() => (input.body ?? {}) as T,
       raw: () => input.raw,
+      request: input.stream,
       header: (name: string) => input.headers?.[name],
     },
     response: {
@@ -433,6 +439,45 @@ describe('state endpoints', () => {
     await find('POST', '/state').handler(withSecret);
     expect(withSecret.__responses[0]!.status).toBe(204);
     expect(manager.calls.some((c) => c === 'persist:docs/1:1')).toBe(true);
+  });
+
+  it('POST reads the binary body from the request stream, as Adonis leaves it', async () => {
+    const manager = makeManager();
+    const { router, find } = makeRouter();
+    await collaborationRoutes(router, {
+      ...baseOptions(manager),
+      partykit: { jwtSecret: SECRET },
+    });
+
+    // Adonis: octet-stream is claimed by no body parser, so raw() is null and the bytes are
+    // still on the stream. Persisting `raw() ?? empty` used to store a zero-byte document.
+    const ctx = makeCtx({
+      qs: { doc: 'docs/1' },
+      headers: { 'x-collab-worker-secret': SECRET },
+      raw: null,
+      stream: Readable.from([Buffer.from([1, 2]), Buffer.from([3])]),
+    });
+    await find('POST', '/state').handler(ctx);
+    expect(ctx.__responses[0]!.status).toBe(204);
+    expect(manager.calls).toContain('persist:docs/1:3');
+  });
+
+  it('POST refuses an empty body instead of overwriting the document with nothing', async () => {
+    const manager = makeManager();
+    const { router, find } = makeRouter();
+    await collaborationRoutes(router, {
+      ...baseOptions(manager),
+      partykit: { jwtSecret: SECRET },
+    });
+
+    const ctx = makeCtx({
+      qs: { doc: 'docs/1' },
+      headers: { 'x-collab-worker-secret': SECRET },
+      raw: null,
+    });
+    await find('POST', '/state').handler(ctx);
+    expect(ctx.__responses[0]!.status).toBe(400);
+    expect(manager.calls.some((call) => call.startsWith('persist:'))).toBe(false);
   });
 
   it('POST returns 501 without a storage-backed manager', async () => {
