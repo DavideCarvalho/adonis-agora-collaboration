@@ -30,6 +30,11 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/src/index.js",
       "default": "./dist/src/index.js"
+    },
+    "./automerge": {
+      "types": "./dist/src/automerge.d.ts",
+      "import": "./dist/src/automerge.js",
+      "default": "./dist/src/automerge.js"
     }
   },
   "files": [

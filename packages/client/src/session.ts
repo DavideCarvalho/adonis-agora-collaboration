@@ -140,6 +140,7 @@ export class DocSession {
   #startPromise: Promise<void> | undefined;
   #destroyed = false;
   #detached = false;
+  #paused = false;
   #refs = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   #attempt = 0;
@@ -255,7 +256,7 @@ export class DocSession {
 
   /** Idempotent — token + transport created a single time per generation. */
   start(): Promise<void> {
-    if (this.#destroyed) return Promise.resolve();
+    if (this.#destroyed || this.#paused) return Promise.resolve();
     this.#detached = false;
     if (this.#startPromise) return this.#startPromise;
     this.#startPromise = this.#start();
@@ -282,6 +283,27 @@ export class DocSession {
     this.#attempt = 0;
     this.#setStatus('connecting', null);
     this.#notify();
+  }
+
+  /**
+   * Latches the transport closed while keeping the `Y.Doc`: every implicit reconnect —
+   * a `start()` from a remount, `retain()`, a subscriber, the reconnect timer — is refused
+   * until {@link resume}. For a host that must hold the document still (a server-side
+   * replacement, a restore) while components stay mounted; `stop()` alone is undone by
+   * the next mount.
+   */
+  pause(): void {
+    if (this.#destroyed || this.#paused) return;
+    this.#paused = true;
+    this.stop();
+  }
+
+  /** Clears the latch; reconnects only when a consumer still holds or observes the session. */
+  resume(): Promise<void> {
+    if (this.#destroyed || !this.#paused) return Promise.resolve();
+    this.#paused = false;
+    if (this.#refs > 0 || this.#listeners.size > 0) return this.start();
+    return Promise.resolve();
   }
 
   async #start(): Promise<void> {

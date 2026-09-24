@@ -19,7 +19,7 @@ Domain vocabulary for `adonis-collaboration`. Keep names exact across code, docs
 - **Comments** live ONLY at `manager.comments` — drivers never touch them.
 - **REST surface** — built-in handlers in `routes.ts`; auto-registered by the provider, or manual via `collaborationRoutes(router)`.
 - **CollabTransport** (client) — Hocuspocus / PartyKit / PartyServer adapters behind one interface (Y.Doc-centric).
-- **useAutomergeDoc** (client) — separate seam: Automerge documents cannot back a Y.Doc, so they get their own hook instead of forcing both worlds into CollabTransport.
+- **useAutomergeDoc** (client, `/automerge` entry) — separate seam: Automerge documents cannot back a Y.Doc, so they get their own hook instead of forcing both worlds into CollabTransport.
 
 ## Decided NOT to do (do not re-suggest without new evidence)
 
