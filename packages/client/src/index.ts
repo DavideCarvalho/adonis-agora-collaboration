@@ -15,8 +15,6 @@ export {
   createTextAdapter,
   createTldrawAdapter,
 } from './editors/index.js';
-export type { UseAutomergeDocResult } from './hooks/use_automerge_doc.js';
-export { useAutomergeDoc } from './hooks/use_automerge_doc.js';
 export type {
   CollabLocalUser,
   UseAwarenessOptions,
