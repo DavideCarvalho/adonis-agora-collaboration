@@ -426,6 +426,7 @@ useCollabDoc({ docName, token? }): {   // token: pre-issued, first connection on
   error: Error | null
 }
 
+// import from '@adonis-agora/collaboration-client/automerge'
 useAutomergeDoc<T>({ docName, WebSocketImpl? }): {
   doc: A.Doc<T> | null
   status: CollabStatus
@@ -529,6 +530,8 @@ class DocSession {
   retain(): () => void   // hold it open; returns its own release
   release(): void        // the last one calls stop()
   stop(): void           // tears down the transport, KEEPS the Y.Doc
+  pause(): void          // stop() + refuse every reconnect (start/retain/subscribe/timer)
+  resume(): Promise<void> // clear the latch; reconnects only if a consumer is mounted
   destroy(): void        // terminal: destroys the Y.Doc, evicts from the map
 }
 

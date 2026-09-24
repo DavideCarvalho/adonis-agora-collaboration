@@ -50,10 +50,11 @@ it retries a `4503` and stops dead on a `4003`. Both are reported server-side th
 
 ## The client hook
 
-Automerge documents get **their own hook**, not `useCollabDoc`:
+Automerge documents get **their own hook**, not `useCollabDoc`. It lives on its own entry point,
+`/automerge`, so an app that only uses Yjs never loads Automerge's WebAssembly:
 
 ```tsx
-import { useAutomergeDoc } from '@adonis-agora/collaboration-client'
+import { useAutomergeDoc } from '@adonis-agora/collaboration-client/automerge'
 
 interface Ficha extends Record<string, unknown> {
   content: string

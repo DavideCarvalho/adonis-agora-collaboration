@@ -32,8 +32,12 @@ describe('DocSession pause/resume', () => {
     expect(created).toHaveLength(1);
     created[0]!.setStatus('connected');
 
+    session.doc.getText('t').insert(0, 'kept');
     session.pause();
     expect(created[0]!.doc.isDestroyed).toBe(true);
+    // The latch closes the transport, never the document.
+    expect(session.isDestroyed).toBe(false);
+    expect(session.doc.getText('t').toString()).toBe('kept');
 
     // What a remount, a new subscriber and the reconnect timer would do.
     void session.start();
@@ -44,6 +48,22 @@ describe('DocSession pause/resume', () => {
 
     release2();
     unsubscribe();
+    release();
+    session.destroy();
+  });
+
+  it('pause clears a pending reconnect timer, which never fires', async () => {
+    const { factory, created } = fakeTransportFactory();
+    const session = new DocSession('docs/4', makeConfig({ createTransport: factory }));
+    const release = session.retain();
+    await vi.advanceTimersByTimeAsync(0);
+    // Disconnect without advancing: a backoff timer is now pending.
+    created[0]!.setStatus('disconnected');
+
+    session.pause();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(created).toHaveLength(1);
+
     release();
     session.destroy();
   });

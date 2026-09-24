@@ -213,12 +213,18 @@ session.synced                 // initial state applied, not just "socket open"
 const release = session.retain()  // hold it open (what the hooks do on mount)
 release()                         // last release closes the transport, keeps the doc
 session.stop()                    // same teardown, forced
+session.pause()                   // stop() and refuse every reconnect until resume()
+await session.resume()            // reconnects only if a consumer is still mounted
 session.destroy()                 // terminal: also destroys the Y.Doc, evicts from the map
 ```
 
 `subscribe` starts the session too, so a subscriber never misses the first transition. `retain` is
 what makes the lifetime work: it returns its own `release`, so an effect can `return session.retain()`
 and never double-release.
+
+`pause` is for a host that must hold the document still while its components stay mounted — a
+server-side replacement, a restore. `stop` alone does not do that: the next mount, subscriber or
+reconnect timer calls `start` again. A paused session keeps its `Y.Doc` and refuses all of them.
 
 ## Testing without a server
 
