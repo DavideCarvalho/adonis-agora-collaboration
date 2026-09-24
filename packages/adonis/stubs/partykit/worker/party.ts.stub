@@ -59,7 +59,9 @@ async function verifyToken(
   if (!valid) return null;
   try {
     const parsed = JSON.parse(Buffer.from(body, 'base64url').toString()) as CollabToken;
-    if (!parsed.userId || !parsed.docName || parsed.exp * 1000 < Date.now()) return null;
+    // `exp` is required, as in `verifyCollabToken`: a payload without it would never expire.
+    if (!parsed.userId || !parsed.docName || typeof parsed.exp !== 'number') return null;
+    if (parsed.exp * 1000 < Date.now()) return null;
     if (parsed.docName !== expectedDocName) return null;
     return parsed;
   } catch {

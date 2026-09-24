@@ -462,6 +462,25 @@ describe('state endpoints', () => {
     expect(manager.calls).toContain('persist:docs/1:3');
   });
 
+  it('POST refuses a stream something upstream already decoded as text', async () => {
+    const manager = makeManager();
+    const { router, find } = makeRouter();
+    await collaborationRoutes(router, {
+      ...baseOptions(manager),
+      partykit: { jwtSecret: SECRET },
+    });
+
+    const ctx = makeCtx({
+      qs: { doc: 'docs/1' },
+      headers: { 'x-collab-worker-secret': SECRET },
+      raw: null,
+      stream: Readable.from(['decoded text']),
+    });
+    await find('POST', '/state').handler(ctx);
+    expect(ctx.__responses[0]!.status).toBe(400);
+    expect(manager.calls.some((call) => call.startsWith('persist:'))).toBe(false);
+  });
+
   it('POST refuses an empty body instead of overwriting the document with nothing', async () => {
     const manager = makeManager();
     const { router, find } = makeRouter();

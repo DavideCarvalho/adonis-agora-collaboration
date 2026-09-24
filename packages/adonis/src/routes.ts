@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   type AuthorizeFn,
@@ -541,8 +542,9 @@ async function binaryBody(ctx: CollabHttpContext): Promise<Uint8Array | null> {
   if (!stream || stream.readableEnded) return null;
   const chunks: Uint8Array[] = [];
   for await (const chunk of stream) {
-    if (chunk instanceof Uint8Array) chunks.push(chunk);
-    else if (typeof chunk === 'string') chunks.push(Buffer.from(chunk, 'latin1'));
+    // A text chunk means something upstream decoded the stream: the bytes are already gone.
+    if (!(chunk instanceof Uint8Array)) return null;
+    chunks.push(chunk);
   }
   return new Uint8Array(Buffer.concat(chunks));
 }
