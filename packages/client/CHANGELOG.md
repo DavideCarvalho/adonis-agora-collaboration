@@ -1,5 +1,18 @@
 # @adonis-agora/collaboration-client
 
+## 0.9.0
+
+### Minor Changes
+
+- [#70](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/70) [`0bd3a4f`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/0bd3a4f7aadc6ff5071f8f445d8e59e120b105d8) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Upstream two changes the Entre Textos app carried as a local patch.
+  
+  - `DocSession.pause()` / `resume()`: latches the transport closed while keeping the `Y.Doc`, so
+    no remount, `retain()`, subscriber or reconnect timer reopens it until `resume()` — which
+    reconnects only when a consumer is still mounted. `stop()` alone is undone by the next mount.
+  - **Breaking:** `useAutomergeDoc` moves off the root entry to
+    `@adonis-agora/collaboration-client/automerge`. Re-exported from the root, Automerge's WASM was
+    loaded eagerly by every Yjs-only app during hydration.
+
 ## 0.8.3
 
 ### Patch Changes
