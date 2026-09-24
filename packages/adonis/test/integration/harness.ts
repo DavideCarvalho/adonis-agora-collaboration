@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Emitter } from '@adonisjs/core/events';
@@ -46,7 +46,12 @@ async function loadMigration(table: string): Promise<typeof BaseSchema> {
 
   const generated = generatedPath(table);
   await mkdir(dirname(generated), { recursive: true });
-  await writeFile(generated, source, 'utf-8');
+  // Every spec file runs in its own fork and materializes the same module. Written in place,
+  // one fork could import it while another had truncated it mid-write — an empty module and
+  // "Migration is not a constructor". A rename is atomic: readers see a whole file, old or new.
+  const staging = `${generated}.${process.pid}.tmp`;
+  await writeFile(staging, source, 'utf-8');
+  await rename(staging, generated);
   const mod = (await import(`${generated}?t=${Date.now()}`)) as { default: typeof BaseSchema };
   return mod.default;
 }
