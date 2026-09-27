@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration-client
 
+## 0.9.1
+
+### Patch Changes
+
+- fix(deps): update dependency yjs to v13.6.33 ([#77](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/77))
+
 ## 0.9.0
 
 ### Minor Changes
