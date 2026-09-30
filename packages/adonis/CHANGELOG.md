@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 0.17.2
+
+### Patch Changes
+
+- fix(deps): update dependency ws to v8.22.0 ([#82](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/82))
+
 ## 0.17.1
 
 ### Patch Changes
