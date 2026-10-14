@@ -1,6 +1,6 @@
 ---
 title: Commands
-description: collaboration:init, collaboration:prune and make:collab-document — what each one writes, every flag, and the generated document-types file explained line by line.
+description: collaboration:init, collaboration:prune, collaboration:compact and make:collab-document — what each one writes, every flag, and the generated document-types file explained line by line.
 icon: SquareTerminal
 ---
 
@@ -60,6 +60,26 @@ command instead of deleting everything, and `--keep=0` is a real value: it delet
 
 The same call from code is `collaboration.current.pruneVersions({ keep: 20 })`, which returns the
 number removed.
+
+## `collaboration:compact`
+
+Rewrites one stored Yjs document without the history of content it no longer has, after checking
+that it reads back identical. The previous state is kept as a `before compaction` version.
+
+```sh
+node ace collaboration:compact --doc=researches/42/writing --dry-run
+node ace collaboration:compact --doc=researches/42/writing
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--doc` | required | the document to compact |
+| `--dry-run` | off | prints the stored size before and after, writes nothing |
+
+It refuses a document that is open in the process or has anyone in presence: a client holding the
+old history would merge it back in and duplicate the content. See
+[Production](/docs/collaboration/production#storage-and-how-it-grows) for when it is safe to run.
+The same call from code is `collaboration.current.compactDocument({ docName })`.
 
 ## `make:collab-document`
 

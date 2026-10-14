@@ -91,6 +91,29 @@ export function supportsLiveDocuments(
   return typeof (driver as Partial<LiveDocumentDriver>).liveDocument === 'function';
 }
 
+/** What {@link CompactingDriver.compactDocument} did, in bytes of stored state. */
+export interface CompactionResult {
+  before: number;
+  after: number;
+}
+
+/**
+ * Drivers that can rewrite a stored document without its deleted history.
+ * Optional like {@link LiveDocumentDriver}: only engines whose stored state
+ * grows with tombstones (Yjs) have anything to compact. Ask with
+ * {@link supportsCompaction}.
+ */
+export interface CompactingDriver {
+  compactDocument(docName: string, options?: { dryRun?: boolean }): Promise<CompactionResult>;
+}
+
+/** Whether this driver can compact documents ({@link CompactingDriver}). */
+export function supportsCompaction(
+  driver: CollaborationDriver,
+): driver is CollaborationDriver & CompactingDriver {
+  return typeof (driver as Partial<CompactingDriver>).compactDocument === 'function';
+}
+
 /** Narrow dependencies for self-hosted engines (Yjs/Automerge). */
 import type { PresenceService } from './services/presence_service.js';
 

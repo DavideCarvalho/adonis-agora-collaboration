@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { connectedPayload, onDisconnectPayload } from '@hocuspocus/server';
 import {
   Hocuspocus,
@@ -334,6 +335,13 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         return seedDocumentOnce(documentName);
       },
 
+      // The state just loaded is what storage holds: an unchanged document
+      // closing again is not written back (see `persistedFingerprint`).
+      async afterLoadDocument({ documentName, document }) {
+        if (options.isEphemeralRoom?.(documentName)) return;
+        persistedFingerprint.set(document, fingerprint(Y.encodeStateAsUpdate(document)));
+      },
+
       async onStoreDocument({ documentName, document }) {
         // Not an error for an ephemeral room: throwing here makes Hocuspocus
         // keep the document in memory forever, and the next connection is then
@@ -342,7 +350,11 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         // Hocuspocus swallows what this hook throws, so a storage outage was
         // completely silent — indistinguishable from a healthy save.
         try {
-          await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+          const update = Y.encodeStateAsUpdate(document);
+          const print = fingerprint(update);
+          if (persistedFingerprint.get(document) === print) return;
+          await storage.saveDocument(documentName, update);
+          persistedFingerprint.set(document, print);
         } catch (error) {
           reportCollaborationError({
             scope: 'storage',
@@ -364,7 +376,11 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       async beforeUnloadDocument({ documentName, document }) {
         if (options.isEphemeralRoom?.(documentName)) return;
         try {
-          await storage.saveDocument(documentName, Y.encodeStateAsUpdate(document));
+          const update = Y.encodeStateAsUpdate(document);
+          const print = fingerprint(update);
+          if (persistedFingerprint.get(document) === print) return;
+          await storage.saveDocument(documentName, update);
+          persistedFingerprint.set(document, print);
         } catch (error) {
           reportCollaborationError({
             scope: 'storage',
@@ -542,7 +558,78 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       applyRestoredContent(live, restoredDoc);
     });
 
-    await this.storage.saveDocument(docName, Y.encodeStateAsUpdate(live));
+    const update = Y.encodeStateAsUpdate(live);
+    await this.storage.saveDocument(docName, update);
+    persistedFingerprint.set(live, fingerprint(update));
+  }
+
+  /**
+   * Rewrites a stored document with only what it contains now, dropping the
+   * history of deleted content Yjs keeps forever.
+   *
+   * A document whose content is replaced wholesale — an import, a restore, a
+   * sync that rewrites it — carries every previous copy as tombstones: one real
+   * thesis reached 5.2 MB and ~8 s to decode for 0.9 MB of content. Compaction
+   * copies the `default` fragment into a fresh document, checks that it reads
+   * back identical, keeps the old state as a `before compaction` version and
+   * saves the new one.
+   *
+   * It REWRITES identity: any client still holding the old history merges it
+   * back in and duplicates the content. So it refuses a document that is open
+   * in this process or that has someone in presence — and it must not be run
+   * while a client could reconnect with a stale local copy (an offline cache
+   * such as y-indexeddb, or another server instance with the document open).
+   */
+  async compactDocument(
+    docName: string,
+    options: { dryRun?: boolean } = {},
+  ): Promise<{ before: number; after: number }> {
+    if (this.options.isEphemeralRoom?.(docName)) {
+      throw new Error('Ephemeral rooms are not stored by collaboration storage');
+    }
+    if (this.liveDocument(docName)) {
+      throw new Error(
+        `'${docName}' is open in this process — compacting it now would let connected clients merge the old history back in`,
+      );
+    }
+    if (this.options.presence && (await this.options.presence.list(docName)).length > 0) {
+      throw new Error(`'${docName}' has people connected (presence) — compact it when nobody is`);
+    }
+
+    const stored = await this.storage.loadDocument(docName);
+    const state = stored?.state ?? new Uint8Array();
+    if (state.byteLength === 0) return { before: 0, after: 0 };
+
+    const old = this.hydrate(state);
+    const roots = [...old.share.keys()].filter((name) => name !== 'default');
+    if (roots.length > 0) {
+      throw new Error(
+        `'${docName}' has content outside the 'default' fragment (${roots.join(', ')}) — only Tiptap-style documents can be compacted`,
+      );
+    }
+    const fresh = new Y.Doc();
+    fresh
+      .getXmlFragment('default')
+      .insert(0, old.getXmlFragment('default').toArray().map(cloneNode));
+    const compacted = Y.encodeStateAsUpdate(fresh);
+    const reread = this.hydrate(compacted);
+    if (JSON.stringify(safeTiptapFromYdoc(reread)) !== JSON.stringify(safeTiptapFromYdoc(old))) {
+      throw new Error(
+        `'${docName}' did not read back identical after compaction — nothing written`,
+      );
+    }
+
+    const result = { before: state.byteLength, after: compacted.byteLength };
+    if (options.dryRun || compacted.byteLength >= state.byteLength) return result;
+
+    const existing = await this.storage.listVersions(docName);
+    await this.storage.saveVersion(
+      docName,
+      createVersionMetadata(null, 'before compaction', seqVersions(existing)),
+      state,
+    );
+    await this.storage.saveDocument(docName, compacted);
+    return result;
   }
 
   async diffVersions(docName: string, aId: string, bId: string): Promise<CollabDiffSummary> {
@@ -622,14 +709,49 @@ function safeTiptapFromYdoc(doc: Y.Doc): Record<string, unknown> {
 }
 
 /**
- * Replaces the live doc's content by applying the restored doc's full update
- * (CRDT merge is idempotent; the preceding delete removes the divergent state
- * and the update brings the old content back).
+ * Replaces the live doc's content with the restored doc's.
+ *
+ * The `default` fragment (where Tiptap/Hocuspocus keep the document) is copied
+ * as NEW items. Applying the version's update was not enough: when the version
+ * comes from the live document's own history — the normal case — its items are
+ * already known to the live doc, and the ones the restore needs back are
+ * exactly the ones that were deleted since. Yjs treats a known item as already
+ * integrated, so the update was a no-op and, with the fragment just cleared,
+ * the restore left the document EMPTY.
+ *
+ * Other root types keep the previous behaviour (the update is merged in). The
+ * version's `default` items travel in that update marked as deleted, so a
+ * version from another lineage cannot bring them back next to the copies.
  */
 function applyRestoredContent(live: Y.Doc, restored: Y.Doc): void {
   const liveFragment = live.getXmlFragment('default');
+  const restoredFragment = restored.getXmlFragment('default');
   liveFragment.delete(0, liveFragment.length);
+  liveFragment.insert(0, restoredFragment.toArray().map(cloneNode));
 
-  const update = Y.encodeStateAsUpdate(restored);
-  Y.applyUpdate(live, update);
+  restoredFragment.delete(0, restoredFragment.length);
+  Y.applyUpdate(live, Y.encodeStateAsUpdate(restored));
+}
+
+/**
+ * What each live document last had in storage — the sha1 of its full update.
+ * A document is written only when this changed: Hocuspocus calls
+ * `beforeUnloadDocument` every time the last connection leaves, and a server
+ * that opens a document to read it (a direct connection, a sync job) rewrote
+ * the whole state on every close, megabytes for a large document, with nothing
+ * new in it.
+ */
+const persistedFingerprint = new WeakMap<Y.Doc, string>();
+
+/**
+ * A fragment child copied as a new item. `insert` is typed for elements and
+ * text only; an `XmlHook` clones to an `XmlHook`, which Yjs inserts the same
+ * way (it is how it round-trips them itself).
+ */
+function cloneNode(node: Y.XmlElement | Y.XmlText | Y.XmlHook): Y.XmlElement | Y.XmlText {
+  return node.clone() as Y.XmlElement | Y.XmlText;
+}
+
+function fingerprint(update: Uint8Array): string {
+  return createHash('sha1').update(update).digest('hex');
 }

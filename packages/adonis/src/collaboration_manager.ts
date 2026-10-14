@@ -1,8 +1,8 @@
 import { resolveTokenSecret } from './auth/secret.js';
 import type { CollabDocumentSeed } from './documents.js';
 import { documentPatternParams, matchDocumentPattern } from './documents.js';
-import type { CollaborationDriver, SelfHostedDriverOptions } from './driver.js';
-import { supportsLiveDocuments } from './driver.js';
+import type { CollaborationDriver, CompactionResult, SelfHostedDriverOptions } from './driver.js';
+import { supportsCompaction, supportsLiveDocuments } from './driver.js';
 import { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 import { PartyKitDriver } from './drivers/partykit/partykit_driver.js';
 import { resolveStorage } from './drivers/shared.js';
@@ -378,6 +378,27 @@ export class CollaborationManager {
       );
     }
     await this.config.storage.saveDocument(docName, state);
+  }
+
+  /**
+   * Rewrites a stored document without its deleted history — see
+   * `YjsDriver.compactDocument` for what it does and when it refuses. Same as
+   * `node ace collaboration:compact --doc=<name>`.
+   */
+  async compactDocument({
+    docName,
+    dryRun,
+  }: {
+    docName: string;
+    dryRun?: boolean;
+  }): Promise<CompactionResult> {
+    const driver = await this.#driverFor(docName);
+    if (!supportsCompaction(driver)) {
+      throw new Error(
+        `[@adonis-agora/collaboration] the '${driver.engine}' engine does not support compaction`,
+      );
+    }
+    return driver.compactDocument(docName, dryRun ? { dryRun } : {});
   }
 
   /**

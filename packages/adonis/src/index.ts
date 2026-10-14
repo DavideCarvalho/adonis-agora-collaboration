@@ -47,11 +47,13 @@ export {
 } from './documents.js';
 export type {
   CollaborationDriver,
+  CompactingDriver,
+  CompactionResult,
   LiveDocumentDriver,
   PartyKitDriverOptions,
   SelfHostedDriverOptions,
 } from './driver.js';
-export { supportsLiveDocuments } from './driver.js';
+export { supportsCompaction, supportsLiveDocuments } from './driver.js';
 export { AutomergeDriver } from './drivers/automerge/automerge_driver.js';
 export {
   PartyKitDriver,
