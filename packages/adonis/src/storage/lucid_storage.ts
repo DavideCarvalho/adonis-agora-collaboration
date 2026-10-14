@@ -155,7 +155,15 @@ export class LucidStorage implements CollaborationStorage {
   async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
     await this.ensure();
     const knex = await this.knex();
-    let query = knex.from('collab_versions').where('doc_name', docName).orderBy('seq', 'asc');
+    // Only the metadata columns: `collab_versions` also holds every snapshot,
+    // and a bare select shipped all of them (tens of MB for a long history)
+    // just to map them away — on every listing, and on every `createVersion`,
+    // which lists to find the next `seq`.
+    let query = knex
+      .from('collab_versions')
+      .select('id', 'created_by', 'label', 'seq', 'created_at')
+      .where('doc_name', docName)
+      .orderBy('seq', 'asc');
     // `page` is opt-in: internal callers computing the next `seq` or a
     // restore target need every version, and only pass none. The HTTP route
     // always passes one, which is what keeps a long history from coming back

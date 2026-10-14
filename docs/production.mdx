@@ -125,6 +125,30 @@ import collaboration from '@adonis-agora/collaboration/services/main'
 const removed = await collaboration.current.pruneVersions({ keep: 20 })
 ```
 
+### Deleted content stays in the state
+
+Yjs keeps a tombstone for every item ever deleted. A document whose content is replaced wholesale —
+an import, a restore, a sync job that rewrites it — carries every previous copy: one real manuscript
+reached 5.2 MB of state (≈8 s to decode on every load) for 0.9 MB of content.
+`collaboration:compact` rewrites one stored document with only what it holds now, after checking
+that it reads back identical, and keeps the old state as a `before compaction` version:
+
+```bash
+node ace collaboration:compact --doc=researches/42/writing --dry-run
+node ace collaboration:compact --doc=researches/42/writing
+```
+
+<Callout type="warn">
+Compaction gives the document a new history. A client that still holds the old one merges it back
+in and **duplicates the content**. The command refuses a document that is open in the process or
+has anyone in presence, but it cannot see an offline client cache (y-indexeddb) or another instance
+holding the document: run it when nobody can reconnect with a stale copy. Only documents whose
+content lives in the `default` fragment (the Tiptap layout) can be compacted.
+</Callout>
+
+The same call from code is `collaboration.current.compactDocument({ docName })`, which returns the
+stored size before and after.
+
 ## Subscribe to the failure stream
 
 The library runs inside sockets and Hocuspocus hooks — places where a throw is discarded by the
