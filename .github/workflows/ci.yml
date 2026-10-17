@@ -48,6 +48,38 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
+  # The unit suite runs on every Node line the packages support (`engines.node: ">=22"`): the
+  # maintained 22 and 24 LTS lines and the current 26. Lint and typecheck above stay on the single
+  # pinned version — they do not depend on the runtime, so the matrix only multiplies the tests.
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 12.13.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Tests have always run after a build (`pnpm -r test` has no turbo `dependsOn` to do it),
+      # so keep that order here; building on the matrix Node also exercises the compiler on it.
+      - name: Build
+        run: pnpm -r build
+
       - name: Test
         run: pnpm -r test
 
@@ -55,7 +87,8 @@ jobs:
   # hand-written reimplementation — so it can only ever prove the callers right. Two bugs lived
   # under that gap: every insert threw (`.from()` is the select builder, not the insert one), and
   # the lazy table bootstrap crashed on any app that had run the published migrations. This job is
-  # what keeps that class of bug from coming back.
+  # what keeps that class of bug from coming back. It stays on the single pinned Node: it is the
+  # slow, Docker-backed job, and the runtime matrix is covered by the unit suite above.
   integration:
     runs-on: ubuntu-latest
     steps:
