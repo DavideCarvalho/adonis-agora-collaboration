@@ -48,8 +48,8 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
-  # The unit suite runs on every Node line the packages support (`engines.node: ">=22"`): the
-  # maintained 22 and 24 LTS lines and the current 26. Lint and typecheck above stay on the single
+  # The unit suite runs on every Node line the packages support (`engines.node: ">=24"`): the
+  # lines Node maintains that AdonisJS 7 supports, the 24 LTS and the current 26. Lint and typecheck above stay on the single
   # pinned version — they do not depend on the runtime, so the matrix only multiplies the tests.
   test:
     name: test (node ${{ matrix.node }})
@@ -57,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [22, 24, 26]
+        node: [24, 26]
     steps:
       - uses: actions/checkout@v7.0.1
 
