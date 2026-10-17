@@ -1,5 +1,7 @@
 # @adonis-agora/collaboration
 
+[![npm version](https://img.shields.io/npm/v/@adonis-agora/collaboration)](https://www.npmjs.com/package/@adonis-agora/collaboration) [![npm downloads](https://img.shields.io/npm/dm/@adonis-agora/collaboration)](https://www.npmjs.com/package/@adonis-agora/collaboration) [![CI](https://github.com/DavideCarvalho/adonis-agora-collaboration/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DavideCarvalho/adonis-agora-collaboration/actions/workflows/ci.yml) [![license](https://img.shields.io/npm/l/@adonis-agora/collaboration)](https://www.npmjs.com/package/@adonis-agora/collaboration)
+
 Collaborative editing (CRDT) for AdonisJS — Yjs (Hocuspocus), Automerge and PartyKit (edge) drivers, Redis-backed presence, unified version control, anchored comments, ace codegen and React client hooks. Part of the Agora ecosystem.
 
 ## Install
