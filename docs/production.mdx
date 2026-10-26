@@ -71,9 +71,11 @@ not a performance dial — it is **how much work you are willing to lose to a `S
 | 2000 ms | the default; a reasonable middle for prose |
 | 5000 ms+ | far fewer writes; up to five seconds of typing at risk |
 
-Two things to know about the edges. Sustained typing keeps resetting the timer, so a high value can
-mean a long stretch with nothing written at all. And a **graceful** shutdown flushes pending
-documents — so a normal deploy loses nothing, and only a hard kill hits the window.
+Two things to know about the edges. Sustained typing keeps resetting the timer, but not forever: a
+document edited without pause is still written at least every 10 seconds (on Automerge, every
+`debounce` instead when that is longer). And a **graceful** shutdown flushes pending documents —
+`close()` writes them before it returns — so a normal deploy loses nothing, and only a hard kill
+hits the window.
 
 Which makes graceful shutdown load-bearing:
 
@@ -91,8 +93,11 @@ product asks "who is in this document" from the server, it needs Redis:
 redisUrl: env.get('REDIS_URL'),
 ```
 
-Entries carry a 60-second TTL, refreshed on join, so a process killed mid-connection leaves a ghost
-for up to a minute rather than forever. Use the roster for the *is anyone here* question and
+Each member carries its own 60-second TTL, which every live instance re-stamps every 20 seconds for
+the members it holds, so a process killed mid-connection leaves a ghost for up to a minute rather
+than forever, however busy the document stays. The roster for a document lives in two keys: the
+member hash `collab:presence:<doc>` and the sorted set of stamps `collab:presence:<doc>:seen`.
+`listPresence` skips and prunes members whose stamp is older than the TTL. Use the roster for the *is anyone here* question and
 [awareness](/docs/collaboration/concepts/presence) for the accurate list of who.
 
 ## Storage, and how it grows

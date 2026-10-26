@@ -161,7 +161,7 @@ clear message if it is read too early.
 | `persistDocument({ docName, state })` | `Promise<void>` — throws without configured storage |
 | `listPresence({ docName })` | `Promise<PresenceMember[]>` — `[]` without Redis |
 | `attach(server)` | `Promise<void>` — called by the provider |
-| `close()` | `Promise<void>` |
+| `close()` | `Promise<void>` — writes pending saves, closes each driver's server and the sockets still open, then the presence connection |
 | `comments` | the `CommentService` (below) |
 | `presence` | the `PresenceService`, when Redis is configured |
 | `engine` | the configured default engine, as a string |
