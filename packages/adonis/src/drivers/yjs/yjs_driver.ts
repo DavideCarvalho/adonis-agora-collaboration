@@ -92,6 +92,20 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
      * is many connections; the map has to be too.
      */
     const presenceBySocket = new Map<string, { documentName: string; userId: string }>();
+    /** Open sockets per user per document, so a disconnect never scans the others. */
+    const socketCounts = new Map<string, Map<string, number>>();
+    const countSocket = (documentName: string, userId: string, delta: 1 | -1): number => {
+      let users = socketCounts.get(documentName);
+      if (!users) {
+        users = new Map();
+        socketCounts.set(documentName, users);
+      }
+      const count = (users.get(userId) ?? 0) + delta;
+      if (count > 0) users.set(userId, count);
+      else users.delete(userId);
+      if (users.size === 0) socketCounts.delete(documentName);
+      return count;
+    };
 
     const admissionsBySocket = this.admissionsBySocket;
     const admissionsByRequest = this.admissionsByRequest;
@@ -281,6 +295,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         try {
           if (options.presence && ctx?.userId) {
             presenceBySocket.set(socketId, { documentName, userId: ctx.userId });
+            countSocket(documentName, ctx.userId, 1);
             await options.presence.join(documentName, {
               userId: ctx.userId,
               ...(ctx.user ? { name: ctx.user.name } : {}),
@@ -288,6 +303,8 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
           }
         } catch (error) {
           // The join never succeeded: no `leave` is owed for it on disconnect.
+          const entry = presenceBySocket.get(socketId);
+          if (entry) countSocket(entry.documentName, entry.userId, -1);
           presenceBySocket.delete(socketId);
           await pending?.admission.closed();
           throw error;
@@ -301,14 +318,10 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         const entry = presenceBySocket.get(socketId);
         if (!entry) return;
         presenceBySocket.delete(socketId);
-        if (!options.presence) return;
-
         // One user, two tabs: the roster entry only goes away with the last
         // socket that user holds on that document.
-        const stillConnected = [...presenceBySocket.values()].some(
-          (other) => other.documentName === entry.documentName && other.userId === entry.userId,
-        );
-        if (stillConnected) return;
+        const stillConnected = countSocket(entry.documentName, entry.userId, -1) > 0;
+        if (!options.presence || stillConnected) return;
 
         await options.presence.leave(entry.documentName, entry.userId);
       },

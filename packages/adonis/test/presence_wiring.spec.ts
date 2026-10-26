@@ -181,4 +181,36 @@ describe('presence is actually fed by the driver', () => {
 
     expect(await manager.listPresence({ docName: DOC })).toEqual([]);
   });
+
+  it('does not scan the other sockets on a disconnect', async () => {
+    const { manager, connect, disconnect } = await buildManager(new FakeStore());
+    close = () => manager.close();
+
+    const sockets = 1000;
+    for (let i = 0; i < sockets; i++) await connect(DOC, `socket-${i}`, `u_${i % 500}`);
+
+    // Every Map iteration during the mass disconnect, weighted by the map's size.
+    let iterated = 0;
+    const proto = Map.prototype as unknown as Record<PropertyKey, (...args: unknown[]) => unknown>;
+    const methods: PropertyKey[] = ['values', 'keys', 'entries', 'forEach', Symbol.iterator];
+    const originals = methods.map((method) => proto[method]!);
+    methods.forEach((method, index) => {
+      const original = originals[index]!;
+      proto[method] = function (this: Map<unknown, unknown>, ...args: unknown[]) {
+        iterated += this.size;
+        return original.apply(this, args);
+      };
+    });
+    try {
+      for (let i = 0; i < sockets; i++) await disconnect(DOC, `socket-${i}`);
+    } finally {
+      methods.forEach((method, index) => {
+        proto[method] = originals[index]!;
+      });
+    }
+
+    expect(await manager.listPresence({ docName: DOC })).toEqual([]);
+    // A scan per disconnect is ~sockets²/2 (500 000 here).
+    expect(iterated).toBeLessThan(sockets * 10);
+  });
 });

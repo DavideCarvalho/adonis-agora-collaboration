@@ -251,6 +251,9 @@ importers:
       pg:
         specifier: 8.23.1
         version: 8.23.1
+      testcontainers:
+        specifier: 12.2.1
+        version: 12.2.1(supports-color@10.2.2)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
