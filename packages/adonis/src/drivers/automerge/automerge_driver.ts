@@ -46,7 +46,7 @@ const MAX_PERSIST_WAIT_MS = 10_000;
 /** Connections whose permission denied canWrite — their updates are dropped. */
 const readOnlyClients = new WeakSet<object>();
 
-/** userId behind each open socket — feeds the presence roster on close. */
+/** userId behind each socket that joined the roster. */
 const socketUsers = new WeakMap<object, string>();
 
 /** Sockets that exchange change chunks instead of whole documents. */
@@ -115,7 +115,11 @@ export class AutomergeDriver implements CollaborationDriver {
       ? A.load<Record<string, unknown>>(stored.state)
       : await this.seedDocument(docName);
 
-    const room: Room = { text: doc, clients: new Set<import('ws').WebSocket>(), holds: 0 };
+    const room: Room = {
+      text: doc,
+      clients: new Set<import('ws').WebSocket>(),
+      holds: 0,
+    };
     this.rooms.set(docName, room);
     return room;
   }
@@ -292,17 +296,33 @@ export class AutomergeDriver implements CollaborationDriver {
           return;
         }
 
+        let room: Room | undefined;
         try {
-          const room = await this.loadRoom(docName);
+          room = await this.loadRoom(docName);
+          const joinedRoom = room;
           room.clients.add(ws);
           if (!permission.canWrite) readOnlyClients.add(ws);
           const sendsChanges = url.searchParams.get(CHANGES_PARAM) === CHANGES_PARAM_VALUE;
           if (sendsChanges) changeClients.add(ws);
 
+          // Registered before the join, so a socket that closes while the join
+          // is in flight still leaves the room.
+          let joined = false;
+          ws.on('close', () => {
+            this.removeSocket(docName, joinedRoom, ws, joined ? ctx.userId : undefined);
+          });
+
           await this.options.presence?.join(docName, {
             userId: ctx.userId,
             ...(ctx.user?.name ? { name: ctx.user.name } : {}),
           });
+          if (ws.readyState !== ws.OPEN) {
+            // Closed during the join: the entry it wrote is owed a leave.
+            this.leaveIfLast(docName, joinedRoom, ctx.userId);
+            return;
+          }
+          joined = true;
+          socketUsers.set(ws, ctx.userId);
 
           // The acknowledgement goes before the state, so the client knows
           // the shape of its first send before it makes it.
@@ -314,28 +334,45 @@ export class AutomergeDriver implements CollaborationDriver {
             // dropped. Enforced here because the client cannot be trusted to
             // respect a permission it was merely told about.
             if (readOnlyClients.has(ws)) return;
-            this.handleClientMessage(docName, room, data as Uint8Array, ws);
+            this.handleClientMessage(docName, joinedRoom, data as Uint8Array, ws);
           });
-
-          ws.on('close', () => {
-            room.clients.delete(ws);
-            readOnlyClients.delete(ws);
-            // Only the user's LAST socket on this document leaves the roster.
-            const stillConnected = [...room.clients].some(
-              (client) => socketUsers.get(client) === ctx.userId,
-            );
-            socketUsers.delete(ws);
-            if (!stillConnected) {
-              void this.options.presence?.leave(docName, ctx.userId);
-            }
-            void this.releaseRoom(docName, room);
-          });
-          socketUsers.set(ws, ctx.userId);
         } catch (error) {
+          if (room) {
+            // A join that failed may still have written the entry.
+            this.removeSocket(docName, room, ws, undefined);
+            this.leaveIfLast(docName, room, ctx.userId);
+          }
           reportCollaborationError({ scope: 'storage', operation: 'loadDocument', docName, error });
           ws.close(4500, 'could not open the document');
         }
       });
+    });
+  }
+
+  /**
+   * Takes `ws` out of the room — and, when `userId` is given, out of that
+   * user's socket count, leaving the roster with their last one. Safe to call
+   * twice for one socket.
+   */
+  private removeSocket(
+    docName: string,
+    room: Room,
+    ws: import('ws').WebSocket,
+    userId: string | undefined,
+  ): void {
+    if (!room.clients.delete(ws)) return;
+    readOnlyClients.delete(ws);
+    changeClients.delete(ws);
+    socketUsers.delete(ws);
+    if (userId !== undefined) this.leaveIfLast(docName, room, userId);
+    void this.releaseRoom(docName, room);
+  }
+
+  /** Removes `userId` from the roster unless another of their sockets is still in the room. */
+  private leaveIfLast(docName: string, room: Room, userId: string): void {
+    if ([...room.clients].some((client) => socketUsers.get(client) === userId)) return;
+    this.options.presence?.leave(docName, userId).catch((error: unknown) => {
+      reportCollaborationError({ scope: 'transport', operation: 'presence.leave', docName, error });
     });
   }
 

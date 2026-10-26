@@ -4,6 +4,7 @@ import * as A from '@automerge/automerge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { AutomergeDriver } from '../src/drivers/automerge/automerge_driver.js';
+import type { PresenceMember, PresenceService } from '../src/services/presence_service.js';
 import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.js';
 import type { CollabPermission } from '../src/types.js';
 import { TEST_TOKEN_SECRET, testToken } from './helpers/token.js';
@@ -107,7 +108,23 @@ afterEach(async () => {
   for (const fn of teardown.splice(0).reverse()) await fn();
 });
 
-async function setup(options: { seed?: Uint8Array; debounce?: number } = {}) {
+/** A roster whose `join` the test controls; `leave` calls are recorded. */
+function fakePresence(join: (member: PresenceMember) => Promise<void> = async () => {}) {
+  const left: string[] = [];
+  const presence = {
+    join: (_docName: string, member: PresenceMember) => join(member),
+    leave: async (_docName: string, userId: string) => {
+      left.push(userId);
+    },
+    list: async () => [],
+    close: async () => {},
+  } as unknown as PresenceService;
+  return { presence, left };
+}
+
+async function setup(
+  options: { seed?: Uint8Array; debounce?: number; presence?: PresenceService } = {},
+) {
   const storage = new InMemoryCollaborationStorage();
   if (options.seed) await storage.saveDocument(DOC, options.seed);
   const saves: Uint8Array[] = [];
@@ -123,6 +140,7 @@ async function setup(options: { seed?: Uint8Array; debounce?: number } = {}) {
     storage,
     path: '/collab',
     ...(options.debounce === undefined ? {} : { debounce: options.debounce }),
+    ...(options.presence ? { presence: options.presence } : {}),
   });
   const server = createServer((_request, response) => {
     response.statusCode = 404;
@@ -143,6 +161,18 @@ async function setup(options: { seed?: Uint8Array; debounce?: number } = {}) {
   };
   teardown.push(close);
 
+  /** Opens a socket and returns it without waiting for anything else. */
+  const openSocket = async (userId = 'u_1') => {
+    const query = new URLSearchParams({ doc: DOC, token: testToken(DOC, userId) });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/collab?${query}`);
+    peers.push(new Peer(ws));
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', () => resolve());
+      ws.once('error', reject);
+    });
+    return ws;
+  };
+
   /** Opens a socket and waits for the room's state (and the ack, if asked). */
   const connect = async ({ changes, userId = 'u_1' }: { changes: boolean; userId?: string }) => {
     const query = new URLSearchParams({ doc: DOC, token: testToken(DOC, userId) });
@@ -161,7 +191,7 @@ async function setup(options: { seed?: Uint8Array; debounce?: number } = {}) {
 
   const rooms = () => (driver as unknown as { rooms: Map<string, unknown> }).rooms;
 
-  return { driver, storage, saves, connect, close, rooms };
+  return { driver, storage, saves, connect, openSocket, close, rooms };
 }
 
 /** Polls `check` until it holds; the driver's saves land on their own schedule. */
@@ -398,5 +428,56 @@ describe('AutomergeDriver room lifecycle', () => {
 
     expect(saves.length).toBeGreaterThanOrEqual(1);
     expect(A.load<Text>(saves[0]!).content.length).toBeGreaterThanOrEqual(20);
+  });
+});
+
+describe('AutomergeDriver presence join failures', () => {
+  it('takes the socket out of the room when the presence join fails', async () => {
+    const { presence, left } = fakePresence(async () => {
+      throw new Error('redis down');
+    });
+    const { openSocket, rooms } = await setup({ presence });
+
+    const ws = await openSocket();
+    const code = await new Promise<number>((resolve) => ws.once('close', resolve));
+
+    expect(code).toBe(4500);
+    await eventually(() => rooms().size === 0, 500);
+    // The failed join may have written the entry before it threw.
+    expect(left).toEqual(['u_1']);
+  });
+
+  it("keeps the user's other tab on the roster when a second join fails", async () => {
+    let fail = false;
+    const { presence, left } = fakePresence(async () => {
+      if (fail) throw new Error('redis down');
+    });
+    const { connect, openSocket, rooms } = await setup({ presence });
+
+    await connect({ changes: false });
+    fail = true;
+    const second = await openSocket();
+    await new Promise((resolve) => second.once('close', resolve));
+
+    expect(left).toEqual([]);
+    expect(rooms().size).toBe(1);
+  });
+
+  it('cleans up a socket that closes while its join is in flight', async () => {
+    let finishJoin!: () => void;
+    const joining = new Promise<void>((resolve) => {
+      finishJoin = resolve;
+    });
+    const { presence, left } = fakePresence(() => joining);
+    const { openSocket, rooms } = await setup({ presence });
+
+    const ws = await openSocket();
+    await eventually(() => rooms().size === 1, 500);
+    ws.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    finishJoin();
+
+    await eventually(() => rooms().size === 0, 500);
+    expect(left).toEqual(['u_1']);
   });
 });
