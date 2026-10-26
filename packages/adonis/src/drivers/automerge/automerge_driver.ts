@@ -46,9 +46,6 @@ const MAX_PERSIST_WAIT_MS = 10_000;
 /** Connections whose permission denied canWrite — their updates are dropped. */
 const readOnlyClients = new WeakSet<object>();
 
-/** userId behind each socket that joined the roster. */
-const socketUsers = new WeakMap<object, string>();
-
 /** Sockets that exchange change chunks instead of whole documents. */
 const changeClients = new WeakSet<object>();
 
@@ -56,6 +53,8 @@ interface Room {
   // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
   text: any;
   clients: Set<import('ws').WebSocket>;
+  /** Open sockets per user that joined the presence roster. */
+  users: Map<string, number>;
   /** Driver calls (REST reads, versions) currently using the room. */
   holds: number;
 }
@@ -118,6 +117,7 @@ export class AutomergeDriver implements CollaborationDriver {
     const room: Room = {
       text: doc,
       clients: new Set<import('ws').WebSocket>(),
+      users: new Map(),
       holds: 0,
     };
     this.rooms.set(docName, room);
@@ -322,7 +322,7 @@ export class AutomergeDriver implements CollaborationDriver {
             return;
           }
           joined = true;
-          socketUsers.set(ws, ctx.userId);
+          room.users.set(ctx.userId, (room.users.get(ctx.userId) ?? 0) + 1);
 
           // The acknowledgement goes before the state, so the client knows
           // the shape of its first send before it makes it.
@@ -363,14 +363,18 @@ export class AutomergeDriver implements CollaborationDriver {
     if (!room.clients.delete(ws)) return;
     readOnlyClients.delete(ws);
     changeClients.delete(ws);
-    socketUsers.delete(ws);
-    if (userId !== undefined) this.leaveIfLast(docName, room, userId);
+    if (userId !== undefined) {
+      const count = (room.users.get(userId) ?? 1) - 1;
+      if (count > 0) room.users.set(userId, count);
+      else room.users.delete(userId);
+      this.leaveIfLast(docName, room, userId);
+    }
     void this.releaseRoom(docName, room);
   }
 
   /** Removes `userId` from the roster unless another of their sockets is still in the room. */
   private leaveIfLast(docName: string, room: Room, userId: string): void {
-    if ([...room.clients].some((client) => socketUsers.get(client) === userId)) return;
+    if (room.users.has(userId)) return;
     this.options.presence?.leave(docName, userId).catch((error: unknown) => {
       reportCollaborationError({ scope: 'transport', operation: 'presence.leave', docName, error });
     });

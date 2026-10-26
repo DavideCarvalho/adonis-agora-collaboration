@@ -481,3 +481,60 @@ describe('AutomergeDriver presence join failures', () => {
     expect(left).toEqual(['u_1']);
   });
 });
+
+describe('AutomergeDriver socket bookkeeping', () => {
+  it('leaves the roster only with the last tab of a user', async () => {
+    const { presence, left } = fakePresence();
+    const { connect } = await setup({ presence });
+
+    const first = await connect({ changes: false });
+    const second = await connect({ changes: false });
+    const other = await connect({ changes: false, userId: 'u_2' });
+
+    first.peer.ws.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(left).toEqual([]);
+
+    second.peer.ws.close();
+    other.peer.ws.close();
+    await eventually(() => left.length === 2, 500);
+    expect(left.sort()).toEqual(['u_1', 'u_2']);
+  });
+
+  it("does not scan the room's sockets when one closes", async () => {
+    const { presence, left } = fakePresence();
+    const { openSocket, rooms } = await setup({ presence });
+
+    const sockets: WebSocket[] = [];
+    for (let i = 0; i < 300; i++) sockets.push(await openSocket(`u_${i % 150}`));
+    await eventually(() => {
+      const room = rooms().get(DOC) as { clients: Set<unknown> } | undefined;
+      return room?.clients.size === 300;
+    }, 2000);
+
+    // Every Set iteration while the sockets close, weighted by the set's size.
+    let iterated = 0;
+    const proto = Set.prototype as unknown as Record<PropertyKey, (...args: unknown[]) => unknown>;
+    const methods: PropertyKey[] = ['values', 'keys', 'entries', 'forEach', Symbol.iterator];
+    const originals = methods.map((method) => proto[method]!);
+    methods.forEach((method, index) => {
+      const original = originals[index]!;
+      proto[method] = function (this: Set<unknown>, ...args: unknown[]) {
+        iterated += this.size;
+        return original.apply(this, args);
+      };
+    });
+    try {
+      for (const ws of sockets) ws.close();
+      await eventually(() => rooms().size === 0, 2000);
+    } finally {
+      methods.forEach((method, index) => {
+        proto[method] = originals[index]!;
+      });
+    }
+
+    expect(left).toHaveLength(150);
+    // A scan of the room per close is ~300²/2 (45 000 here).
+    expect(iterated).toBeLessThan(3000);
+  });
+});
