@@ -351,7 +351,7 @@ describe('AutomergeDriver: the same hook, in the engine that has its own rooms',
     await expect(driver.getDocumentText('whiteboards/1')).resolves.toBe('imported');
     expect((await storage.loadDocument('whiteboards/1'))?.state.byteLength).toBeGreaterThan(0);
 
-    // The room is warm and the storage has it: nothing asks again.
+    // The storage has it: nothing asks again.
     await driver.getDocumentText('whiteboards/1');
     expect(seedDocument).toHaveBeenCalledTimes(1);
     await driver.close();

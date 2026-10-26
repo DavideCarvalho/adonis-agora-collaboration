@@ -17,11 +17,14 @@ import type { CollabStatus } from '../types.js';
  * of forcing both worlds behind one interface.
  *
  * Wire protocol mirrors the server's AutomergeDriver:
- *  1. ws `${wsUrl}?doc=<name>&token=<token>` (token via fetchToken)
- *  2. server sends the full `A.save(doc)` binary on connect
- *  3. client sends its full saved doc after local changes (debounced)
- *  4. incoming binaries are merged into the local doc and re-broadcast by
- *     the server to the other peers
+ *  1. ws `${wsUrl}?doc=<name>&token=<token>&sync=changes` (token via fetchToken)
+ *  2. a server that exchanges change chunks answers with the
+ *     {@link CHANGES_ACK} text frame; then every server sends the full
+ *     `A.save(doc)` binary
+ *  3. after local changes (debounced) the client sends the changes the server
+ *     lacks (`A.saveSince`) once acknowledged, else its whole saved doc
+ *  4. incoming binaries — change chunks or whole docs — are applied with
+ *     `A.loadIncremental`; the server forwards what was new to the other peers
  *
  * ## Reconnection
  *
@@ -37,7 +40,8 @@ import type { CollabStatus } from '../types.js';
  * Local changes made while the socket is down are **not lost**. Automerge's
  * full-document exchange makes the local doc its own outbox: the change is
  * applied locally, {@link UseAutomergeDocResult.pendingChanges} counts it, and
- * the whole saved document is written the moment a socket is open again. The
+ * whatever the server's state lacks is written as soon as a reconnected socket
+ * has delivered that state. The
  * count is exposed so a UI can say "3 unsaved changes" instead of pretending
  * everything is fine.
  */
@@ -72,6 +76,13 @@ export interface UseAutomergeDocOptions {
 }
 
 const SEND_DEBOUNCE_MS = 200;
+
+/** Text frame a server sends when this socket may exchange change chunks. */
+const CHANGES_ACK = 'automerge-sync:changes';
+
+function sameHeads(a: A.Heads, b: A.Heads): boolean {
+  return a.length === b.length && a.every((hash, index) => hash === b[index]);
+}
 
 /**
  * Close codes the AutomergeDriver uses for an answer, not an outage.
@@ -120,6 +131,12 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
     let generation = 0;
     /** The last real failure, kept so an exhausted budget can name it. */
     let lastFailure: Error | null = null;
+    /** The current socket's server acknowledged change chunks. */
+    let sendsChanges = false;
+    /** The current socket has delivered the server's state. */
+    let stateReceived = false;
+    /** Heads the server is known to hold on the current socket. */
+    let serverHeads: A.Heads = [];
 
     const fail = (failure: Error): void => {
       lastFailure = failure;
@@ -127,9 +144,23 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
       setError(failure);
     };
 
+    /**
+     * Sends what the server lacks: the changes since {@link serverHeads} to a
+     * server that acknowledged chunks, the whole saved doc to any other. Waits
+     * for the server's state, which is where a reconnect catches up.
+     */
     const flush = (): void => {
-      if (socket?.readyState !== Impl.OPEN || !localDocRef.current) return;
-      socket.send(A.save(localDocRef.current) as unknown as ArrayBuffer);
+      const local = localDocRef.current;
+      if (socket?.readyState !== Impl.OPEN || !local || !stateReceived) return;
+      if (sendsChanges) {
+        const heads = A.getHeads(local);
+        if (!sameHeads(heads, serverHeads)) {
+          socket.send(A.saveSince(local, serverHeads) as unknown as ArrayBuffer);
+          serverHeads = heads;
+        }
+      } else {
+        socket.send(A.save(local) as unknown as ArrayBuffer);
+      }
       pendingRef.current = 0;
       setPendingChanges(0);
     };
@@ -157,6 +188,9 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
       generation += 1;
       const mine = generation;
       const stale = () => disposed || mine !== generation;
+      sendsChanges = false;
+      stateReceived = false;
+      serverHeads = [];
 
       try {
         const info = await fetchToken(config, docName);
@@ -166,7 +200,7 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
         }
 
         const base = resolveBaseUrl(config);
-        const query = `?doc=${encodeURIComponent(docName)}&token=${encodeURIComponent(info.token)}`;
+        const query = `?doc=${encodeURIComponent(docName)}&token=${encodeURIComponent(info.token)}&sync=changes`;
         const wsUrl = info.wsUrl.startsWith('ws')
           ? `${info.wsUrl}${query}`
           : `${base.replace(/^http/, 'ws')}${info.wsUrl}${query}`;
@@ -183,17 +217,41 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
           lastFailure = null;
           setStatus('connected');
           setError(null);
-          // Everything typed while the socket was down goes out now. The local
-          // doc IS the outbox: this protocol sends whole documents.
-          if (pendingRef.current > 0) flush();
         };
 
         ws.onmessage = (event) => {
           if (stale()) return;
+          if (typeof event.data === 'string') {
+            if (event.data === CHANGES_ACK) sendsChanges = true;
+            return;
+          }
           const bytes = new Uint8Array(event.data as ArrayBuffer);
-          const incoming = A.load<T>(bytes);
-          const next = localDocRef.current ? A.merge(localDocRef.current, incoming) : incoming;
+          const current = localDocRef.current;
+
+          if (!stateReceived) {
+            // The server's whole state. Whatever the local doc holds beyond it
+            // — typed while disconnected, or sent on a socket that dropped —
+            // goes out now: the local doc is the outbox.
+            const incoming = A.load<T>(bytes);
+            const next = current ? A.merge(current, incoming) : incoming;
+            localDocRef.current = next;
+            stateReceived = true;
+            serverHeads = A.getHeads(incoming);
+            setDoc(next);
+            setSynced(true);
+            if (sameHeads(A.getHeads(next), serverHeads)) {
+              pendingRef.current = 0;
+              setPendingChanges(0);
+            } else {
+              flush();
+            }
+            return;
+          }
+
+          const next = current ? A.loadIncremental(current, bytes) : A.load<T>(bytes);
           localDocRef.current = next;
+          // With nothing left unsent, the server holds everything this doc holds.
+          if (pendingRef.current === 0) serverHeads = A.getHeads(next);
           setDoc(next);
           setSynced(true);
         };
