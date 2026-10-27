@@ -21,15 +21,33 @@ documents: {
 
 ## The wire protocol
 
-Deliberately simple, and worth knowing because it explains the trade-offs:
+Small, and worth knowing because it explains the trade-offs:
 
-1. the client opens `ws://…?doc=<name>&token=<token>`;
-2. the server sends the **whole saved document** as a binary on connect;
-3. after a local change the client sends its whole saved document back, debounced;
-4. the server merges it into the room's document and re-broadcasts to the other peers.
+1. the client opens `ws://…?doc=<name>&token=<token>&sync=changes`;
+2. the server answers `sync=changes` with the text frame `automerge-sync:changes`, then sends the
+   **whole saved document** as a binary;
+3. after a local change (debounced) the client sends only the **changes the server lacks**
+   (`A.saveSince`);
+4. the server applies them to the room's document and forwards only what was new to the other
+   peers. A payload that adds nothing (a duplicate, or bytes that are not Automerge) is neither
+   forwarded nor saved.
 
-Full-document exchange rather than incremental deltas. Automerge compresses well, so this is fine
-for the structured documents it is meant for and unsuited to a 500-page manuscript.
+On every connection, reconnects included, the client waits for the server's initial state and then
+sends whatever that state lacks, so an edit sent on a socket that dropped before the server got it
+is not lost.
+
+A socket that does not ask for `sync=changes` gets no text frame and keeps exchanging **whole saved
+documents** both ways: the server applies either shape with `A.loadIncremental` and sends such a
+socket whole documents, so clients from before change chunks keep working in the same room. A
+client against a server that never sends the acknowledgement keeps sending whole documents too.
+
+The room's document lives in memory while it has clients. When the last one leaves, its pending
+save is written and the room is dropped; the next connection loads it from storage. A room opened
+only to answer a server-side call (`getDocumentText`, `getDocumentState`, versions) is dropped once
+that call is done, and no room is dropped while a client, a call or a save still uses it. Saves are
+debounced by `debounce`, but a document edited without pause is still written at least every 10
+seconds (or every `debounce`, if longer). `close()` writes whatever is still pending and terminates
+the sockets that are still open.
 
 The handshake refuses with a close code rather than an HTTP status, and the codes are meant to be
 read:
@@ -107,9 +125,9 @@ retried.
 
 <Callout title="Changes made while disconnected are not dropped">
 Do **not** disable the editor on a disconnect. A change applied while the socket is down stays in
-the local document and is counted by `pendingChanges`; the whole saved document is written the
-moment a socket is open again, and the count returns to zero. That works precisely because this
-protocol exchanges whole documents — the local doc is its own outbox.
+the local document and is counted by `pendingChanges`; once a reconnected socket has delivered the
+server's state, whatever that state lacks is written, and the count returns to zero. The local doc
+is its own outbox.
 
 What you owe the user is the *fact*, not a locked input: show `pendingChanges` (and `status`) so
 nobody types into a document they believe is syncing when it is not.

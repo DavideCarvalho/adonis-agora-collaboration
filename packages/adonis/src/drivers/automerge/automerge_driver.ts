@@ -23,22 +23,51 @@ import { lineDiff, resolveStorage } from '../shared.js';
  * between versions is already in the doc. `restoreVersion` brings the doc
  * back to the version's heads via a compensating change (non-destructive).
  *
- * Transport: clients speak Automerge's binary protocol
- * (@automerge/automerge-repo-network-websocket on the client). On the server
- * we use an in-memory DocHandle + simple per-room broadcast; for horizontal
- * scaling, updates are re-broadcast via Redis pub/sub (same philosophy as transmit).
+ * Transport: one in-memory doc per room and a per-room broadcast. Every
+ * client gets the whole `A.save(doc)` on connect. After that, a socket opened
+ * with `?sync=changes` is answered with the {@link CHANGES_ACK} text frame and
+ * from then on exchanges change chunks (`A.saveSince`) both ways; any other
+ * socket sends and receives whole saved documents. The server applies both
+ * shapes with `A.loadIncremental`, so one room can hold both kinds of client.
+ *
+ * A room lives while it has clients: when the last one leaves, its pending
+ * save is written and the room is dropped from memory.
  */
+
+/** Query parameter (and value) a client sets to ask for change chunks. */
+const CHANGES_PARAM = 'sync';
+const CHANGES_PARAM_VALUE = 'changes';
+/** Text frame confirming that this socket exchanges change chunks. */
+export const CHANGES_ACK = 'automerge-sync:changes';
+
+/** Longest a burst of edits can keep postponing its save. */
+const MAX_PERSIST_WAIT_MS = 10_000;
 
 /** Connections whose permission denied canWrite — their updates are dropped. */
 const readOnlyClients = new WeakSet<object>();
 
-/** userId behind each open socket — feeds the presence roster on close. */
-const socketUsers = new WeakMap<object, string>();
+/** Sockets that exchange change chunks instead of whole documents. */
+const changeClients = new WeakSet<object>();
 
 interface Room {
   // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
   text: any;
   clients: Set<import('ws').WebSocket>;
+  /** Open sockets per user that joined the presence roster. */
+  users: Map<string, number>;
+  /** Driver calls (REST reads, versions) currently using the room. */
+  holds: number;
+}
+
+interface PendingSave {
+  timer: ReturnType<typeof setTimeout>;
+  /** When the save runs even if edits keep arriving. */
+  deadline: number;
+  room: Room;
+}
+
+function sameHeads(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((hash, index) => hash === b[index]);
 }
 
 export class AutomergeDriver implements CollaborationDriver {
@@ -48,7 +77,9 @@ export class AutomergeDriver implements CollaborationDriver {
   private wss?: WebSocketServer;
   private readonly options: SelfHostedDriverOptions;
   private readonly storage: CollaborationStorage;
-  private persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private pendingSaves = new Map<string, PendingSave>();
+  /** Saves being written, by document name; a room is not dropped under one. */
+  private savesInFlight = new Map<string, Promise<void>>();
   /**
    * Rooms being opened, by document name.
    *
@@ -83,7 +114,12 @@ export class AutomergeDriver implements CollaborationDriver {
       ? A.load<Record<string, unknown>>(stored.state)
       : await this.seedDocument(docName);
 
-    const room = { text: doc, clients: new Set<import('ws').WebSocket>() };
+    const room: Room = {
+      text: doc,
+      clients: new Set<import('ws').WebSocket>(),
+      users: new Map(),
+      holds: 0,
+    };
     this.rooms.set(docName, room);
     return room;
   }
@@ -142,12 +178,55 @@ export class AutomergeDriver implements CollaborationDriver {
     return doc;
   }
 
-  private broadcast(room: Room, payload: Uint8Array, sender?: import('ws').WebSocket): void {
+  /**
+   * Sends everything the room gained since `since` to every client but the
+   * sender: the change chunk to sockets that speak chunks, a whole document
+   * (`wholeDoc`, else `A.save` of the room) to the rest. Each shape is
+   * encoded at most once per call.
+   */
+  private broadcast(
+    room: Room,
+    since: string[],
+    sender?: import('ws').WebSocket,
+    wholeDoc?: Uint8Array,
+  ): void {
+    let changes: Uint8Array | undefined;
+    let whole = wholeDoc;
     for (const client of room.clients) {
-      if (client !== sender && client.readyState === 1) {
-        client.send(payload);
+      if (client === sender || client.readyState !== 1) continue;
+      if (changeClients.has(client)) {
+        changes ??= ANext.saveSince(room.text, since);
+        client.send(changes);
+      } else {
+        whole ??= A.save(room.text);
+        client.send(whole);
       }
     }
+  }
+
+  /** Runs `fn` on the room, dropping it afterwards if nobody else uses it. */
+  private async withRoom<T>(docName: string, fn: (room: Room) => Promise<T> | T): Promise<T> {
+    const room = await this.loadRoom(docName);
+    room.holds += 1;
+    try {
+      return await fn(room);
+    } finally {
+      room.holds -= 1;
+      void this.releaseRoom(docName, room);
+    }
+  }
+
+  /**
+   * Writes the room's pending save and drops it from memory once nothing
+   * uses it: no client, no driver call, no save waiting or being written.
+   * A client that joins meanwhile finds the same room in the map.
+   */
+  private async releaseRoom(docName: string, room: Room): Promise<void> {
+    const idle = () => room.clients.size === 0 && room.holds === 0;
+    while (idle() && (this.pendingSaves.has(docName) || this.savesInFlight.has(docName))) {
+      await this.persistNow(docName);
+    }
+    if (idle() && this.rooms.get(docName) === room) this.rooms.delete(docName);
   }
 
   async attach(server: import('node:http').Server): Promise<void> {
@@ -217,17 +296,37 @@ export class AutomergeDriver implements CollaborationDriver {
           return;
         }
 
+        let room: Room | undefined;
         try {
-          const room = await this.loadRoom(docName);
+          room = await this.loadRoom(docName);
+          const joinedRoom = room;
           room.clients.add(ws);
           if (!permission.canWrite) readOnlyClients.add(ws);
+          const sendsChanges = url.searchParams.get(CHANGES_PARAM) === CHANGES_PARAM_VALUE;
+          if (sendsChanges) changeClients.add(ws);
+
+          // Registered before the join, so a socket that closes while the join
+          // is in flight still leaves the room.
+          let joined = false;
+          ws.on('close', () => {
+            this.removeSocket(docName, joinedRoom, ws, joined ? ctx.userId : undefined);
+          });
 
           await this.options.presence?.join(docName, {
             userId: ctx.userId,
             ...(ctx.user?.name ? { name: ctx.user.name } : {}),
           });
+          if (ws.readyState !== ws.OPEN) {
+            // Closed during the join: the entry it wrote is owed a leave.
+            this.leaveIfLast(docName, joinedRoom, ctx.userId);
+            return;
+          }
+          joined = true;
+          room.users.set(ctx.userId, (room.users.get(ctx.userId) ?? 0) + 1);
 
-          // Sends the full state to the new client.
+          // The acknowledgement goes before the state, so the client knows
+          // the shape of its first send before it makes it.
+          if (sendsChanges) ws.send(CHANGES_ACK);
           ws.send(A.save(room.text));
 
           ws.on('message', (data) => {
@@ -235,23 +334,14 @@ export class AutomergeDriver implements CollaborationDriver {
             // dropped. Enforced here because the client cannot be trusted to
             // respect a permission it was merely told about.
             if (readOnlyClients.has(ws)) return;
-            void this.handleClientMessage(docName, data as Uint8Array, ws);
+            this.handleClientMessage(docName, joinedRoom, data as Uint8Array, ws);
           });
-
-          ws.on('close', () => {
-            room.clients.delete(ws);
-            readOnlyClients.delete(ws);
-            // Only the user's LAST socket on this document leaves the roster.
-            const stillConnected = [...room.clients].some(
-              (client) => socketUsers.get(client) === ctx.userId,
-            );
-            socketUsers.delete(ws);
-            if (!stillConnected) {
-              void this.options.presence?.leave(docName, ctx.userId);
-            }
-          });
-          socketUsers.set(ws, ctx.userId);
         } catch (error) {
+          if (room) {
+            // A join that failed may still have written the entry.
+            this.removeSocket(docName, room, ws, undefined);
+            this.leaveIfLast(docName, room, ctx.userId);
+          }
           reportCollaborationError({ scope: 'storage', operation: 'loadDocument', docName, error });
           ws.close(4500, 'could not open the document');
         }
@@ -259,58 +349,119 @@ export class AutomergeDriver implements CollaborationDriver {
     });
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
-  private async handleClientMessage(docName: string, data: Uint8Array, sender: any): Promise<void> {
-    const room = await this.loadRoom(docName);
+  /**
+   * Takes `ws` out of the room — and, when `userId` is given, out of that
+   * user's socket count, leaving the roster with their last one. Safe to call
+   * twice for one socket.
+   */
+  private removeSocket(
+    docName: string,
+    room: Room,
+    ws: import('ws').WebSocket,
+    userId: string | undefined,
+  ): void {
+    if (!room.clients.delete(ws)) return;
+    readOnlyClients.delete(ws);
+    changeClients.delete(ws);
+    if (userId !== undefined) {
+      const count = (room.users.get(userId) ?? 1) - 1;
+      if (count > 0) room.users.set(userId, count);
+      else room.users.delete(userId);
+      this.leaveIfLast(docName, room, userId);
+    }
+    void this.releaseRoom(docName, room);
+  }
 
+  /** Removes `userId` from the roster unless another of their sockets is still in the room. */
+  private leaveIfLast(docName: string, room: Room, userId: string): void {
+    if (room.users.has(userId)) return;
+    this.options.presence?.leave(docName, userId).catch((error: unknown) => {
+      reportCollaborationError({ scope: 'transport', operation: 'presence.leave', docName, error });
+    });
+  }
+
+  /**
+   * Applies a client's whole document or change chunk and forwards only what
+   * was new to the room. A payload that adds nothing — a duplicate, or bytes
+   * that are not Automerge at all — is neither forwarded nor saved.
+   */
+  private handleClientMessage(
+    docName: string,
+    room: Room,
+    data: Uint8Array,
+    sender: import('ws').WebSocket,
+  ): void {
     try {
-      // Client sends an incremental binary doc; merge into the server doc.
-      const incoming = A.load<Record<string, unknown>>(data);
-      const merged = A.merge(room.text, incoming);
-      room.text = merged;
+      const before = ANext.getHeads(room.text);
+      room.text = A.loadIncremental(room.text, data);
+      if (sameHeads(before, ANext.getHeads(room.text))) return;
 
-      this.broadcast(room, data, sender);
-
-      // Persistence with simple per-room debounce.
-      await this.persistDebounced(docName, room);
+      // A whole document from a whole-document client is forwarded as it came
+      // to the other whole-document clients: it is already the payload they need.
+      this.broadcast(room, before, sender, changeClients.has(sender) ? undefined : data);
+      this.schedulePersist(docName, room);
     } catch {
       // Invalid payload: ignore (a badly-behaved client doesn't take down the room).
     }
   }
 
-  private persistDebounced(docName: string, room: Room): Promise<void> {
-    return new Promise((resolve) => {
-      const existing = this.persistTimers.get(docName);
-      if (existing) clearTimeout(existing);
+  /**
+   * Debounced save: each edit postpones it by `debounce`, but never past
+   * {@link MAX_PERSIST_WAIT_MS} (or `debounce`, if longer) after the first
+   * unsaved edit, so a document edited without pause is still written.
+   */
+  private schedulePersist(docName: string, room: Room): void {
+    const debounce = this.options.debounce ?? 2000;
+    const now = Date.now();
+    const pending = this.pendingSaves.get(docName);
+    if (pending) clearTimeout(pending.timer);
+    const deadline = pending?.deadline ?? now + Math.max(MAX_PERSIST_WAIT_MS, debounce);
 
-      this.persistTimers.set(
-        docName,
-        setTimeout(() => {
-          void this.storage
-            .saveDocument(docName, A.save(room.text))
-            .catch((error: unknown) => {
-              reportCollaborationError({
-                scope: 'storage',
-                operation: 'saveDocument',
-                docName,
-                error,
-              });
-            })
-            .finally(() => resolve());
-        }, this.options.debounce ?? 2000),
-      );
-    });
+    const timer = setTimeout(
+      () => void this.persistNow(docName),
+      Math.max(0, Math.min(debounce, deadline - now)),
+    );
+    this.pendingSaves.set(docName, { timer, deadline, room });
+  }
+
+  /** Writes the pending save of `docName` now, if there is one. */
+  private async persistNow(docName: string): Promise<void> {
+    const pending = this.pendingSaves.get(docName);
+    if (!pending) return this.savesInFlight.get(docName);
+    clearTimeout(pending.timer);
+    this.pendingSaves.delete(docName);
+    await this.save(docName, A.save(pending.room.text));
+  }
+
+  /** Saves `state`, tracked so the room is not dropped while it is written. */
+  private async save(docName: string, state: Uint8Array): Promise<void> {
+    const previous = this.savesInFlight.get(docName);
+    const write = (async () => {
+      // Writes of one document stay in order, so an older state never lands last.
+      await previous;
+      try {
+        await this.storage.saveDocument(docName, state);
+      } catch (error) {
+        reportCollaborationError({ scope: 'storage', operation: 'saveDocument', docName, error });
+      }
+    })();
+    this.savesInFlight.set(docName, write);
+    try {
+      await write;
+    } finally {
+      if (this.savesInFlight.get(docName) === write) this.savesInFlight.delete(docName);
+    }
   }
 
   async getDocumentState(docName: string): Promise<Uint8Array> {
-    const room = await this.loadRoom(docName);
-    return A.save(room.text);
+    return this.withRoom(docName, (room) => A.save(room.text));
   }
 
   async getDocumentText(docName: string): Promise<string> {
-    const room = await this.loadRoom(docName);
-    const content = (room.text as unknown as { content?: { toString(): string } }).content;
-    return content ? content.toString() : '';
+    return this.withRoom(docName, (room) => {
+      const content = (room.text as unknown as { content?: { toString(): string } }).content;
+      return content ? content.toString() : '';
+    });
   }
 
   /** Versions = markers over the native history (heads hash). */
@@ -319,19 +470,20 @@ export class AutomergeDriver implements CollaborationDriver {
     createdBy: string | null,
     label: string | null,
   ): Promise<CollabVersion> {
-    const room = await this.loadRoom(docName);
-    const heads = ANext.getHeads(room.text);
-    const existing = await this.storage.listVersions(docName);
+    return this.withRoom(docName, async (room) => {
+      const heads = ANext.getHeads(room.text);
+      const existing = await this.storage.listVersions(docName);
 
-    const version: CollabVersion = {
-      ...createVersionMetadata(createdBy, label, seqVersions(existing)),
-      id: heads.join(','),
-    };
+      const version: CollabVersion = {
+        ...createVersionMetadata(createdBy, label, seqVersions(existing)),
+        id: heads.join(','),
+      };
 
-    // Snapshot = binary save of the doc up to those heads (Automerge compresses
-    // well; storing the whole doc as the "snapshot" keeps restore O(1)).
-    await this.storage.saveVersion(docName, version, A.save(room.text));
-    return version;
+      // Snapshot = binary save of the doc up to those heads (Automerge compresses
+      // well; storing the whole doc as the "snapshot" keeps restore O(1)).
+      await this.storage.saveVersion(docName, version, A.save(room.text));
+      return version;
+    });
   }
 
   async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
@@ -351,8 +503,19 @@ export class AutomergeDriver implements CollaborationDriver {
   ): Promise<void> {
     const bytes = await this.getVersionState(docName, versionId);
     const snapshotDoc = A.load<Record<string, unknown>>(bytes);
-    const room = await this.loadRoom(docName);
+    await this.withRoom(docName, (room) =>
+      this.restoreRoom(docName, room, versionId, snapshotDoc, restoredBy),
+    );
+  }
 
+  private async restoreRoom(
+    docName: string,
+    room: Room,
+    versionId: string,
+    // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
+    snapshotDoc: any,
+    restoredBy: string | null,
+  ): Promise<void> {
     const existing = await this.storage.listVersions(docName);
     const target = existing.find((version) => version.id === versionId);
     await this.storage.saveVersion(
@@ -368,6 +531,7 @@ export class AutomergeDriver implements CollaborationDriver {
       A.save(room.text),
     );
 
+    const before = ANext.getHeads(room.text);
     const merged = A.merge(room.text, snapshotDoc);
     // Automerge merge converges to the most recent state; to "restore",
     // we overwrite the content field with the value from the version.
@@ -378,8 +542,12 @@ export class AutomergeDriver implements CollaborationDriver {
     });
 
     room.text = finalDoc;
-    this.broadcast(room, A.save(finalDoc));
-    await this.storage.saveDocument(docName, A.save(finalDoc));
+    this.broadcast(room, before);
+    // The restore supersedes any debounced save of the state it replaced.
+    const pending = this.pendingSaves.get(docName);
+    if (pending) clearTimeout(pending.timer);
+    this.pendingSaves.delete(docName);
+    await this.save(docName, A.save(finalDoc));
   }
 
   /** Binary state stored for a version (`A.save` of the doc at that point). */
@@ -404,11 +572,15 @@ export class AutomergeDriver implements CollaborationDriver {
   }
 
   async close(): Promise<void> {
-    for (const timer of this.persistTimers.values()) clearTimeout(timer);
+    // Edits still inside their debounce are written, not dropped.
+    await Promise.all([...this.pendingSaves.keys()].map((docName) => this.persistNow(docName)));
+    await Promise.all(this.savesInFlight.values());
     // `this.wss?.close(cb)` never runs cb when there is no server, so this
     // promise used to hang forever on a driver that was never attached —
     // which is every driver outside the web process.
     if (!this.wss) return;
+    // `wss.close` only calls back once every client is gone.
+    for (const client of this.wss.clients) client.terminate();
     return new Promise((resolve) => {
       this.wss?.close(() => resolve());
     });

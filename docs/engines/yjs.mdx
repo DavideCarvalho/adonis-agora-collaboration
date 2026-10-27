@@ -121,8 +121,9 @@ The window is a straight trade. Lower means less data at risk if the process die
 fewer writes under sustained typing. The default of 2000 ms is a reasonable middle for prose. Two
 things worth knowing about the edges:
 
-- Sustained typing keeps resetting the timer, so a very high `debounce` can mean a long stretch with
-  nothing written. Treat it as a *maximum acceptable data loss* dial.
+- Sustained typing keeps resetting the timer, but Hocuspocus caps the wait: a document edited
+  without pause is still written at least every 10 seconds. Treat `debounce` as a *maximum
+  acceptable data loss* dial.
 - Graceful shutdown flushes pending documents, so a normal deploy does not lose the window. A
   `SIGKILL` does.
 

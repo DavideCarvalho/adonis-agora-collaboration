@@ -66,10 +66,17 @@ const online = await collaboration.current.listPresence({ docName })
 // → [{ userId, name, avatarUrl }] across every Node instance
 ```
 
-Entries carry a **60-second TTL**, refreshed on join. That is a deliberate safety net: a process
+Each entry carries its own **60-second TTL**, and every instance re-stamps the members it holds
+every 20 seconds for as long as they stay connected. That is a deliberate safety net: a process
 killed mid-connection never runs its disconnect handler, and without an expiry its users would look
-online forever. The cost is that the roster is eventually consistent — a hard crash leaves a ghost
-for up to a minute.
+online forever — even on a document other instances keep busy, since the expiry is per member rather
+than per document. The cost is that the roster is eventually consistent — a hard crash leaves a
+ghost for up to a minute.
+
+The re-stamp also writes the member back, so a user who is still connected reappears if another
+instance's `leave` or a key expiry removed their entry. An entry written without a stamp, by an
+instance on an earlier release during a rolling deploy, is still listed and expires with the
+document's key TTL instead.
 
 Without `redisUrl`, `listPresence` returns an empty array rather than throwing. Single-instance
 development keeps working; you just get nothing from the layer you did not configure.
