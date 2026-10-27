@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration-client
 
+## 0.10.2
+
+### Patch Changes
+
+- [#137](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/137) [`75da6c4`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/75da6c480a759a043fb66ae2167f9a4f56ec9f78) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - perf: `useAwareness` (and `useCollabEditor`, which uses it) keeps the same `peers` array when an awareness change does not alter any peer's `clientId`, `userId`, `name` or `avatarUrl`. Remote cursor and selection moves fire awareness `change` on every keystroke; they no longer re-render the component that renders the peer list.
+
 ## 0.10.1
 
 ### Patch Changes
