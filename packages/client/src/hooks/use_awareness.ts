@@ -65,6 +65,28 @@ function snapshotPeers(awareness: AwarenessProtocol.Awareness): CollabPeer[] {
 }
 
 /**
+ * Same peers, same order, same fields. Awareness fires `change` on every remote
+ * cursor or selection move, which never touches what a {@link CollabPeer} carries;
+ * keeping the previous array then lets React bail out of the re-render.
+ */
+function samePeers(a: CollabPeer[], b: CollabPeer[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] as CollabPeer;
+    const y = b[i] as CollabPeer;
+    if (
+      x.clientId !== y.clientId ||
+      x.userId !== y.userId ||
+      x.name !== y.name ||
+      x.avatarUrl !== y.avatarUrl
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Presença via awareness: quem está online no documento agora.
  * Atualiza em mudança de awareness (entrar/sair/atualizar cursor).
  *
@@ -85,6 +107,8 @@ export function useAwareness(options: UseAwarenessOptions): UseAwarenessResult {
   );
 
   const [peers, setPeers] = useState<CollabPeer[]>([]);
+  /** Last peers handed to React, so an unchanged snapshot never schedules a render. */
+  const peersRef = useRef<CollabPeer[]>(peers);
   const [status, setStatus] = useState<CollabStatus>(() => session?.getStatus() ?? 'connecting');
   const [awareness, setAwareness] = useState<AwarenessProtocol.Awareness | null>(null);
 
@@ -131,7 +155,13 @@ export function useAwareness(options: UseAwarenessOptions): UseAwarenessResult {
         }
         setAwareness(next);
       }
-      setPeers(next ? snapshotPeers(next) : []);
+      const snapshot = next ? snapshotPeers(next) : [];
+      // Compared outside `setPeers`: an updater returning the same array still
+      // costs React a render before it bails out.
+      if (!samePeers(peersRef.current, snapshot)) {
+        peersRef.current = snapshot;
+        setPeers(snapshot);
+      }
     };
 
     update();

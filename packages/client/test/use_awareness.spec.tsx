@@ -160,4 +160,56 @@ describe('useAwareness', () => {
       }),
     );
   });
+
+  it('does not re-render when a peer only moves its cursor', async () => {
+    let renders = 0;
+    const { result } = renderHook(
+      () => {
+        renders += 1;
+        return useAwareness({ docName: 'docs/perf-cursor' });
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.awareness).not.toBeNull());
+
+    const channel = result.current.awareness as AwarenessProtocol.Awareness;
+    let remote: AwarenessProtocol.Awareness | undefined;
+    act(() => {
+      remote = joinAsRemotePeer(channel, { userId: 'u2', name: 'Bob' });
+    });
+    const peers = result.current.peers;
+    expect(peers).toHaveLength(1);
+    const before = renders;
+
+    for (let i = 0; i < 20; i++) {
+      act(() => {
+        remote?.setLocalStateField('cursor', { anchor: i, head: i });
+        AwarenessProtocol.applyAwarenessUpdate(
+          channel,
+          AwarenessProtocol.encodeAwarenessUpdate(remote as AwarenessProtocol.Awareness, [
+            (remote as AwarenessProtocol.Awareness).clientID,
+          ]),
+          'remote',
+        );
+      });
+    }
+
+    // At most React's one-off eager-bailout render (the same-value `setStatus`);
+    // a new peers array per cursor move re-rendered on every one of the 20.
+    expect(renders - before).toBeLessThanOrEqual(1);
+    expect(result.current.peers).toBe(peers);
+
+    // A change a peer carries (the name) still comes through.
+    act(() => {
+      remote?.setLocalStateField('user', { userId: 'u2', name: 'Bobby' });
+      AwarenessProtocol.applyAwarenessUpdate(
+        channel,
+        AwarenessProtocol.encodeAwarenessUpdate(remote as AwarenessProtocol.Awareness, [
+          (remote as AwarenessProtocol.Awareness).clientID,
+        ]),
+        'remote',
+      );
+    });
+    expect(result.current.peers[0]?.name).toBe('Bobby');
+  });
 });
