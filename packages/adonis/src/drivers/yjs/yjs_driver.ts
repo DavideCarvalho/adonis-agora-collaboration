@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type {
+  beforeHandleMessagePayload,
   Configuration,
   connectedPayload,
   Hocuspocus,
@@ -59,6 +60,12 @@ function toUint8Array(data: RawData): Uint8Array {
  *  - `diffVersions`: materializes both versions and compares them by line.
  *  - Anchored comments: delegate to the CommentService (generic anchor).
  */
+
+/** Default for {@link SelfHostedDriverOptions.reauthorizeEveryMs}. */
+const DEFAULT_REAUTHORIZE_EVERY_MS = 30_000;
+
+/** Same close the provider gets for a refused handshake (`Forbidden` in @hocuspocus/common). */
+const FORBIDDEN_CLOSE = { code: 4403, reason: 'Forbidden' } as const;
 
 export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
   readonly engine = 'yjs';
@@ -203,6 +210,10 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       }
     };
 
+    const reauthorizeEveryMs = options.reauthorizeEveryMs ?? DEFAULT_REAUTHORIZE_EVERY_MS;
+    /** When each open connection's permission was last decided. */
+    const authorizedAt = new WeakMap<object, number>();
+
     this.hocuspocusConfig = {
       /**
        * The one place identity is established on this transport.
@@ -289,6 +300,58 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         connectionConfig.readOnly = !permission.canWrite;
 
         return { collab: ctx };
+      },
+
+      /**
+       * The handshake's answer, kept current while the socket stays open.
+       *
+       * `authorize` used to run only in `onAuthenticate`: someone removed from
+       * a document kept writing to it for as long as the tab stayed open. Once
+       * the permission is older than `reauthorizeEveryMs`, the next message
+       * asks again — before Hocuspocus applies it, so a revoked write never
+       * lands. Messages on one connection are handled in order, so the await
+       * here holds that connection's queue and nothing else.
+       */
+      async beforeHandleMessage({ connection, documentName, context }: beforeHandleMessagePayload) {
+        if (reauthorizeEveryMs <= 0) return;
+        const now = Date.now();
+        const last = authorizedAt.get(connection);
+        // First message: the handshake that just ran is the decision.
+        if (last === undefined) {
+          authorizedAt.set(connection, now);
+          return;
+        }
+        if (now - last < reauthorizeEveryMs) return;
+
+        const ctx = (context as { collab?: CollabConnectionContext } | undefined)?.collab;
+        if (!ctx) return;
+        // Stamped before asking, so a failing rule is retried once per window,
+        // not on every keystroke.
+        authorizedAt.set(connection, now);
+
+        let permission: CollabPermission;
+        try {
+          permission = await options.authorize(ctx, documentName);
+        } catch (error) {
+          reportCollaborationError({
+            scope: 'authorize',
+            operation: 'reauthorize',
+            docName: documentName,
+            error,
+          });
+          // "We could not tell": no writes until a check succeeds, reads go on.
+          connection.readOnly = true;
+          return;
+        }
+
+        if (!permission.canRead) {
+          // Hocuspocus closes the socket with this code and reason.
+          throw Object.assign(new CollabForbiddenError(documentName), {
+            code: FORBIDDEN_CLOSE.code,
+            reason: FORBIDDEN_CLOSE.reason,
+          });
+        }
+        connection.readOnly = !permission.canWrite;
       },
 
       /**

@@ -26,6 +26,10 @@ export interface UseCommentsResult {
    */
   create(
     input: Pick<CollabComment, 'space' | 'anchor' | 'body'> & {
+      /**
+       * @deprecated Ignored by the server: the name, like the `userId`, comes
+       * from the authenticated user.
+       */
       authorName?: string | null;
     },
   ): Promise<CollabComment>;

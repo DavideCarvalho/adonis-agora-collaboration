@@ -228,14 +228,26 @@ export interface CollaborationConfig {
    * declares authorize for every type — unmatched docs then fall back to
    * deny.
    *
-   * **Evaluated once per connection**, at the handshake (`onAuthenticate`),
-   * and once per REST request. Nothing re-runs it afterwards: revoking a
-   * user's access does NOT drop the socket they already hold, and they keep
-   * syncing that document until they disconnect. When a revocation has to
-   * take effect immediately, close the connection from the app side (or
-   * restart the document) — the rule alone will not do it.
+   * Evaluated at the handshake (`onAuthenticate`), once per REST request and,
+   * on the self-hosted `yjs` engine, again on open sockets every
+   * {@link reauthorizeEveryMs}: a revoked user loses write (or the socket)
+   * within that window instead of keeping it until they disconnect.
    */
   authorize?: (ctx: CollabConnectionContext, docName: string) => Promise<CollabPermission>;
+  /**
+   * **Self-hosted `yjs` engine only** — other engines ignore it.
+   *
+   * How old a socket's permission may get before `authorize` runs again.
+   * Default 30 000 ms; `0` restores the old behaviour (handshake only).
+   *
+   * The check runs on the next message the client sends once the window has
+   * passed — every update and the awareness heartbeat a provider sends about
+   * every 15 s — so even a reader that never types is re-checked. The result
+   * binds the socket: `canWrite: false` turns it read-only (Hocuspocus drops
+   * its updates), `canRead: false` closes it, and an `authorize` that throws
+   * turns it read-only until a later check succeeds.
+   */
+  reauthorizeEveryMs?: number;
   /**
    * **Self-hosted `yjs` engine only** — other engines ignore it.
    *

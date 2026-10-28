@@ -20,13 +20,20 @@ const comments = [
   { id: 'c_bob', userId: 'u_bob', body: 'theirs' },
 ];
 
-function makeManager(): CollabManagerLike & { calls: string[]; reads: string[] } {
+function makeManager(): CollabManagerLike & {
+  calls: string[];
+  reads: string[];
+  created: unknown[];
+} {
   const calls: string[] = [];
+  /** What reached `comments.create`. */
+  const created: unknown[] = [];
   /** How the guard READ the comment it authorizes — one row, or the whole thread. */
   const reads: string[] = [];
   return {
     calls,
     reads,
+    created,
     async getDocumentState() {
       return new Uint8Array();
     },
@@ -46,7 +53,8 @@ function makeManager(): CollabManagerLike & { calls: string[]; reads: string[] }
         reads.push(`get:${commentId}`);
         return comments.find((comment) => comment.id === commentId) ?? null;
       },
-      async create() {
+      async create(_docName, input) {
+        created.push(input);
         return {};
       },
       async resolve(_docName, commentId, resolved) {
@@ -100,7 +108,7 @@ function makeRouter() {
   };
 }
 
-function makeCtx(commentId: string) {
+function makeCtx(commentId: string, body: Record<string, unknown> = {}) {
   const responses: Array<{ status: number; payload: unknown }> = [];
   return {
     __responses: responses,
@@ -109,7 +117,7 @@ function makeCtx(commentId: string) {
     request: {
       qs: () => ({ doc: DOC }),
       params: () => ({}),
-      body: <T>() => ({}) as T,
+      body: <T>() => body as T,
       raw: () => undefined,
       header: () => undefined,
     },
@@ -258,5 +266,25 @@ describe('authorizing a comment mutation reads one comment', () => {
     await find('DELETE', '/comments/:id').handler(makeCtx('c_jane'));
 
     expect(manager.reads).toEqual(['get:c_jane']);
+  });
+});
+
+describe('creating a comment', () => {
+  it('names the author from the authenticated user, not from the body', async () => {
+    const { manager, find } = setup({ canWrite: false });
+    const ctx = makeCtx('', {
+      docName: DOC,
+      space: 'main',
+      anchor: null,
+      body: 'olá',
+      userId: 'u_bob',
+      authorName: 'Bob (forjado)',
+    });
+
+    await find('POST', '/comments').handler(ctx);
+
+    expect(manager.created).toEqual([
+      expect.objectContaining({ userId: 'u_jane', authorName: 'Jane' }),
+    ]);
   });
 });
