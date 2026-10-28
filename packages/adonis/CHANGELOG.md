@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 0.19.3
+
+### Patch Changes
+
+- [#140](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/140) [`eee97a3`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/eee97a3d126cf8c180c57843667a25ae32724178) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - perf(presence): send the 20 s presence refresh of every open document in a single Redis pipeline (one write and one round trip per tick) instead of one MULTI/EXEC per document. Each document keeps its own MULTI/EXEC with the same keys, TTLs and failure isolation.
+
 ## 0.19.2
 
 ### Patch Changes
