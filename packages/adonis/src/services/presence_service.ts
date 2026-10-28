@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import type { ChainableCommander, Redis } from 'ioredis';
 
 /**
  * Presence store contract — makes the service testable without a live
@@ -129,15 +129,23 @@ export class RedisPresenceStore implements PresenceStore {
 
   /** Writes `members` with a fresh stamp and extends both keys' TTL. */
   private async stamp(docName: string, members: PresenceMember[]): Promise<void> {
+    await this.queueStamp(this.redis.multi(), docName, members).exec();
+  }
+
+  /** Queues the commands of one stamp (see `stamp`) onto `commands`. */
+  private queueStamp(
+    commands: ChainableCommander,
+    docName: string,
+    members: PresenceMember[],
+  ): ChainableCommander {
     const key = this.key(docName);
     const seenKey = this.seenKey(docName);
     const now = Date.now();
-    const pipeline = this.redis.multi();
     for (const member of members) {
-      pipeline.hset(key, member.userId, JSON.stringify(member));
-      pipeline.zadd(seenKey, now, member.userId);
+      commands.hset(key, member.userId, JSON.stringify(member));
+      commands.zadd(seenKey, now, member.userId);
     }
-    await pipeline.expire(key, TTL_SECONDS).expire(seenKey, TTL_SECONDS).exec();
+    return commands.expire(key, TTL_SECONDS).expire(seenKey, TTL_SECONDS);
   }
 
   private startRefreshing(): void {
@@ -151,15 +159,30 @@ export class RedisPresenceStore implements PresenceStore {
     this.refreshTimer = undefined;
   }
 
-  /** Re-stamps every member this instance holds, so they outlive the TTL while connected. */
+  /**
+   * Re-stamps every member this instance holds, so they outlive the TTL while connected.
+   *
+   * Every document keeps its own MULTI/EXEC (the same transaction `stamp` sends), but all
+   * of them travel in a single pipeline — one write and one round trip per tick instead of
+   * one per open document. Each document's EXEC succeeds or fails on its own, exactly as
+   * the separate transactions did; failures are ignored either way.
+   */
   private async refresh(): Promise<void> {
-    await Promise.all(
-      [...this.local].map(([docName, members]) =>
-        this.stamp(docName, [...members.values()]).catch(() => {
-          // A failed refresh is retried on the next tick; expiry only needs one to land.
-        }),
-      ),
-    );
+    if (this.local.size === 0) return;
+    // ioredis supports MULTI/EXEC blocks inside a pipeline at runtime; its typings just do
+    // not declare `multi` on the pipeline.
+    const pipeline = this.redis.pipeline() as ChainableCommander & {
+      multi(): ChainableCommander;
+    };
+    for (const [docName, members] of this.local) {
+      pipeline.multi();
+      this.queueStamp(pipeline, docName, [...members.values()]);
+      // Inside a pipeline with an open MULTI this only queues the EXEC.
+      void pipeline.exec();
+    }
+    await pipeline.exec().catch(() => {
+      // A failed refresh is retried on the next tick; expiry only needs one to land.
+    });
   }
 }
 
