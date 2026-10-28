@@ -359,7 +359,6 @@ async function handleCreateComment(
     space: string;
     anchor: unknown;
     body: string;
-    authorName?: string | null;
   };
   const allowed = await guard(ctx, runtime, resolveUser, body.docName, 'canComment');
   if (isDenied(allowed)) return allowed.denied;
@@ -370,9 +369,10 @@ async function handleCreateComment(
     anchor: body.anchor,
     body: body.body,
     // The author is who the request authenticated as, never who it claims to
-    // be: a body-supplied userId would let anyone comment as anyone.
+    // be: a body-supplied userId — or name — would let anyone comment as
+    // anyone. `authorName` in the body is ignored for the same reason.
     userId: allowed.user.id,
-    authorName: body.authorName ?? allowed.user.name ?? null,
+    authorName: allowed.user.name ?? null,
   });
 }
 

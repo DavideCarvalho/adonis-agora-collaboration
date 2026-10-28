@@ -187,6 +187,9 @@ export class CollaborationManager {
       ...(this.presence ? { presence: this.presence } : {}),
       ...(this.config.path !== undefined ? { path: this.config.path } : {}),
       ...(this.config.debounce !== undefined ? { debounce: this.config.debounce } : {}),
+      ...(this.config.reauthorizeEveryMs !== undefined
+        ? { reauthorizeEveryMs: this.config.reauthorizeEveryMs }
+        : {}),
     };
     return engine === 'automerge' ? new AutomergeDriver(shared) : new YjsDriver(shared);
   }

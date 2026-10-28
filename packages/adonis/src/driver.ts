@@ -128,6 +128,8 @@ export interface SelfHostedDriverOptions {
   ) => Promise<CollaborationAdmission>;
   /** See {@link CollaborationConfig.isEphemeralRoom}. */
   isEphemeralRoom?: (docName: string) => boolean;
+  /** See {@link CollaborationConfig.reauthorizeEveryMs}. */
+  reauthorizeEveryMs?: number;
   /**
    * Key the handshake verifies tokens against — the same one the issuer
    * signs with, resolved through `auth/secret.ts`.
