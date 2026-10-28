@@ -39,10 +39,10 @@ type LoadDocumentHook = (payload: {
 
 /** The driver's own `onLoadDocument`, the hook Hocuspocus calls per document. */
 function loadHookOf(driver: YjsDriver): LoadDocumentHook {
-  const { hocuspocus } = driver as unknown as {
-    hocuspocus: { configuration: { onLoadDocument: LoadDocumentHook } };
+  const { hocuspocusConfig } = driver as unknown as {
+    hocuspocusConfig: { onLoadDocument: LoadDocumentHook };
   };
-  return hocuspocus.configuration.onLoadDocument;
+  return hocuspocusConfig.onLoadDocument;
 }
 
 function paragraph(text: string): Y.Doc {
@@ -200,17 +200,15 @@ describe('YjsDriver: seeding a document the storage has never stored', () => {
     });
     const hooks = (
       driver as unknown as {
-        hocuspocus: {
-          configuration: {
-            onLoadDocument: LoadDocumentHook;
-            beforeUnloadDocument: (payload: {
-              documentName: string;
-              document: Y.Doc;
-            }) => Promise<void>;
-          };
+        hocuspocusConfig: {
+          onLoadDocument: LoadDocumentHook;
+          beforeUnloadDocument: (payload: {
+            documentName: string;
+            document: Y.Doc;
+          }) => Promise<void>;
         };
       }
-    ).hocuspocus.configuration;
+    ).hocuspocusConfig;
 
     const seed = await hooks.onLoadDocument({ documentName: 'researches/1/writing' });
     // Hocuspocus applies the hook's result to the document it is loading; the

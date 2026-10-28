@@ -1,4 +1,3 @@
-import { TiptapTransformer } from '@hocuspocus/transformer';
 import * as Y from 'yjs';
 import { signCollabToken } from '../../auth/token.js';
 import type { CollaborationDriver, PartyKitDriverOptions } from '../../driver.js';
@@ -9,6 +8,7 @@ import type {
   ListPageOptions,
 } from '../../types.js';
 import { createVersionMetadata, seqVersions } from '../../versioning.js';
+import { loadTiptapTransformer } from '../lazy_deps.js';
 import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
 
 /**
@@ -199,6 +199,7 @@ export class PartyKitDriver implements CollaborationDriver {
       this.getVersionState(docName, aId),
       this.getVersionState(docName, bId),
     ]);
+    const TiptapTransformer = await loadTiptapTransformer();
 
     const textOf = (bytes: Uint8Array): string => {
       try {

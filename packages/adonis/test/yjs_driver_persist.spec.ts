@@ -28,12 +28,12 @@ const allow = async () => ({ canRead: true, canWrite: true, canComment: true }) 
 type LoadDocumentHook = (payload: { documentName: string }) => Promise<unknown>;
 
 function loadHookOf(driver: YjsDriver): LoadDocumentHook {
-  const { hocuspocus } = driver as unknown as {
-    hocuspocus: { configuration: { onLoadDocument?: LoadDocumentHook } };
+  const { hocuspocusConfig } = driver as unknown as {
+    hocuspocusConfig: { onLoadDocument?: LoadDocumentHook };
   };
   // O hook precisa existir — é o fix.
-  expect(typeof hocuspocus.configuration.onLoadDocument).toBe('function');
-  return hocuspocus.configuration.onLoadDocument!;
+  expect(typeof hocuspocusConfig.onLoadDocument).toBe('function');
+  return hocuspocusConfig.onLoadDocument!;
 }
 
 describe('YjsDriver onLoadDocument (persistência round-trip)', () => {

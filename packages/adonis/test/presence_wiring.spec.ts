@@ -67,24 +67,24 @@ async function buildManager(store?: PresenceStore) {
   // The driver is internal; the hooks it registers on Hocuspocus are what the
   // real socket path calls, so drive those rather than a stand-in.
   const driver = (manager as unknown as { drivers: Map<string, unknown> }).drivers.get('yjs') as {
-    hocuspocus: { configuration: Hooks };
+    hocuspocusConfig: Hooks;
   };
 
   // The real sequence: the token is verified once, and what that verification
   // returns is the context every later hook reads.
   const connect = async (docName: string, socketId: string, userId: string, name?: string) => {
-    const context = await driver.hocuspocus.configuration.onAuthenticate({
+    const context = await driver.hocuspocusConfig.onAuthenticate({
       documentName: docName,
       socketId,
       token: testToken(docName, userId, name ? { name } : {}),
       connectionConfig: { readOnly: false },
     });
-    return driver.hocuspocus.configuration.connected({ documentName: docName, socketId, context });
+    return driver.hocuspocusConfig.connected({ documentName: docName, socketId, context });
   };
 
   /** A socket that never authenticated — nothing may put it on the roster. */
   const connectUnverified = (docName: string, socketId: string, userId: string) =>
-    driver.hocuspocus.configuration.connected({
+    driver.hocuspocusConfig.connected({
       documentName: docName,
       socketId,
       context: {},
@@ -94,7 +94,7 @@ async function buildManager(store?: PresenceStore) {
     });
 
   const disconnect = (docName: string, socketId: string) =>
-    driver.hocuspocus.configuration.onDisconnect({ documentName: docName, socketId });
+    driver.hocuspocusConfig.onDisconnect({ documentName: docName, socketId });
 
   return { manager, connect, connectUnverified, disconnect };
 }

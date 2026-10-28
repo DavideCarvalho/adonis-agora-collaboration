@@ -54,7 +54,7 @@ interface Hooks {
 }
 
 function hooksOf(driver: YjsDriver): Hooks {
-  return (driver as unknown as { hocuspocus: { configuration: Hooks } }).hocuspocus.configuration;
+  return (driver as unknown as { hocuspocusConfig: Hooks }).hocuspocusConfig;
 }
 
 function authenticate(driver: YjsDriver, token: string, documentName = DOC): Promise<unknown> {

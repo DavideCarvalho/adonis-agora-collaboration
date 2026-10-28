@@ -37,7 +37,7 @@ interface Hooks {
 }
 
 function hooksOf(driver: YjsDriver): Hooks {
-  return (driver as unknown as { hocuspocus: { configuration: Hooks } }).hocuspocus.configuration;
+  return (driver as unknown as { hocuspocusConfig: Hooks }).hocuspocusConfig;
 }
 
 /** Collects everything reported while the callback runs. */
