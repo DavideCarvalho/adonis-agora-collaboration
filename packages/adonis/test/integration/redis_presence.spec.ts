@@ -124,4 +124,41 @@ describe('RedisPresenceStore', () => {
       u_1: JSON.stringify({ userId: 'u_1', name: 'Ana' }),
     });
   });
+
+  it('re-stamps every open document in one round trip per tick', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const redis = new Redis(url);
+    const store = new RedisPresenceStore(redis);
+    stores.push(store);
+    const docs = ['researches/1/writing', 'researches/2/writing', 'researches/3/writing'];
+    for (const [i, doc] of docs.entries()) await store.join(doc, { userId: `u_${i}` });
+
+    const pipeline = vi.spyOn(redis, 'pipeline');
+    const multi = vi.spyOn(redis, 'multi');
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    // 15 ticks, one pipeline each, no per-document transactions of their own.
+    expect(pipeline).toHaveBeenCalledTimes(15);
+    expect(multi).not.toHaveBeenCalled();
+    for (const [i, doc] of docs.entries()) {
+      expect((await store.list(doc)).map((member) => member.userId)).toEqual([`u_${i}`]);
+      expect(await admin.ttl(`collab:presence:${doc}`)).toBeGreaterThan(0);
+      expect(await admin.ttl(`collab:presence:${doc}:seen`)).toBeGreaterThan(0);
+    }
+  });
+
+  it('still re-stamps the other documents when one document fails', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const store = instance();
+    await store.join('researches/broken/writing', { userId: 'u_b' });
+    await store.join(DOC, { userId: 'u_1' });
+
+    // Break one document: its stamps key now holds the wrong type, so its ZADD fails.
+    await admin.del('collab:presence:researches/broken/writing:seen');
+    await admin.set('collab:presence:researches/broken/writing:seen', 'oops');
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(await ids(store)).toEqual(['u_1']);
+    expect(await admin.ttl(`${HASH}:seen`)).toBeGreaterThan(0);
+  });
 });
