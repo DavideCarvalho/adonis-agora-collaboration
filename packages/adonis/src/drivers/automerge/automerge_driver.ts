@@ -1,5 +1,3 @@
-import * as A from '@automerge/automerge';
-import { next as ANext } from '@automerge/automerge';
 import { WebSocketServer } from 'ws';
 import { verifySelfHostedToken } from '../../auth/token.js';
 import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
@@ -12,6 +10,7 @@ import type {
   ListPageOptions,
 } from '../../types.js';
 import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
+import { type AutomergeModule, loadAutomerge } from '../lazy_deps.js';
 import { lineDiff, resolveStorage } from '../shared.js';
 
 /**
@@ -91,6 +90,19 @@ export class AutomergeDriver implements CollaborationDriver {
    */
   private roomLoads = new Map<string, Promise<Room>>();
 
+  /**
+   * `@automerge/automerge`, loaded by the first call that opens a room or reads
+   * a version (see `lazy_deps.ts`). Every synchronous use runs on a room, and a
+   * room only exists after `openRoom` awaited the module, so it is set there.
+   */
+  private am!: AutomergeModule;
+
+  /** Loads Automerge (once per process) and makes it available as `this.am`. */
+  private async automerge(): Promise<AutomergeModule> {
+    this.am ??= await loadAutomerge();
+    return this.am;
+  }
+
   constructor(options: SelfHostedDriverOptions) {
     this.options = options;
     this.storage = resolveStorage(options.storage);
@@ -109,9 +121,10 @@ export class AutomergeDriver implements CollaborationDriver {
   }
 
   private async openRoom(docName: string): Promise<Room> {
+    await this.automerge();
     const stored = await this.storage.loadDocument(docName);
     const doc = stored
-      ? A.load<Record<string, unknown>>(stored.state)
+      ? this.am.load<Record<string, unknown>>(stored.state)
       : await this.seedDocument(docName);
 
     const room: Room = {
@@ -137,7 +150,7 @@ export class AutomergeDriver implements CollaborationDriver {
    */
   // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
   private async seedDocument(docName: string): Promise<any> {
-    const empty = () => A.from({ content: '' } as Record<string, unknown>);
+    const empty = () => this.am.from({ content: '' } as Record<string, unknown>);
     if (!this.options.seedDocument) return empty();
 
     let seed: Awaited<ReturnType<NonNullable<SelfHostedDriverOptions['seedDocument']>>>;
@@ -162,7 +175,7 @@ export class AutomergeDriver implements CollaborationDriver {
 
     let doc: unknown;
     try {
-      doc = A.load<Record<string, unknown>>(seed);
+      doc = this.am.load<Record<string, unknown>>(seed);
     } catch (error) {
       reportCollaborationError({ scope: 'storage', operation: 'loadDocument', docName, error });
       return empty();
@@ -195,10 +208,10 @@ export class AutomergeDriver implements CollaborationDriver {
     for (const client of room.clients) {
       if (client === sender || client.readyState !== 1) continue;
       if (changeClients.has(client)) {
-        changes ??= ANext.saveSince(room.text, since);
+        changes ??= this.am.next.saveSince(room.text, since);
         client.send(changes);
       } else {
-        whole ??= A.save(room.text);
+        whole ??= this.am.save(room.text);
         client.send(whole);
       }
     }
@@ -327,7 +340,7 @@ export class AutomergeDriver implements CollaborationDriver {
           // The acknowledgement goes before the state, so the client knows
           // the shape of its first send before it makes it.
           if (sendsChanges) ws.send(CHANGES_ACK);
-          ws.send(A.save(room.text));
+          ws.send(this.am.save(room.text));
 
           ws.on('message', (data) => {
             // A read-only connection still receives every update; its own are
@@ -392,9 +405,9 @@ export class AutomergeDriver implements CollaborationDriver {
     sender: import('ws').WebSocket,
   ): void {
     try {
-      const before = ANext.getHeads(room.text);
-      room.text = A.loadIncremental(room.text, data);
-      if (sameHeads(before, ANext.getHeads(room.text))) return;
+      const before = this.am.next.getHeads(room.text);
+      room.text = this.am.loadIncremental(room.text, data);
+      if (sameHeads(before, this.am.next.getHeads(room.text))) return;
 
       // A whole document from a whole-document client is forwarded as it came
       // to the other whole-document clients: it is already the payload they need.
@@ -430,7 +443,7 @@ export class AutomergeDriver implements CollaborationDriver {
     if (!pending) return this.savesInFlight.get(docName);
     clearTimeout(pending.timer);
     this.pendingSaves.delete(docName);
-    await this.save(docName, A.save(pending.room.text));
+    await this.save(docName, this.am.save(pending.room.text));
   }
 
   /** Saves `state`, tracked so the room is not dropped while it is written. */
@@ -454,7 +467,7 @@ export class AutomergeDriver implements CollaborationDriver {
   }
 
   async getDocumentState(docName: string): Promise<Uint8Array> {
-    return this.withRoom(docName, (room) => A.save(room.text));
+    return this.withRoom(docName, (room) => this.am.save(room.text));
   }
 
   async getDocumentText(docName: string): Promise<string> {
@@ -471,7 +484,7 @@ export class AutomergeDriver implements CollaborationDriver {
     label: string | null,
   ): Promise<CollabVersion> {
     return this.withRoom(docName, async (room) => {
-      const heads = ANext.getHeads(room.text);
+      const heads = this.am.next.getHeads(room.text);
       const existing = await this.storage.listVersions(docName);
 
       const version: CollabVersion = {
@@ -481,7 +494,7 @@ export class AutomergeDriver implements CollaborationDriver {
 
       // Snapshot = binary save of the doc up to those heads (Automerge compresses
       // well; storing the whole doc as the "snapshot" keeps restore O(1)).
-      await this.storage.saveVersion(docName, version, A.save(room.text));
+      await this.storage.saveVersion(docName, version, this.am.save(room.text));
       return version;
     });
   }
@@ -502,7 +515,8 @@ export class AutomergeDriver implements CollaborationDriver {
     restoredBy: string | null,
   ): Promise<void> {
     const bytes = await this.getVersionState(docName, versionId);
-    const snapshotDoc = A.load<Record<string, unknown>>(bytes);
+    await this.automerge();
+    const snapshotDoc = this.am.load<Record<string, unknown>>(bytes);
     await this.withRoom(docName, (room) =>
       this.restoreRoom(docName, room, versionId, snapshotDoc, restoredBy),
     );
@@ -526,18 +540,18 @@ export class AutomergeDriver implements CollaborationDriver {
           restoredFromLabel(target, versionId),
           seqVersions(existing),
         ),
-        id: ANext.getHeads(room.text).join(','),
+        id: this.am.next.getHeads(room.text).join(','),
       },
-      A.save(room.text),
+      this.am.save(room.text),
     );
 
-    const before = ANext.getHeads(room.text);
-    const merged = A.merge(room.text, snapshotDoc);
+    const before = this.am.next.getHeads(room.text);
+    const merged = this.am.merge(room.text, snapshotDoc);
     // Automerge merge converges to the most recent state; to "restore",
     // we overwrite the content field with the value from the version.
     const restoredContent = (snapshotDoc as unknown as { content?: { toString(): string } })
       .content;
-    const finalDoc = A.change(merged, (doc) => {
+    const finalDoc = this.am.change(merged, (doc) => {
       (doc as { content: string }).content = restoredContent?.toString() ?? '';
     });
 
@@ -547,7 +561,7 @@ export class AutomergeDriver implements CollaborationDriver {
     const pending = this.pendingSaves.get(docName);
     if (pending) clearTimeout(pending.timer);
     this.pendingSaves.delete(docName);
-    await this.save(docName, A.save(finalDoc));
+    await this.save(docName, this.am.save(finalDoc));
   }
 
   /** Binary state stored for a version (`A.save` of the doc at that point). */
@@ -562,9 +576,10 @@ export class AutomergeDriver implements CollaborationDriver {
       this.getVersionState(docName, aId),
       this.getVersionState(docName, bId),
     ]);
+    await this.automerge();
 
     const textOf = (bytes: Uint8Array) => {
-      const doc = A.load<{ content?: { toString(): string } }>(bytes);
+      const doc = this.am.load<{ content?: { toString(): string } }>(bytes);
       return doc.content?.toString() ?? '';
     };
 

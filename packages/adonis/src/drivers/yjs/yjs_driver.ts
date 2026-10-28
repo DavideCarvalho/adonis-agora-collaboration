@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import type { connectedPayload, onDisconnectPayload } from '@hocuspocus/server';
-import {
+import type {
+  Configuration,
+  connectedPayload,
   Hocuspocus,
-  type onAuthenticatePayload,
-  type onLoadDocumentPayload,
+  onAuthenticatePayload,
+  onDisconnectPayload,
+  onLoadDocumentPayload,
 } from '@hocuspocus/server';
-import { TiptapTransformer } from '@hocuspocus/transformer';
 import { type RawData, WebSocketServer } from 'ws';
 import * as Y from 'yjs';
 import {
@@ -30,6 +31,7 @@ import type {
   ListPageOptions,
 } from '../../types.js';
 import { createVersionMetadata, restoredFromLabel, seqVersions } from '../../versioning.js';
+import { loadHocuspocus, loadTiptapTransformer, type TiptapTransformerType } from '../lazy_deps.js';
 import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
 
 /**
@@ -61,7 +63,17 @@ function toUint8Array(data: RawData): Uint8Array {
 export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
   readonly engine = 'yjs';
 
-  private hocuspocus: Hocuspocus;
+  /**
+   * The sync engine, built on first `attach` (see `lazy_deps.ts`): a driver
+   * that only serves REST reads, versions or compaction — every one outside
+   * the web process — never loads `@hocuspocus/server`. Until it exists there
+   * are no live documents, exactly as with a freshly built one.
+   */
+  private hocuspocus?: Hocuspocus;
+  /** In-flight construction of {@link hocuspocus}, so concurrent callers share one. */
+  private hocuspocusBuild: Promise<Hocuspocus> | undefined;
+  /** What {@link hocuspocus} is built with: every hook the driver installs. */
+  private readonly hocuspocusConfig: Partial<Configuration>;
   private wss?: WebSocketServer;
   private readonly options: SelfHostedDriverOptions;
   private readonly storage: CollaborationStorage;
@@ -191,7 +203,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       }
     };
 
-    this.hocuspocus = new Hocuspocus({
+    this.hocuspocusConfig = {
       /**
        * The one place identity is established on this transport.
        *
@@ -406,7 +418,23 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       },
 
       debounce: options.debounce ?? 2000,
-    });
+    };
+  }
+
+  /** The sync engine, loading `@hocuspocus/server` and building it on first call. */
+  private ensureHocuspocus(): Promise<Hocuspocus> {
+    if (this.hocuspocus) return Promise.resolve(this.hocuspocus);
+    this.hocuspocusBuild ??= loadHocuspocus().then(
+      (HocuspocusClass) => {
+        this.hocuspocus ??= new HocuspocusClass(this.hocuspocusConfig);
+        return this.hocuspocus;
+      },
+      (error: unknown) => {
+        this.hocuspocusBuild = undefined;
+        throw error;
+      },
+    );
+    return this.hocuspocusBuild;
   }
 
   /**
@@ -421,7 +449,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
    */
   liveDocument(name: string): Y.Doc | undefined {
     // The Hocuspocus document extends Y.Doc directly.
-    return this.hocuspocus.documents.get(name);
+    return this.hocuspocus?.documents.get(name);
   }
 
   private hydrate(state: Uint8Array): Y.Doc {
@@ -441,6 +469,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
   }
 
   async attach(server: import('node:http').Server): Promise<void> {
+    const hocuspocus = await this.ensureHocuspocus();
     const path = this.options.path ?? '/collaboration';
     const wss = new WebSocketServer({ noServer: true });
     this.wss = wss;
@@ -463,7 +492,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         // dropping the return value looked like a working server: the socket
         // opened, the client sent Auth + SyncStep1, and nothing ever answered —
         // no document loaded, nothing stored, every version a 2-byte snapshot.
-        const connection = this.hocuspocus.handleConnection(ws, fetchRequest);
+        const connection = hocuspocus.handleConnection(ws, fetchRequest);
 
         ws.on('message', (data) => {
           connection.handleMessage(toUint8Array(data));
@@ -499,6 +528,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
 
   async getDocumentText(docName: string): Promise<string> {
     const doc = await this.ensureDoc(docName);
+    const TiptapTransformer = await loadTiptapTransformer();
 
     try {
       const json = TiptapTransformer.fromYdoc(doc) as unknown as Record<string, unknown>;
@@ -626,7 +656,11 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       .insert(0, old.getXmlFragment('default').toArray().map(cloneNode));
     const compacted = Y.encodeStateAsUpdate(fresh);
     const reread = this.hydrate(compacted);
-    if (JSON.stringify(safeTiptapFromYdoc(reread)) !== JSON.stringify(safeTiptapFromYdoc(old))) {
+    const transformer = await loadTiptapTransformer();
+    if (
+      JSON.stringify(safeTiptapFromYdoc(transformer, reread)) !==
+      JSON.stringify(safeTiptapFromYdoc(transformer, old))
+    ) {
       throw new Error(
         `'${docName}' did not read back identical after compaction — nothing written`,
       );
@@ -651,8 +685,9 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       this.getVersionState(docName, bId),
     ]);
 
-    const textA = tiptapJsonToText(safeTiptapFromYdoc(this.hydrate(aState)));
-    const textB = tiptapJsonToText(safeTiptapFromYdoc(this.hydrate(bState)));
+    const transformer = await loadTiptapTransformer();
+    const textA = tiptapJsonToText(safeTiptapFromYdoc(transformer, this.hydrate(aState)));
+    const textB = tiptapJsonToText(safeTiptapFromYdoc(transformer, this.hydrate(bState)));
 
     return lineDiff(textA, textB);
   }
@@ -667,12 +702,14 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
   async close(): Promise<void> {
     // Persists pending docs and closes connections (the Hocuspocus class has
     // no destroy — the embedded Server does).
-    this.hocuspocus.flushPendingStores();
+    // An `attach` still loading the engine finishes first, so its sockets are closed too.
+    const hocuspocus = this.hocuspocus ?? (await this.hocuspocusBuild?.catch(() => undefined));
+    hocuspocus?.flushPendingStores();
     const pending = [...this.admissionsBySocket.values()];
     this.admissionsBySocket.clear();
     for (const entry of pending) this.admissionsByRequest.delete(entry.request);
     await Promise.allSettled(pending.map(({ admission }) => admission.closed()));
-    this.hocuspocus.closeConnections();
+    hocuspocus?.closeConnections();
     if (!this.wss) return;
     // `closeConnections` only reaches sockets Hocuspocus finished admitting; one
     // still in its handshake would keep `wss.close` from ever calling back.
@@ -713,7 +750,10 @@ function seedUpdate(seed: CollabDocumentSeed): Uint8Array | undefined {
   return update.byteLength > 0 ? update : undefined;
 }
 
-function safeTiptapFromYdoc(doc: Y.Doc): Record<string, unknown> {
+function safeTiptapFromYdoc(
+  TiptapTransformer: TiptapTransformerType,
+  doc: Y.Doc,
+): Record<string, unknown> {
   try {
     return TiptapTransformer.fromYdoc(doc) as unknown as Record<string, unknown>;
   } catch {

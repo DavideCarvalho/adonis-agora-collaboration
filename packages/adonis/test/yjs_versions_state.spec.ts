@@ -130,16 +130,14 @@ describe('YjsDriver.compactDocument', () => {
 describe('YjsDriver — unchanged documents are not written back', () => {
   type Hook = (payload: { documentName: string; document: Y.Doc }) => Promise<unknown>;
   function hooksOf(driver: YjsDriver) {
-    const { hocuspocus } = driver as unknown as {
-      hocuspocus: {
-        configuration: {
-          afterLoadDocument: Hook;
-          onStoreDocument: Hook;
-          beforeUnloadDocument: Hook;
-        };
+    const { hocuspocusConfig } = driver as unknown as {
+      hocuspocusConfig: {
+        afterLoadDocument: Hook;
+        onStoreDocument: Hook;
+        beforeUnloadDocument: Hook;
       };
     };
-    return hocuspocus.configuration;
+    return hocuspocusConfig;
   }
 
   it('skips the save when the document closes as it was loaded, saves after a change', async () => {
