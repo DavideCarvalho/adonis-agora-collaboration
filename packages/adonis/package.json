@@ -142,7 +142,7 @@
     "@swc/core": "1.16.20",
     "@testcontainers/postgresql": "12.2.1",
     "@types/luxon": "3.7.6",
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "@types/pg": "8.23.1",
     "@types/ws": "8.18.2",
     "luxon": "3.7.2",
