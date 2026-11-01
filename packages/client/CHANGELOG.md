@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration-client
 
+## 0.10.4
+
+### Patch Changes
+
+- fix(deps): update hocuspocus monorepo to v4.8.0 ([#144](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/144))
+
 ## 0.10.3
 
 ### Patch Changes
