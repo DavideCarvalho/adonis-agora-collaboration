@@ -150,7 +150,7 @@
     "testcontainers": "12.2.1",
     "typescript": "7.0.2",
     "unplugin-swc": "2.0.0",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
   },
   "engines": {
     "node": ">=24"
