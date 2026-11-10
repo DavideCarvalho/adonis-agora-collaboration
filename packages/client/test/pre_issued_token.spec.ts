@@ -23,12 +23,6 @@ import { fakeTransportFactory } from './helpers/fake_transport.js';
 
 const WS = { wsUrl: '/collaboration', engine: 'yjs' } as const;
 
-function jwt(payload: object): string {
-  const encode = (value: object) =>
-    btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  return `${encode({ alg: 'HS256' })}.${encode(payload)}.signature`;
-}
-
 function makeConfig(overrides?: Partial<CollaborationClientConfig>): CollaborationClientConfig {
   return {
     baseUrl: 'https://api.app',
@@ -44,6 +38,7 @@ describe('usablePreIssuedToken', () => {
 
   it('accepts a token with life left in it', () => {
     const info = { token: 't', ...WS, expiresAt: now + 60_000 };
+    expect(preIssuedTokenExpiry(info)).toBe(now + 60_000);
     expect(usablePreIssuedToken(info, now)).toBe(info);
   });
 
@@ -66,15 +61,6 @@ describe('usablePreIssuedToken', () => {
         now,
       ),
     ).toBeUndefined();
-  });
-
-  it('reads the exp of an edge JWT when the server reported no expiresAt', () => {
-    const dead = { token: jwt({ exp: Math.floor(now / 1000) - 10 }), ...WS };
-    const alive = { token: jwt({ exp: Math.floor(now / 1000) + 600 }), ...WS };
-
-    expect(preIssuedTokenExpiry(dead)).toBe((Math.floor(now / 1000) - 10) * 1000);
-    expect(usablePreIssuedToken(dead, now)).toBeUndefined();
-    expect(usablePreIssuedToken(alive, now)).toBe(alive);
   });
 
   it('rejects anything a transport could not be built from', () => {

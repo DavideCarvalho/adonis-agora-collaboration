@@ -142,3 +142,75 @@ After:
 ```ts
 import { COLLAB_TOKEN_TTL_SECONDS } from '@adonis-agora/collaboration'
 ```
+
+## Automerge: upgrade the server and the client together
+
+The Automerge engine speaks one protocol: the client opens the socket with `doc` and `token`, gets
+the whole document once, and from then on both sides exchange change chunks. The `sync=changes`
+query parameter and the `CHANGES_ACK` export of `@adonis-agora/collaboration/drivers/automerge` are
+gone. Deploy `@adonis-agora/collaboration` 1.0 and `@adonis-agora/collaboration-client` 1.0 in the
+same release.
+
+Before, if you opened the socket yourself:
+
+```ts
+import { CHANGES_ACK } from '@adonis-agora/collaboration/drivers/automerge'
+
+const ws = new WebSocket(`${wsUrl}?doc=${docName}&token=${token}&sync=changes`)
+ws.onmessage = (event) => {
+  if (event.data === CHANGES_ACK) return
+  // ...
+}
+```
+
+After:
+
+```ts
+const ws = new WebSocket(`${wsUrl}?doc=${docName}&token=${token}`)
+ws.onmessage = (event) => {
+  // the first binary frame is the whole document, every later one a change chunk
+}
+```
+
+With `useAutomergeDoc` there is nothing to change.
+
+## A pre-issued token needs its `expiresAt`
+
+A token handed to the client ahead of time (`initialTokens` / `initialToken`) is checked against
+its `expiresAt` only. Pass the whole result of `issueCollaborationToken` through.
+
+Before:
+
+```ts title="app/researcher/controllers/writing_page_controller.ts"
+const { token, wsUrl, engine } = await issueCollaborationToken({ ctx, docName })
+return inertia.render('writing', { collabToken: { token, wsUrl, engine } })
+```
+
+After:
+
+```ts title="app/researcher/controllers/writing_page_controller.ts"
+const { token, wsUrl, engine, expiresAt } = await issueCollaborationToken({ ctx, docName })
+return inertia.render('writing', { collabToken: { token, wsUrl, engine, expiresAt } })
+```
+
+A token without `expiresAt` is used as is, and the server refuses it if it has expired.
+
+## `appKey` must be a `Secret`
+
+Without a `tokenSecret`, the signing key comes from `appKey`, which must be exported as a
+`Secret`. A plain string is no longer read, and token issuing fails with
+`CollabTokenSecretMissingError`.
+
+Before:
+
+```ts title="config/app.ts"
+export const appKey = env.get('APP_KEY')
+```
+
+After:
+
+```ts title="config/app.ts"
+import { Secret } from '@adonisjs/core/helpers'
+
+export const appKey = new Secret(env.get('APP_KEY'))
+```

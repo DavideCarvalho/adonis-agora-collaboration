@@ -52,15 +52,16 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
-  # The unit suite runs on Node 24, the floor of `engines.node: ">=24"`. Add a line to the matrix
-  # to test another one; lint and typecheck above stay on the single pinned version.
+  # The unit suite runs on Node 24 (the floor of `engines.node: ">=24"`) and 26. Lint and
+  # typecheck above stay on the single pinned version — they do not depend on the runtime, so the
+  # matrix only multiplies the tests.
   test:
     name: test (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node: [24]
+        node: [24, 26]
     steps:
       - uses: actions/checkout@v7.0.1
 

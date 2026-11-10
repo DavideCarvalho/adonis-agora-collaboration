@@ -23,30 +23,18 @@ import { lineDiff, resolveStorage } from '../shared.js';
  * back to the version's heads via a compensating change (non-destructive).
  *
  * Transport: one in-memory doc per room and a per-room broadcast. Every
- * client gets the whole `A.save(doc)` on connect. After that, a socket opened
- * with `?sync=changes` is answered with the {@link CHANGES_ACK} text frame and
- * from then on exchanges change chunks (`A.saveSince`) both ways; any other
- * socket sends and receives whole saved documents. The server applies both
- * shapes with `A.loadIncremental`, so one room can hold both kinds of client.
+ * client gets the whole `A.save(doc)` on connect. After that, both sides
+ * exchange change chunks (`A.saveSince`), applied with `A.loadIncremental`.
  *
  * A room lives while it has clients: when the last one leaves, its pending
  * save is written and the room is dropped from memory.
  */
-
-/** Query parameter (and value) a client sets to ask for change chunks. */
-const CHANGES_PARAM = 'sync';
-const CHANGES_PARAM_VALUE = 'changes';
-/** Text frame confirming that this socket exchanges change chunks. */
-export const CHANGES_ACK = 'automerge-sync:changes';
 
 /** Longest a burst of edits can keep postponing its save. */
 const MAX_PERSIST_WAIT_MS = 10_000;
 
 /** Connections whose permission denied canWrite — their updates are dropped. */
 const readOnlyClients = new WeakSet<object>();
-
-/** Sockets that exchange change chunks instead of whole documents. */
-const changeClients = new WeakSet<object>();
 
 interface Room {
   // biome-ignore lint/suspicious/noExplicitAny: automerge's typing is unstable between minors
@@ -192,28 +180,15 @@ export class AutomergeDriver implements CollaborationDriver {
   }
 
   /**
-   * Sends everything the room gained since `since` to every client but the
-   * sender: the change chunk to sockets that speak chunks, a whole document
-   * (`wholeDoc`, else `A.save` of the room) to the rest. Each shape is
-   * encoded at most once per call.
+   * Sends everything the room gained since `since`, as one change chunk
+   * encoded at most once, to every client but the sender.
    */
-  private broadcast(
-    room: Room,
-    since: string[],
-    sender?: import('ws').WebSocket,
-    wholeDoc?: Uint8Array,
-  ): void {
+  private broadcast(room: Room, since: string[], sender?: import('ws').WebSocket): void {
     let changes: Uint8Array | undefined;
-    let whole = wholeDoc;
     for (const client of room.clients) {
       if (client === sender || client.readyState !== 1) continue;
-      if (changeClients.has(client)) {
-        changes ??= this.am.next.saveSince(room.text, since);
-        client.send(changes);
-      } else {
-        whole ??= this.am.save(room.text);
-        client.send(whole);
-      }
+      changes ??= this.am.next.saveSince(room.text, since);
+      client.send(changes);
     }
   }
 
@@ -315,8 +290,6 @@ export class AutomergeDriver implements CollaborationDriver {
           const joinedRoom = room;
           room.clients.add(ws);
           if (!permission.canWrite) readOnlyClients.add(ws);
-          const sendsChanges = url.searchParams.get(CHANGES_PARAM) === CHANGES_PARAM_VALUE;
-          if (sendsChanges) changeClients.add(ws);
 
           // Registered before the join, so a socket that closes while the join
           // is in flight still leaves the room.
@@ -337,9 +310,6 @@ export class AutomergeDriver implements CollaborationDriver {
           joined = true;
           room.users.set(ctx.userId, (room.users.get(ctx.userId) ?? 0) + 1);
 
-          // The acknowledgement goes before the state, so the client knows
-          // the shape of its first send before it makes it.
-          if (sendsChanges) ws.send(CHANGES_ACK);
           ws.send(this.am.save(room.text));
 
           ws.on('message', (data) => {
@@ -375,7 +345,6 @@ export class AutomergeDriver implements CollaborationDriver {
   ): void {
     if (!room.clients.delete(ws)) return;
     readOnlyClients.delete(ws);
-    changeClients.delete(ws);
     if (userId !== undefined) {
       const count = (room.users.get(userId) ?? 1) - 1;
       if (count > 0) room.users.set(userId, count);
@@ -394,8 +363,8 @@ export class AutomergeDriver implements CollaborationDriver {
   }
 
   /**
-   * Applies a client's whole document or change chunk and forwards only what
-   * was new to the room. A payload that adds nothing — a duplicate, or bytes
+   * Applies a client's change chunk and forwards only what was new to the
+   * room. A payload that adds nothing — a duplicate, or bytes
    * that are not Automerge at all — is neither forwarded nor saved.
    */
   private handleClientMessage(
@@ -409,9 +378,7 @@ export class AutomergeDriver implements CollaborationDriver {
       room.text = this.am.loadIncremental(room.text, data);
       if (sameHeads(before, this.am.next.getHeads(room.text))) return;
 
-      // A whole document from a whole-document client is forwarded as it came
-      // to the other whole-document clients: it is already the payload they need.
-      this.broadcast(room, before, sender, changeClients.has(sender) ? undefined : data);
+      this.broadcast(room, before, sender);
       this.schedulePersist(docName, room);
     } catch {
       // Invalid payload: ignore (a badly-behaved client doesn't take down the room).

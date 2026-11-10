@@ -24,34 +24,13 @@ import type { CollabTokenInfo } from './types.js';
 export const PRE_ISSUED_TOKEN_MIN_TTL_MS = 5_000;
 
 /**
- * Expiry of a token, in epoch ms, or `undefined` when it has none.
- *
- * Reads the server-reported `expiresAt` first. The JWT fallback is for a
- * server older than that field: every collaboration token — edge and
- * self-hosted alike — is a signed JWT carrying its own `exp`, and ignoring it
- * would mean trusting a token this function can see is dead.
- *
- * `undefined` stays a legitimate answer for a token from some other issuer
- * that reports no expiry and is not a readable JWT. Nothing this package
- * issues lands there: both the edge and the self-hosted engines return
- * `expiresAt` alongside a signed JWT that carries its own `exp`.
+ * Expiry of a token, in epoch ms, from the server-reported `expiresAt`, or
+ * `undefined` when there is none. Every token this package issues reports it;
+ * a token from some other issuer without one is left for the server to judge.
  */
 export function preIssuedTokenExpiry(info: CollabTokenInfo): number | undefined {
   if (typeof info.expiresAt === 'number' && Number.isFinite(info.expiresAt)) {
     return info.expiresAt;
-  }
-
-  const parts = info.token.split('.');
-  if (parts.length !== 3) return undefined;
-  try {
-    const payload = JSON.parse(atob(parts[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as {
-      exp?: unknown;
-    };
-    if (typeof payload.exp === 'number' && Number.isFinite(payload.exp)) return payload.exp * 1000;
-  } catch {
-    // Not a JWT we can read: no expiry known, which is the same answer as a
-    // format that has none. Never a throw — a malformed token is handled by
-    // falling back to HTTP, not by breaking the session that could recover.
   }
   return undefined;
 }
