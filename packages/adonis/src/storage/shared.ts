@@ -54,7 +54,7 @@ export function clampSize(size: number | undefined): number {
 export function clampPage(page: number | undefined): number {
   if (page === undefined || !Number.isFinite(page)) return 1;
   const floored = Math.floor(page);
-  return floored < 1 ? 1 : floored;
+  return Math.max(floored, 1);
 }
 
 /**
