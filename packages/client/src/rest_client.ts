@@ -87,14 +87,14 @@ export function listComments(config: CollaborationClientConfig, docName: string,
 }
 
 /**
- * `userId` is not part of the input: the route stamps the authenticated caller
- * on the comment and ignores a body-supplied author.
+ * `userId` and `authorName` are not part of the input: the route stamps the
+ * authenticated caller on the comment and ignores a body-supplied author.
  */
 export function createComment(
   config: CollaborationClientConfig,
   input: Omit<
     import('./types.js').CollabComment,
-    'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'userId'
+    'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'userId' | 'authorName'
   >,
 ) {
   return collabFetch<import('./types.js').CollabComment>(config, '/collaboration/comments', {

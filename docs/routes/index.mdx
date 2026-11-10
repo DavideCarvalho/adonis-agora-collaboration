@@ -72,13 +72,13 @@ Content-Type: application/json
   "docName": "researches/42/writing",
   "space": "text",
   "anchor": { "kind": "text-range", "start": 120, "end": 160, "selectedText": "the sentence" },
-  "body": "rephrase this",
-  "authorName": "Jane"
+  "body": "rephrase this"
 }
 ```
 
-Returns the created comment, with its generated `id` and `createdAt`. There is no `userId` field:
-the author is the authenticated caller, and a body that supplies one is ignored.
+Returns the created comment, with its generated `id` and `createdAt`. There is no `userId` or
+`authorName` field: the author is the authenticated caller, and a body that supplies either is
+ignored.
 
 ```http
 PATCH  /collaboration/comments/:id?doc=researches/42/writing   { "resolved": true }

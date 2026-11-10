@@ -278,11 +278,9 @@ issueToken(config, user, docName, authorize?): Promise<{ token; wsUrl; engine; e
 buildWsUrl(config, docName): string
 
 // One signed format for every engine; the key is what differs.
-signCollabToken(payload, secret, expiresInSeconds?): string
+signCollabToken(payload, secret, expiresInSeconds?): string   // edge engine: sign with partykit.jwtSecret
 verifyCollabToken(token, secret, expectedDocName): { userId; docName; user?; exp } | null
 verifySelfHostedToken(token, docName, secret?): Promise<CollabConnectionContext | null>
-signPartyKitToken   // = signCollabToken, signed with partykit.jwtSecret
-verifyPartyKitToken // = verifyCollabToken
 
 // The signing key: explicit → config/collaboration.ts → appKey → throw.
 resolveTokenSecret(secret?): Promise<string>
@@ -363,7 +361,7 @@ rule through the manager — the same one the handshake uses — and deny when n
 | --- | --- | --- |
 | `GET` | `/token` | `?doc=` |
 | `GET` | `/comments` | `?doc=&space=&page=&size=` |
-| `POST` | `/comments` | `{ docName, space, anchor, body, authorName? }` — author is the caller |
+| `POST` | `/comments` | `{ docName, space, anchor, body }` — author (id and name) is the caller |
 | `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) — author or `canWrite` |
 | `DELETE` | `/comments/:id` | `?doc=` — author or `canWrite` |
 | `GET` | `/versions` | `?doc=&page=&size=` |

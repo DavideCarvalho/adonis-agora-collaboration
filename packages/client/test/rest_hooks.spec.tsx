@@ -91,8 +91,6 @@ describe('useComments', () => {
         space: 'text',
         anchor: { kind: 'text-range', start: 0, end: 4, selectedText: 'ola' },
         body: 'nova',
-        userId: 'u2',
-        authorName: null,
       });
     });
 

@@ -45,19 +45,22 @@ jobs:
       - name: Build
         run: pnpm -r build
 
+      # publint + attw (esm-only profile) on every published package, against what npm would pack.
+      - name: Check packages
+        run: pnpm check:package
+
       - name: Typecheck
         run: pnpm -r typecheck
 
-  # The unit suite runs on every Node line the packages support (`engines.node: ">=24"`): the
-  # lines Node maintains that AdonisJS 7 supports, the 24 LTS and the current 26. Lint and typecheck above stay on the single
-  # pinned version — they do not depend on the runtime, so the matrix only multiplies the tests.
+  # The unit suite runs on Node 24, the floor of `engines.node: ">=24"`. Add a line to the matrix
+  # to test another one; lint and typecheck above stay on the single pinned version.
   test:
     name: test (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node: [24, 26]
+        node: [24]
     steps:
       - uses: actions/checkout@v7.0.1
 

@@ -1,7 +1,6 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { verifyCollabToken } from '../src/auth/token.js';
-import { verifyPartyKitToken } from '../src/drivers/partykit/partykit_driver.js';
 import type { CollabHttpContext, CollabManagerLike, CollabRouteUser } from '../src/http/types.js';
 import { CollabUnauthorizedError } from '../src/http/types.js';
 import { collaborationRoutes } from '../src/routes.js';
@@ -272,7 +271,7 @@ describe('token endpoint', () => {
     };
     expect(payload.engine).toBe('partykit');
     expect(payload.wsUrl).toBe('wss://my-app.partykit.dev/parties/main/docs%2F2');
-    expect(verifyPartyKitToken(payload.token, SECRET, 'docs/2')?.docName).toBe('docs/2');
+    expect(verifyCollabToken(payload.token, SECRET, 'docs/2')?.docName).toBe('docs/2');
   });
 
   it('rejects missing doc with 400', async () => {

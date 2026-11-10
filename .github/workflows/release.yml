@@ -10,6 +10,10 @@ name: Release
 #                          them, in the same run
 #   run manually        -> throwaway beta snapshot, changesets and git untouched
 #
+# In pre mode (`.changeset/pre.json`, entered with `changeset pre enter rc`) the push path is the
+# same, but versions come out as `x.y.z-rc.N` and publish under the `rc` dist-tag; the manual
+# snapshot is refused until `changeset pre exit`.
+#
 # No "version packages" PR to merge: merging a PR that carries a changeset IS the release.
 on:
   push:
@@ -74,6 +78,8 @@ jobs:
         run: pnpm lint
       - name: Build
         run: pnpm -r build
+      - name: Check packages
+        run: pnpm check:package
       - name: Typecheck
         run: pnpm -r typecheck
       - name: Test
@@ -251,6 +257,16 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # Changesets refuses `version --snapshot` in pre mode. While `.changeset/pre.json` exists, every
+      # push to main already publishes a prerelease (`1.0.0-rc.N` under the `rc` dist-tag), so say that
+      # instead of failing deep inside the CLI.
+      - name: Refuse snapshots in pre mode
+        run: |
+          if [ -f .changeset/pre.json ] && grep -q '"mode": "pre"' .changeset/pre.json; then
+            echo "::error::Pre mode is on: push to main publishes the prerelease. Run 'changeset pre exit' to use snapshots again."
+            exit 1
+          fi
 
       # Stamp every pending-changeset package (and any out-of-range dependent) to
       # `0.0.0-beta-<datetime>` in the runner only, never committed.

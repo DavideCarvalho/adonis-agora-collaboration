@@ -43,8 +43,6 @@ describe('rest_client', () => {
       space: 'text',
       anchor: { kind: 'text-range', start: 0, end: 1, selectedText: 'a' },
       body: 'nota',
-      userId: 'u1',
-      authorName: null,
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
