@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -47,6 +47,9 @@
         "rules": {
           "suspicious": {
             "noExplicitAny": "off"
+          },
+          "correctness": {
+            "noComponentHookFactories": "off"
           }
         }
       }
@@ -63,6 +66,12 @@
     },
     {
       "includes": ["**/package.json"],
+      "formatter": {
+        "enabled": false
+      }
+    },
+    {
+      "includes": ["**/*.md", "pnpm-workspace.yaml"],
       "formatter": {
         "enabled": false
       }
