@@ -3,9 +3,9 @@
  * NOT a test file (vitest only collects `*.spec.ts[x]`), and excluded from the
  * package typecheck along with the rest of `test/`.
  *
- * Every `@ts-expect-error` below is the assertion: `userId` is stamped by the
- * route from the authenticated caller and discarded from the body, so no client
- * signature may ask for one. If a signature takes it back, the suppression
+ * Every `@ts-expect-error` below is the assertion: `userId` and `authorName`
+ * are stamped by the route from the authenticated caller and discarded from the
+ * body, so no client signature may ask for them. If a signature takes it back, the suppression
  * becomes unused and tsc reports error 2578.
  */
 import type { UseCommentsResult } from '../src/hooks/use_comments.js';
@@ -34,4 +34,16 @@ void createComment(config, {
   body: 'hi',
   // @ts-expect-error createComment no longer takes a userId.
   userId: 'u1',
+});
+
+// @ts-expect-error useComments().create does not take an authorName.
+void create({ space: 'text', anchor, body: 'hi', authorName: 'Jane' });
+
+void createComment(config, {
+  documentName: 'docs/1',
+  space: 'text',
+  anchor,
+  body: 'hi',
+  // @ts-expect-error createComment does not take an authorName.
+  authorName: 'Jane',
 });

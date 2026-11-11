@@ -5,9 +5,9 @@ import {
   restoreVersion as apiRestoreVersion,
   listVersions,
 } from '../rest_client.js';
-import type { CollabVersion } from '../types.js';
+import type { CollabListOptions, CollabVersion } from '../types.js';
 
-export interface UseVersionsOptions {
+export interface UseVersionsOptions extends CollabListOptions {
   docName: string;
 }
 
@@ -23,12 +23,15 @@ export interface UseVersionsResult {
 /**
  * Version control de um documento (REST — snapshots ficam no Adonis).
  *
+ * Lista uma página por vez (`size` padrão 50); `order: 'desc'` traz as mais
+ * novas primeiro.
+ *
  * ```tsx
- * const { versions, create, restore } = useVersions('researches/42/writing')
+ * const { versions, create, restore } = useVersions({ docName, order: 'desc' })
  * ```
  */
 export function useVersions(options: UseVersionsOptions): UseVersionsResult {
-  const { docName } = options;
+  const { docName, page, size, order } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
   // Versões são REST puro — sem sessão/Y.Doc criados no corpo do render.
@@ -48,7 +51,7 @@ export function useVersions(options: UseVersionsOptions): UseVersionsResult {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listVersions(config, docName);
+      const data = await listVersions(config, docName, { page, size, order });
       if (mountedRef.current) {
         setVersions(data);
         setError(null);
@@ -60,7 +63,7 @@ export function useVersions(options: UseVersionsOptions): UseVersionsResult {
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [config, docName]);
+  }, [config, docName, page, size, order]);
 
   useEffect(() => {
     void refresh();

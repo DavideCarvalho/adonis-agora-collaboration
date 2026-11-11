@@ -3,7 +3,6 @@ import {
   COLLAB_TOKEN_TTL_SECONDS,
   CollabForbiddenError,
   verifyCollabToken,
-  verifyPartyKitToken,
 } from '../src/auth/token.js';
 import type { CollabHttpContext, CollabManagerLike } from '../src/http/types.js';
 import { CollabUnauthorizedError } from '../src/http/types.js';
@@ -125,7 +124,7 @@ describe('issueCollaborationToken', () => {
     expect(manager.calls).toContain(`engineFor:${DOC}`);
     expect(issued.engine).toBe('partykit');
     expect(issued.wsUrl).toBe(`wss://party.example.com/parties/main/${encodeURIComponent(DOC)}`);
-    expect(verifyPartyKitToken(issued.token, SECRET, DOC)).toMatchObject({
+    expect(verifyCollabToken(issued.token, SECRET, DOC)).toMatchObject({
       userId: 'u_1',
       docName: DOC,
     });

@@ -25,7 +25,7 @@ const versions = [
   { id: 'v1', createdAt: new Date().toISOString(), createdBy: null, label: null, seq: 1 },
 ];
 
-function makeWrapper() {
+function makeWrapper(extra: { prefix?: string } = {}) {
   const { factory } = fakeTransportFactory();
   const fetchMock = vi.fn(async (input: string | URL | Request) => {
     const url = input.toString();
@@ -52,6 +52,7 @@ function makeWrapper() {
       CollaborationProvider,
       {
         baseUrl: 'https://api.app',
+        ...extra,
         createTransport: factory,
         fetchImpl: fetchMock as typeof fetch,
       },
@@ -91,8 +92,6 @@ describe('useComments', () => {
         space: 'text',
         anchor: { kind: 'text-range', start: 0, end: 4, selectedText: 'ola' },
         body: 'nova',
-        userId: 'u2',
-        authorName: null,
       });
     });
 
@@ -143,5 +142,56 @@ describe('useVersions', () => {
     });
 
     await waitFor(() => expect(result.current.versions.length).toBeGreaterThanOrEqual(1));
+  });
+});
+
+describe('list paging through the hooks', () => {
+  beforeEach(() => vi.unstubAllGlobals());
+  afterEach(() => vi.unstubAllGlobals());
+
+  const listUrls = (fetchMock: ReturnType<typeof vi.fn>, path: string) =>
+    fetchMock.mock.calls
+      .map((call) => new URL(String(call[0])))
+      .filter((url) => url.pathname.endsWith(path));
+
+  it('useVersions asks for the newest page and refetches when the page changes', async () => {
+    const { wrapper, fetchMock } = makeWrapper();
+    const { result, rerender } = renderHook(
+      ({ page }: { page: number }) =>
+        useVersions({ docName: 'docs/9', order: 'desc', size: 20, page }),
+      { wrapper, initialProps: { page: 1 } },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let urls = listUrls(fetchMock, '/versions');
+    expect(Object.fromEntries(urls.at(-1)!.searchParams)).toEqual({
+      doc: 'docs/9',
+      page: '1',
+      size: '20',
+      order: 'desc',
+    });
+
+    rerender({ page: 2 });
+    await waitFor(() => expect(listUrls(fetchMock, '/versions')).toHaveLength(2));
+    urls = listUrls(fetchMock, '/versions');
+    expect(urls.at(-1)!.searchParams.get('page')).toBe('2');
+  });
+
+  it('useComments passes order and size along with the space', async () => {
+    const { wrapper, fetchMock } = makeWrapper({ prefix: '/api/collab' });
+    const { result } = renderHook(
+      () => useComments({ docName: 'docs/9', space: 'text', order: 'desc', size: 10 }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const url = listUrls(fetchMock, '/comments').at(-1)!;
+    expect(url.pathname).toBe('/api/collab/comments');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      doc: 'docs/9',
+      space: 'text',
+      size: '10',
+      order: 'desc',
+    });
   });
 });

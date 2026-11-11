@@ -60,14 +60,6 @@ export type AuthorizeFn = (
  */
 export const COLLAB_TOKEN_TTL_SECONDS = 300;
 
-/**
- * The old name of {@link COLLAB_TOKEN_TTL_SECONDS}, kept because it is public
- * API that apps and the worker template already read. One number, because one
- * wire format: a second constant would eventually drift from this one and the
- * drift would show up as tokens that expire earlier than the client thinks.
- */
-export const PARTYKIT_TOKEN_TTL_SECONDS = COLLAB_TOKEN_TTL_SECONDS;
-
 /** What a signed collaboration token carries. */
 export interface CollabTokenPayload {
   userId: string;
@@ -106,6 +98,9 @@ export function signCollabToken(
  * `expectedDocName` is required rather than optional on purpose: every caller
  * knows which document is being opened, and an optional argument is one a
  * caller forgets — which is exactly the bug this parameter exists to prevent.
+ *
+ * The PartyKit worker template runs the same three checks in WebCrypto —
+ * signature, `exp`, and `docName` against the room. Keep them in step.
  */
 export function verifyCollabToken(
   token: string,
@@ -168,23 +163,6 @@ export async function verifySelfHostedToken(
   const payload = verifyCollabToken(token, secret, docName);
   return payload ? tokenContext(payload) : null;
 }
-
-/**
- * Signs the edge JWT. Same format and same TTL as every other collaboration
- * token; the difference is the key, which the PartyKit worker holds
- * (`COLLAB_JWT_SECRET`) and this process only shares with it.
- */
-export const signPartyKitToken = signCollabToken;
-
-/**
- * Verifies an edge JWT, including its document binding.
- *
- * The worker template runs the same three checks in WebCrypto — signature,
- * `exp`, and `docName` against the room being connected to. Keep them in
- * step: the room is the document, so a token that opens a room it was not
- * issued for is the same hole on the edge that it is here.
- */
-export const verifyPartyKitToken = verifyCollabToken;
 
 /** Builds the browser-facing WebSocket URL for an engine. */
 export function buildWsUrl(config: TokenIssuerConfig, docName: string): string {
@@ -282,7 +260,7 @@ export async function issueToken(
       throw new Error('config.partykit.jwtSecret is required when engine=partykit');
     }
     return {
-      token: signPartyKitToken({ userId: user.id, docName }, config.partykit.jwtSecret),
+      token: signCollabToken({ userId: user.id, docName }, config.partykit.jwtSecret),
       wsUrl: buildWsUrl(config, docName),
       engine: config.engine,
       expiresAt: Date.now() + COLLAB_TOKEN_TTL_SECONDS * 1000,

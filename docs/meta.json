@@ -18,7 +18,8 @@
     "production",
     "troubleshooting",
     "---Reference---",
-    "api-reference"
+    "api-reference",
+    "migrating-to-1.0"
   ],
   "root": true,
   "description": "Real-time collaborative editing for AdonisJS — CRDT engines, presence, versions and anchored comments behind one API.",

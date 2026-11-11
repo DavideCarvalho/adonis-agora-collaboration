@@ -22,13 +22,16 @@
     "format": "biome format --write .",
     "changeset": "changeset",
     "release": "pnpm --filter './packages/*' build && changeset publish",
-    "version-packages": "changeset version"
+    "version-packages": "changeset version",
+    "check:package": "pnpm -r --filter \"./packages/*\" exec sh -c \"publint --strict && attw --pack . --profile esm-only\""
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
     "@biomejs/biome": "2.6.6",
     "@changesets/changelog-github": "1.0.1",
     "@changesets/cli": "3.0.3",
     "knex": "3.3.0",
+    "publint": "0.3.25",
     "turbo": "2.11.10",
     "typescript": "7.0.2",
     "vitest": "5.1.0"

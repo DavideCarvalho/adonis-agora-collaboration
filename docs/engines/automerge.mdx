@@ -23,9 +23,8 @@ documents: {
 
 Small, and worth knowing because it explains the trade-offs:
 
-1. the client opens `ws://…?doc=<name>&token=<token>&sync=changes`;
-2. the server answers `sync=changes` with the text frame `automerge-sync:changes`, then sends the
-   **whole saved document** as a binary;
+1. the client opens `ws://…?doc=<name>&token=<token>`;
+2. the server sends the **whole saved document** as a binary;
 3. after a local change (debounced) the client sends only the **changes the server lacks**
    (`A.saveSince`);
 4. the server applies them to the room's document and forwards only what was new to the other
@@ -36,10 +35,8 @@ On every connection, reconnects included, the client waits for the server's init
 sends whatever that state lacks, so an edit sent on a socket that dropped before the server got it
 is not lost.
 
-A socket that does not ask for `sync=changes` gets no text frame and keeps exchanging **whole saved
-documents** both ways: the server applies either shape with `A.loadIncremental` and sends such a
-socket whole documents, so clients from before change chunks keep working in the same room. A
-client against a server that never sends the acknowledgement keeps sending whole documents too.
+Upgrade `@adonis-agora/collaboration` and `@adonis-agora/collaboration-client` together: both
+sides of this protocol ship in the same release line.
 
 The room's document lives in memory while it has clients. When the last one leaves, its pending
 save is written and the room is dropped; the next connection loads it from storage. A room opened

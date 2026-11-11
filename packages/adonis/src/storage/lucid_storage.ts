@@ -163,7 +163,7 @@ export class LucidStorage implements CollaborationStorage {
       .from('collab_versions')
       .select('id', 'created_by', 'label', 'seq', 'created_at')
       .where('doc_name', docName)
-      .orderBy('seq', 'asc');
+      .orderBy('seq', page?.order === 'desc' ? 'desc' : 'asc');
     // `page` is opt-in: internal callers computing the next `seq` or a
     // restore target need every version, and only pass none. The HTTP route
     // always passes one, which is what keeps a long history from coming back
@@ -259,7 +259,7 @@ export class LucidStorage implements CollaborationStorage {
     let query = knex
       .from('collab_comments')
       .where('doc_name', docName)
-      .orderBy('created_at', 'asc');
+      .orderBy('created_at', page?.order === 'desc' ? 'desc' : 'asc');
     if (space) query = query.where('space', space);
     // Same opt-in pagination as `listVersions` — see the comment there.
     if (page) {

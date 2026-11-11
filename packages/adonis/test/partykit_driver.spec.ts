@@ -1,11 +1,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { signCollabToken, verifyCollabToken } from '../src/auth/token.js';
 import type { PartyKitDriverOptions } from '../src/driver.js';
 import {
   PARTYKIT_SERVER_IDENTITY,
   PartyKitDriver,
   PartyKitRoomError,
-  signPartyKitToken,
-  verifyPartyKitToken,
 } from '../src/drivers/partykit/partykit_driver.js';
 
 const SECRET = 'test-secret-32-chars-minimum-ok!';
@@ -23,21 +22,21 @@ function makeConfig(overrides?: Partial<PartyKitDriverOptions>): PartyKitDriverO
 
 describe('PartyKit JWT helpers', () => {
   it('signs and verifies a valid token', () => {
-    const token = signPartyKitToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
-    const claims = verifyPartyKitToken(token, SECRET, 'docs/1');
+    const token = signCollabToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
+    const claims = verifyCollabToken(token, SECRET, 'docs/1');
     expect(claims?.userId).toBe('u1');
     expect(claims?.docName).toBe('docs/1');
     expect(claims!.exp).toBeGreaterThan(Date.now() / 1000);
   });
 
   it('rejects a token signed with the wrong secret', () => {
-    const token = signPartyKitToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
-    expect(verifyPartyKitToken(token, 'wrong-secret-aaaaaaaaaaaaa', 'docs/1')).toBeNull();
+    const token = signCollabToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
+    expect(verifyCollabToken(token, 'wrong-secret-aaaaaaaaaaaaa', 'docs/1')).toBeNull();
   });
 
   it('rejects an expired token', () => {
-    const token = signPartyKitToken({ userId: 'u1', docName: 'd' }, SECRET, -10);
-    expect(verifyPartyKitToken(token, SECRET, 'd')).toBeNull();
+    const token = signCollabToken({ userId: 'u1', docName: 'd' }, SECRET, -10);
+    expect(verifyCollabToken(token, SECRET, 'd')).toBeNull();
   });
 
   it('rejects a perfectly valid token presented for another room', () => {
@@ -45,15 +44,15 @@ describe('PartyKit JWT helpers', () => {
     // — their own, signed by us, unexpired — must not open a room it was not
     // issued for, or "may read document A" silently becomes "may read every
     // room on the worker".
-    const token = signPartyKitToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
-    expect(verifyPartyKitToken(token, SECRET, 'docs/2')).toBeNull();
-    expect(verifyPartyKitToken(token, SECRET, 'docs/1')).not.toBeNull();
+    const token = signCollabToken({ userId: 'u1', docName: 'docs/1' }, SECRET);
+    expect(verifyCollabToken(token, SECRET, 'docs/2')).toBeNull();
+    expect(verifyCollabToken(token, SECRET, 'docs/1')).not.toBeNull();
   });
 
   it('rejects a malformed payload', () => {
-    expect(verifyPartyKitToken('abc', SECRET, 'docs/1')).toBeNull();
+    expect(verifyCollabToken('abc', SECRET, 'docs/1')).toBeNull();
     expect(
-      verifyPartyKitToken(`a.${Buffer.from('not-json').toString('base64url')}.c`, SECRET, 'docs/1'),
+      verifyCollabToken(`a.${Buffer.from('not-json').toString('base64url')}.c`, SECRET, 'docs/1'),
     ).toBeNull();
   });
 });
@@ -103,11 +102,11 @@ describe('PartyKitDriver', () => {
     const authorization = (init.headers as Record<string, string>).authorization;
     expect(authorization).toMatch(/^Bearer /);
     const token = authorization.replace(/^Bearer /, '');
-    expect(verifyPartyKitToken(token, SECRET, 'researches/42/writing')?.userId).toBe(
+    expect(verifyCollabToken(token, SECRET, 'researches/42/writing')?.userId).toBe(
       PARTYKIT_SERVER_IDENTITY,
     );
     // Bound to this document: it opens no other room on the worker.
-    expect(verifyPartyKitToken(token, SECRET, 'researches/43/writing')).toBeNull();
+    expect(verifyCollabToken(token, SECRET, 'researches/43/writing')).toBeNull();
   });
 
   it('refuses to call the worker without a jwtSecret instead of collecting a 401', async () => {

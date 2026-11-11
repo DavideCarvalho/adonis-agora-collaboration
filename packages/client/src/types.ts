@@ -127,4 +127,21 @@ export interface CollaborationClientConfig {
    * ```
    */
   initialTokens?: Record<string, CollabTokenInfo | null | undefined> | undefined;
+  /**
+   * Path prefix the collaboration REST routes are mounted under. Default
+   * `/collaboration`; set it to the server's `routes.prefix` when that is
+   * changed (e.g. `/api/collab`).
+   */
+  prefix?: string | undefined;
+}
+
+/**
+ * Paging of a comment or version listing. The server pages every listing:
+ * `size` defaults to 50 (max 200), `page` is 1-based, and `order` is `'asc'`
+ * (oldest first, the default) or `'desc'` (newest first).
+ */
+export interface CollabListOptions {
+  page?: number | undefined;
+  size?: number | undefined;
+  order?: 'asc' | 'desc' | undefined;
 }

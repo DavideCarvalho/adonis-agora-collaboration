@@ -101,7 +101,7 @@ describe('useAutomergeDoc', () => {
     expect(result.current.status).toBe('connected');
   });
 
-  it('change() mutates locally and sends the saved doc after debounce', async () => {
+  it('change() mutates locally and sends the change chunk after debounce', async () => {
     const initial = A.from<Record<string, unknown>>({ content: '' });
     const { result } = renderHook(
       () =>
@@ -133,7 +133,7 @@ describe('useAutomergeDoc', () => {
       await new Promise((r) => setTimeout(r, 320));
     });
     expect(ws.sent).toHaveLength(1);
-    const roundtrip = A.load<{ content?: string }>(new Uint8Array(ws.sent[0]!));
+    const roundtrip = A.loadIncremental(initial, new Uint8Array(ws.sent[0]!));
     expect(roundtrip.content).toBe('edited');
   });
 
@@ -289,7 +289,10 @@ describe('useAutomergeDoc reconnect', () => {
     });
 
     expect(second.sent).toHaveLength(1);
-    const flushed = A.load<{ content?: string }>(new Uint8Array(second.sent[0]!));
+    const flushed = A.loadIncremental(
+      A.load<{ content?: string }>(serverState),
+      new Uint8Array(second.sent[0]!),
+    );
     expect(flushed.content).toBe('typed while offline');
     expect(result.current.pendingChanges).toBe(0);
   });
@@ -355,13 +358,10 @@ describe('useAutomergeDoc reconnect', () => {
 });
 
 /**
- * The socket asks for change chunks; a server that acknowledges them gets only
- * the changes it lacks, and one that does not keeps getting whole documents —
- * which is all a server that predates chunks can read.
+ * After the server's state, the client sends only the changes the server
+ * lacks, as `A.saveSince` chunks.
  */
 describe('useAutomergeDoc wire protocol', () => {
-  const ACK = 'automerge-sync:changes';
-
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -428,35 +428,18 @@ describe('useAutomergeDoc wire protocol', () => {
     }
   };
 
-  it('asks for change chunks when it opens the socket', async () => {
+  it('opens the socket with only the document and the token', async () => {
     const { ws } = await mount('w/1');
-    expect(new URL(ws.url, 'ws://x').searchParams.get('sync')).toBe('changes');
+    const params = new URL(ws.url, 'ws://x').searchParams;
+    expect([...params.keys()].sort()).toEqual(['doc', 'token']);
   });
 
-  it('sends whole documents to a server that never acknowledges chunks', async () => {
-    const { result, ws } = await mount('w/2');
-    act(() => {
-      ws.open();
-      ws.serverSend(A.save(bigDoc()));
-    });
-
-    await edit(result, 'a');
-    await edit(result, 'b');
-
-    expect(ws.sent).toHaveLength(2);
-    for (const frame of ws.sent) expect(isWholeDoc(frame)).toBe(true);
-    expect(A.load<{ content: string }>(new Uint8Array(ws.sent[1]!)).content.startsWith('ba')).toBe(
-      true,
-    );
-  });
-
-  it('sends only the new changes once the server acknowledges chunks', async () => {
+  it('sends only the new changes', async () => {
     let server = bigDoc();
     const whole = A.save(server);
     const { result, ws } = await mount('w/3');
     act(() => {
       ws.open();
-      ws.serverSendText(ACK);
       ws.serverSend(whole);
     });
 
@@ -477,7 +460,6 @@ describe('useAutomergeDoc wire protocol', () => {
     const { result, ws } = await mount('w/4');
     act(() => {
       ws.open();
-      ws.serverSendText(ACK);
       ws.serverSend(A.save(base));
     });
 
@@ -496,7 +478,6 @@ describe('useAutomergeDoc wire protocol', () => {
     const { result, ws } = await mount('w/5');
     act(() => {
       ws.open();
-      ws.serverSendText(ACK);
       ws.serverSend(A.save(server));
     });
 
@@ -520,7 +501,6 @@ describe('useAutomergeDoc wire protocol', () => {
     const { result, ws: first } = await mount('w/6');
     act(() => {
       first.open();
-      first.serverSendText(ACK);
       first.serverSend(whole);
     });
     act(() => first.close(1006));
@@ -534,7 +514,6 @@ describe('useAutomergeDoc wire protocol', () => {
     const second = FakeWebSocket.instances.at(-1)!;
     act(() => {
       second.open();
-      second.serverSendText(ACK);
       second.serverSend(whole);
     });
 
@@ -551,7 +530,6 @@ describe('useAutomergeDoc wire protocol', () => {
     const { result, ws: first } = await mount('w/7');
     act(() => {
       first.open();
-      first.serverSendText(ACK);
       first.serverSend(whole);
     });
     await edit(result, 'sent ');
@@ -566,7 +544,6 @@ describe('useAutomergeDoc wire protocol', () => {
     // This server never got the edit: its state is the one from before.
     act(() => {
       second.open();
-      second.serverSendText(ACK);
       second.serverSend(whole);
     });
 

@@ -5,6 +5,7 @@ import {
   createVersion,
   fetchToken,
   listComments,
+  listVersions,
   resolveBaseUrl,
 } from '../src/rest_client.js';
 import type { CollaborationClientConfig } from '../src/types.js';
@@ -43,8 +44,6 @@ describe('rest_client', () => {
       space: 'text',
       anchor: { kind: 'text-range', start: 0, end: 1, selectedText: 'a' },
       body: 'nota',
-      userId: 'u1',
-      authorName: null,
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -77,6 +76,51 @@ describe('rest_client', () => {
     const body = JSON.parse(init.body as string);
     expect(body).toEqual({ docName: 'doc', label: 'antes da revisão' });
     expect(Object.keys(body)).toEqual(['docName', 'label']);
+  });
+});
+
+describe('rest_client paging and prefix', () => {
+  const lastUrl = (fetchMock: ReturnType<typeof vi.fn>) =>
+    new URL((fetchMock.mock.calls.at(-1) as [string])[0]);
+
+  it('sends page, size and order on the list calls, and nothing it was not given', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listVersions(config, 'd/1', { page: 2, size: 25, order: 'desc' });
+    expect(Object.fromEntries(lastUrl(fetchMock).searchParams)).toEqual({
+      doc: 'd/1',
+      page: '2',
+      size: '25',
+      order: 'desc',
+    });
+
+    await listComments(config, 'd/1', 'text', { order: 'desc' });
+    expect(Object.fromEntries(lastUrl(fetchMock).searchParams)).toEqual({
+      doc: 'd/1',
+      space: 'text',
+      order: 'desc',
+    });
+
+    await listVersions(config, 'd/1');
+    expect(Object.fromEntries(lastUrl(fetchMock).searchParams)).toEqual({ doc: 'd/1' });
+  });
+
+  it('mounts every route under config.prefix', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listVersions({ ...config, prefix: '/api/collab/' }, 'd/1');
+    expect(lastUrl(fetchMock).pathname).toBe('/api/collab/versions');
+
+    await fetchToken({ ...config, prefix: 'api/collab' }, 'd/1');
+    expect(lastUrl(fetchMock).pathname).toBe('/api/collab/token');
+
+    await listComments({ ...config, prefix: '' }, 'd/1');
+    expect(lastUrl(fetchMock).pathname).toBe('/comments');
+
+    await listComments(config, 'd/1');
+    expect(lastUrl(fetchMock).pathname).toBe('/collaboration/comments');
   });
 });
 

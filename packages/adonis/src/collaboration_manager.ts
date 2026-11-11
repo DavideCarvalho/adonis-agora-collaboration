@@ -21,6 +21,7 @@ import type {
   CollaborationEngine,
   CollabPermission,
   CollabVersion,
+  ListOrder,
   ListPageOptions,
   LiveDocumentResult,
   PruneVersionsOptions,
@@ -310,20 +311,24 @@ export class CollaborationManager {
     docName,
     page,
     size,
+    order,
   }: {
     docName: string;
     /** 1-based page number — see {@link ListPageOptions}. */
     page?: number;
     size?: number;
+    /** `'desc'` lists newest first — see {@link ListPageOptions.order}. */
+    order?: ListOrder;
   }): Promise<CollabVersion[]> {
     // Omitting the page entirely (rather than `{ page: undefined, size: undefined }`)
     // matters: the storage treats an absent page as "every version", which is what a
     // caller with no pagination opinion (a driver computing the next `seq`) needs.
     let options: ListPageOptions | undefined;
-    if (page !== undefined || size !== undefined) {
+    if (page !== undefined || size !== undefined || order !== undefined) {
       options = {};
       if (page !== undefined) options.page = page;
       if (size !== undefined) options.size = size;
+      if (order !== undefined) options.order = order;
     }
     return this.#driverFor(docName).then((driver) => driver.listVersions(docName, options));
   }

@@ -33,7 +33,7 @@ export class CollabTokenSecretMissingError extends Error {
     super(
       '[@adonis-agora/collaboration] no signing secret available — refusing to issue or accept collaboration tokens. ' +
         'In an AdonisJS app this is normally the app key and needs no configuration — check that APP_KEY is set ' +
-        'and config/app.ts exports `appKey`. Outside an app (or to use a dedicated key), set `tokenSecret` in ' +
+        'and config/app.ts exports `appKey` as a `Secret`. Outside an app (or to use a dedicated key), set `tokenSecret` in ' +
         'config/collaboration.ts, or pass `tokenSecret` to the CollaborationManager.',
     );
     this.name = 'CollabTokenSecretMissingError';
@@ -67,14 +67,12 @@ async function readAppKey(): Promise<string | undefined> {
       config: { get(name: string, fallback?: unknown): unknown };
     };
     const key = app.config.get('app.appKey', undefined);
-    // AdonisJS 6 wraps it in a `Secret<string>` so it never lands in a log by
-    // accident; older apps (and tests) keep a plain string.
+    // `config/app.ts` exports it as a `Secret<string>`, so it never lands in a
+    // log by accident.
     const raw =
-      typeof key === 'string'
-        ? key
-        : typeof (key as { release?: () => unknown } | undefined)?.release === 'function'
-          ? (key as { release: () => unknown }).release()
-          : undefined;
+      typeof (key as { release?: () => unknown } | undefined)?.release === 'function'
+        ? (key as { release: () => unknown }).release()
+        : undefined;
     if (typeof raw !== 'string' || raw.length === 0) return undefined;
     return createHmac('sha256', raw).update(APP_KEY_DOMAIN).digest('base64url');
   } catch {

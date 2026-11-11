@@ -32,17 +32,15 @@ await create({
   space: 'text',
   anchor: { kind: 'text-range', start: 120, end: 160, selectedText: 'the sentence' },
   body: 'rephrase this',
-  authorName: currentUser.name,
 })
-
-There is no `userId` in that call. The route attributes the comment to whoever the request
-authenticated as and ignores a body-supplied author, so asking the component for one would only be
-asking it to supply a value that is thrown away.
 
 await resolve(comment.id)        // resolve
 await resolve(comment.id, false) // reopen
 await remove(comment.id)
 ```
+
+There is no `userId` or `authorName` in that call. The route attributes the comment to whoever the
+request authenticated as, name included.
 
 The three write operations differ in how the list updates, and the difference is deliberate:
 
@@ -100,6 +98,19 @@ Both writes refetch, because both change the list. `create` adds a row with a se
 content is applied.
 
 Render `seq` rather than `id`: it is the friendly 1, 2, 3… the library maintains for exactly this.
+
+## Paging
+
+Both lists come back one page at a time: 50 rows by default (at most 200), oldest first. Pass
+`page`, `size` and `order` to choose the page. A version history usually wants the newest first:
+
+```tsx title="inertia/components/version_history.tsx"
+const [page, setPage] = useState(1)
+const { versions } = useVersions({ docName, order: 'desc', size: 20, page })
+```
+
+`useComments` takes the same three options next to `space`. Changing any of them refetches. With
+`order: 'desc'`, page 1 is the newest rows; the list keeps that order.
 
 ```tsx
 {versions.map((version) => (

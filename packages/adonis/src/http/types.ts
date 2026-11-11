@@ -102,7 +102,12 @@ export interface CollabManagerLike {
     createdBy: string | null;
     label?: string | null;
   }): Promise<unknown>;
-  listVersions(options: { docName: string; page?: number; size?: number }): Promise<unknown[]>;
+  listVersions(options: {
+    docName: string;
+    page?: number;
+    size?: number;
+    order?: 'asc' | 'desc';
+  }): Promise<unknown[]>;
   restoreVersion(options: {
     docName: string;
     versionId: string;
@@ -113,7 +118,7 @@ export interface CollabManagerLike {
     list(
       docName: string,
       space?: string,
-      page?: { page?: number; size?: number },
+      page?: { page?: number; size?: number; order?: 'asc' | 'desc' },
     ): Promise<unknown[]>;
     get(docName: string, commentId: string): Promise<unknown>;
     create(docName: string, comment: Record<string, unknown>): Promise<unknown>;

@@ -92,6 +92,28 @@ describe('InMemoryCollaborationStorage pagination', () => {
     ).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it('lists newest first with order desc, paging after the sort', async () => {
+    const storage = new InMemoryCollaborationStorage();
+    for (let seq = 1; seq <= 5; seq++) {
+      await storage.saveVersion(DOC, version(seq), new Uint8Array([seq]));
+    }
+    await storage.saveComment(DOC, comment('a', 'text', 1));
+    await storage.saveComment(DOC, comment('b', 'text', 2));
+    await storage.saveComment(DOC, comment('c', 'text', 3));
+
+    expect((await storage.listVersions(DOC, { order: 'desc', size: 2 })).map((v) => v.seq)).toEqual(
+      [5, 4],
+    );
+    expect(
+      (await storage.listVersions(DOC, { order: 'desc', page: 2, size: 2 })).map((v) => v.seq),
+    ).toEqual([3, 2]);
+    expect(
+      (await storage.listComments(DOC, 'text', { order: 'desc', size: 2 })).map((c) => c.id),
+    ).toEqual(['c', 'b']);
+    // The stored order is untouched by a descending read.
+    expect((await storage.listVersions(DOC)).map((v) => v.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
   it('paginates comments after filtering by space', async () => {
     const storage = new InMemoryCollaborationStorage();
     await storage.saveComment(DOC, comment('a', 'text', 1));
@@ -144,6 +166,9 @@ describe('FileSystemStorage pagination', () => {
       expect(
         (await storage.listComments(DOC, undefined, { page: 2, size: 1 })).map((c) => c.id),
       ).toEqual(['b']);
+      expect(
+        (await storage.listComments(DOC, undefined, { order: 'desc', size: 2 })).map((c) => c.id),
+      ).toEqual(['c', 'b']);
     } finally {
       await rm(baseDir, { recursive: true, force: true });
     }

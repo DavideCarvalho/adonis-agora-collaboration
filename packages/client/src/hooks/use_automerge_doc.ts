@@ -17,14 +17,12 @@ import type { CollabStatus } from '../types.js';
  * of forcing both worlds behind one interface.
  *
  * Wire protocol mirrors the server's AutomergeDriver:
- *  1. ws `${wsUrl}?doc=<name>&token=<token>&sync=changes` (token via fetchToken)
- *  2. a server that exchanges change chunks answers with the
- *     {@link CHANGES_ACK} text frame; then every server sends the full
- *     `A.save(doc)` binary
+ *  1. ws `${wsUrl}?doc=<name>&token=<token>` (token via fetchToken)
+ *  2. the server sends the full `A.save(doc)` binary
  *  3. after local changes (debounced) the client sends the changes the server
- *     lacks (`A.saveSince`) once acknowledged, else its whole saved doc
- *  4. incoming binaries — change chunks or whole docs — are applied with
- *     `A.loadIncremental`; the server forwards what was new to the other peers
+ *     lacks (`A.saveSince`)
+ *  4. incoming change chunks are applied with `A.loadIncremental`; the server
+ *     forwards what was new to the other peers
  *
  * ## Reconnection
  *
@@ -77,9 +75,6 @@ export interface UseAutomergeDocOptions {
 
 const SEND_DEBOUNCE_MS = 200;
 
-/** Text frame a server sends when this socket may exchange change chunks. */
-const CHANGES_ACK = 'automerge-sync:changes';
-
 function sameHeads(a: A.Heads, b: A.Heads): boolean {
   return a.length === b.length && a.every((hash, index) => hash === b[index]);
 }
@@ -131,8 +126,6 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
     let generation = 0;
     /** The last real failure, kept so an exhausted budget can name it. */
     let lastFailure: Error | null = null;
-    /** The current socket's server acknowledged change chunks. */
-    let sendsChanges = false;
     /** The current socket has delivered the server's state. */
     let stateReceived = false;
     /** Heads the server is known to hold on the current socket. */
@@ -145,21 +138,16 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
     };
 
     /**
-     * Sends what the server lacks: the changes since {@link serverHeads} to a
-     * server that acknowledged chunks, the whole saved doc to any other. Waits
+     * Sends what the server lacks: the changes since {@link serverHeads}. Waits
      * for the server's state, which is where a reconnect catches up.
      */
     const flush = (): void => {
       const local = localDocRef.current;
       if (socket?.readyState !== Impl.OPEN || !local || !stateReceived) return;
-      if (sendsChanges) {
-        const heads = A.getHeads(local);
-        if (!sameHeads(heads, serverHeads)) {
-          socket.send(A.saveSince(local, serverHeads) as unknown as ArrayBuffer);
-          serverHeads = heads;
-        }
-      } else {
-        socket.send(A.save(local) as unknown as ArrayBuffer);
+      const heads = A.getHeads(local);
+      if (!sameHeads(heads, serverHeads)) {
+        socket.send(A.saveSince(local, serverHeads) as unknown as ArrayBuffer);
+        serverHeads = heads;
       }
       pendingRef.current = 0;
       setPendingChanges(0);
@@ -188,7 +176,6 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
       generation += 1;
       const mine = generation;
       const stale = () => disposed || mine !== generation;
-      sendsChanges = false;
       stateReceived = false;
       serverHeads = [];
 
@@ -200,7 +187,7 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
         }
 
         const base = resolveBaseUrl(config);
-        const query = `?doc=${encodeURIComponent(docName)}&token=${encodeURIComponent(info.token)}&sync=changes`;
+        const query = `?doc=${encodeURIComponent(docName)}&token=${encodeURIComponent(info.token)}`;
         const wsUrl = info.wsUrl.startsWith('ws')
           ? `${info.wsUrl}${query}`
           : `${base.replace(/^http/, 'ws')}${info.wsUrl}${query}`;
@@ -221,10 +208,7 @@ export function useAutomergeDoc<T extends Record<string, unknown> = Record<strin
 
         ws.onmessage = (event) => {
           if (stale()) return;
-          if (typeof event.data === 'string') {
-            if (event.data === CHANGES_ACK) sendsChanges = true;
-            return;
-          }
+          if (typeof event.data === 'string') return;
           const bytes = new Uint8Array(event.data as ArrayBuffer);
           const current = localDocRef.current;
 

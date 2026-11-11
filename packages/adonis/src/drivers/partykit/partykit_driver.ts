@@ -30,8 +30,6 @@ import { lineDiff, resolveStorage, tiptapJsonToText } from '../shared.js';
  * `collaboration:init --engine=partykit`.
  */
 
-export { signPartyKitToken, verifyPartyKitToken } from '../../auth/token.js';
-
 /** Identity the driver signs its own worker calls with (not a user of the app). */
 export const PARTYKIT_SERVER_IDENTITY = 'adonis-server';
 
