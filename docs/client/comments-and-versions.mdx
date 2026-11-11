@@ -99,6 +99,19 @@ content is applied.
 
 Render `seq` rather than `id`: it is the friendly 1, 2, 3… the library maintains for exactly this.
 
+## Paging
+
+Both lists come back one page at a time: 50 rows by default (at most 200), oldest first. Pass
+`page`, `size` and `order` to choose the page. A version history usually wants the newest first:
+
+```tsx title="inertia/components/version_history.tsx"
+const [page, setPage] = useState(1)
+const { versions } = useVersions({ docName, order: 'desc', size: 20, page })
+```
+
+`useComments` takes the same three options next to `space`. Changing any of them refetches. With
+`order: 'desc'`, page 1 is the newest rows; the list keeps that order.
+
 ```tsx
 {versions.map((version) => (
   <li key={version.id}>

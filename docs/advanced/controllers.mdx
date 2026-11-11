@@ -23,6 +23,12 @@ routes: {
 }
 ```
 
+Give the client the same prefix:
+
+```tsx title="inertia/app/app.tsx"
+<CollaborationProvider prefix="/api/collab">{children}</CollaborationProvider>
+```
+
 ## Level two — register them yourself
 
 Disable auto-registration and call `collaborationRoutes` where you want it in `start/routes.ts` —
@@ -219,8 +225,8 @@ do, reproduce all four rules, not the three that are obvious.
 
 Taking over HTTP does not fork the library. The WebSocket still runs, `authorize` still guards the
 handshake, storage still persists, the manager still resolves engines per document, and the client
-hooks still work — as long as your routes answer the same shapes. Point the client at your prefix
-with `baseUrl`, or keep the paths and change only the guards.
+hooks still work — as long as your routes answer the same shapes. Point the client at your routes
+with `prefix` (and `baseUrl` for another origin), or keep the paths and change only the guards.
 
 ## The trade
 

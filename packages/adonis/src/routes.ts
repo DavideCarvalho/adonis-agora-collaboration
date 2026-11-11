@@ -18,16 +18,25 @@ import { clampPage, clampSize } from './storage/shared.js';
 import type { CollabPermission } from './types.js';
 
 /**
- * Parses `page`/`size` off a query string, clamped to a sane page. `page` is
- * 1-based, matching `@adonis-agora/filter`'s `?page=1&size=25` wire format.
+ * Parses `page`/`size`/`order` off a query string, clamped to a sane page.
+ * `page` is 1-based, matching `@adonis-agora/filter`'s `?page=1&size=25` wire
+ * format; `order=desc` lists newest first, anything else oldest first.
  */
-function pageOf(qs: Record<string, unknown>): { page: number; size: number } {
+function pageOf(qs: Record<string, unknown>): {
+  page: number;
+  size: number;
+  order: 'asc' | 'desc';
+} {
   const toNumber = (value: unknown): number | undefined => {
     if (typeof value === 'number') return value;
     if (typeof value === 'string' && value.trim() !== '') return Number(value);
     return undefined;
   };
-  return { page: clampPage(toNumber(qs.page)), size: clampSize(toNumber(qs.size)) };
+  return {
+    page: clampPage(toNumber(qs.page)),
+    size: clampSize(toNumber(qs.size)),
+    order: qs.order === 'desc' ? 'desc' : 'asc',
+  };
 }
 
 /**
@@ -340,7 +349,13 @@ async function handleListComments(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const qs = ctx.request.qs() as { doc?: string; space?: string; page?: string; size?: string };
+  const qs = ctx.request.qs() as {
+    doc?: string;
+    space?: string;
+    page?: string;
+    size?: string;
+    order?: string;
+  };
   const { doc, space } = qs;
   const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
   if (isDenied(allowed)) return allowed.denied;
@@ -444,13 +459,12 @@ async function handleListVersions(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const qs = ctx.request.qs() as { doc?: string; page?: string; size?: string };
+  const qs = ctx.request.qs() as { doc?: string; page?: string; size?: string; order?: string };
   const allowed = await guard(ctx, runtime, resolveUser, qs.doc, 'canRead');
   if (isDenied(allowed)) return allowed.denied;
 
   const manager = await runtime.manager();
-  const { page, size } = pageOf(qs);
-  return manager.listVersions({ docName: allowed.docName, page, size });
+  return manager.listVersions({ docName: allowed.docName, ...pageOf(qs) });
 }
 
 async function handleCreateVersion(

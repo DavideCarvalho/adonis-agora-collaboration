@@ -167,7 +167,16 @@ export interface ListPageOptions {
   page?: number;
   /** Page size for offset pagination. Defaults to `50`, capped at `200`. */
   size?: number;
+  /**
+   * `'asc'` (default) lists oldest first, `'desc'` newest first. Versions sort
+   * by `seq`, comments by `createdAt`; paging applies after the sort, so
+   * `{ order: 'desc', page: 1 }` is the newest page.
+   */
+  order?: ListOrder;
 }
+
+/** Sort direction of a listing — see {@link ListPageOptions.order}. */
+export type ListOrder = 'asc' | 'desc';
 
 /**
  * Persistence of documents + versions + comments. The host app implements

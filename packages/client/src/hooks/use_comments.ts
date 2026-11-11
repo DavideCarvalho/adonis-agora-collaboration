@@ -6,9 +6,9 @@ import {
   listComments,
   resolveComment,
 } from '../rest_client.js';
-import type { CollabComment } from '../types.js';
+import type { CollabComment, CollabListOptions } from '../types.js';
 
-export interface UseCommentsOptions {
+export interface UseCommentsOptions extends CollabListOptions {
   docName: string;
   /** Optional comment space (default: all). */
   space?: string;
@@ -36,7 +36,7 @@ export interface UseCommentsResult {
  * ```
  */
 export function useComments(options: UseCommentsOptions): UseCommentsResult {
-  const { docName, space } = options;
+  const { docName, space, page, size, order } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
 
@@ -59,7 +59,7 @@ export function useComments(options: UseCommentsOptions): UseCommentsResult {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listComments(config, docName, space);
+      const data = await listComments(config, docName, space, { page, size, order });
       if (mountedRef.current) {
         setComments(data);
         setError(null);
@@ -71,7 +71,7 @@ export function useComments(options: UseCommentsOptions): UseCommentsResult {
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [config, docName, space]);
+  }, [config, docName, space, page, size, order]);
 
   useEffect(() => {
     void refresh();

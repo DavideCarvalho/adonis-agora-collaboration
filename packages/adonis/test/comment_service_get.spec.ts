@@ -66,3 +66,28 @@ describe('CommentService.get', () => {
     expect(store.calls).toEqual(['listComments', 'listComments']);
   });
 });
+
+describe('CommentService.list order', () => {
+  it('keeps the page newest first when asked for order desc', async () => {
+    const { InMemoryCollaborationStorage } = await import('../src/storage/in_memory_storage.js');
+    const store = new InMemoryCollaborationStorage();
+    for (const [id, minute] of [
+      ['a', 1],
+      ['b', 2],
+      ['c', 3],
+    ] as const) {
+      await store.saveComment('docs/1', {
+        ...comment(id),
+        createdAt: new Date(2026, 0, 1, 0, minute).toISOString(),
+      });
+    }
+    const service = new CommentService(store);
+
+    expect((await service.list('docs/1', undefined, { order: 'desc' })).map((c) => c.id)).toEqual([
+      'c',
+      'b',
+      'a',
+    ]);
+    expect((await service.list('docs/1')).map((c) => c.id)).toEqual(['a', 'b', 'c']);
+  });
+});

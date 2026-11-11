@@ -90,6 +90,18 @@ describe('LucidStorage list pagination (Postgres)', () => {
     ).toEqual(['c7', 'c8', 'c9']);
   });
 
+  it('lists newest first with order desc, paging after the sort', async () => {
+    expect((await storage.listVersions(DOC, { order: 'desc', size: 3 })).map((v) => v.seq)).toEqual(
+      [10, 9, 8],
+    );
+    expect(
+      (await storage.listVersions(DOC, { order: 'desc', page: 2, size: 3 })).map((v) => v.seq),
+    ).toEqual([7, 6, 5]);
+    expect(
+      (await storage.listComments(DOC, undefined, { order: 'desc', size: 2 })).map((c) => c.id),
+    ).toEqual(['c10', 'c9']);
+  });
+
   it('two consecutive pages cover the whole history with no gap or overlap', async () => {
     const first = await storage.listVersions(DOC, { page: 1, size: 6 });
     const second = await storage.listVersions(DOC, { page: 2, size: 6 });

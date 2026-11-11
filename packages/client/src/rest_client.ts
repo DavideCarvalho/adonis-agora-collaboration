@@ -1,4 +1,4 @@
-import type { CollaborationClientConfig } from './types.js';
+import type { CollabListOptions, CollaborationClientConfig } from './types.js';
 
 /**
  * Cliente REST mínimo pra rotas de colaboração geradas por
@@ -74,15 +74,39 @@ export async function collabFetch<T>(
 
 /* ───────────────────────── endpoints tipados ───────────────────────── */
 
+/** Default mount point of the collaboration routes — the server's default `routes.prefix`. */
+export const DEFAULT_COLLAB_PREFIX = '/collaboration';
+
+/** `config.prefix` (default {@link DEFAULT_COLLAB_PREFIX}) joined with `path`. */
+function route(config: CollaborationClientConfig, path: string): string {
+  const trimmed = (config.prefix ?? DEFAULT_COLLAB_PREFIX).replace(/^\/+|\/+$/g, '');
+  return trimmed === '' ? path : `/${trimmed}${path}`;
+}
+
+/** `page`/`size`/`order` as query params, leaving out what was not given. */
+function listParams(options: CollabListOptions | undefined): Record<string, string | undefined> {
+  return {
+    page: options?.page === undefined ? undefined : String(options.page),
+    size: options?.size === undefined ? undefined : String(options.size),
+    order: options?.order,
+  };
+}
+
 export function fetchToken(config: CollaborationClientConfig, docName: string) {
-  return collabFetch<import('./types.js').CollabTokenInfo>(config, '/collaboration/token', {
+  return collabFetch<import('./types.js').CollabTokenInfo>(config, route(config, '/token'), {
     params: { doc: docName },
   });
 }
 
-export function listComments(config: CollaborationClientConfig, docName: string, space?: string) {
-  return collabFetch<import('./types.js').CollabComment[]>(config, '/collaboration/comments', {
-    params: { doc: docName, space },
+/** One page of a document's comments — see {@link CollabListOptions} for the defaults. */
+export function listComments(
+  config: CollaborationClientConfig,
+  docName: string,
+  space?: string,
+  options?: CollabListOptions,
+) {
+  return collabFetch<import('./types.js').CollabComment[]>(config, route(config, '/comments'), {
+    params: { doc: docName, space, ...listParams(options) },
   });
 }
 
@@ -97,7 +121,7 @@ export function createComment(
     'id' | 'createdAt' | 'updatedAt' | 'resolvedAt' | 'userId' | 'authorName'
   >,
 ) {
-  return collabFetch<import('./types.js').CollabComment>(config, '/collaboration/comments', {
+  return collabFetch<import('./types.js').CollabComment>(config, route(config, '/comments'), {
     method: 'POST',
     body: input,
   });
@@ -111,7 +135,7 @@ export function resolveComment(
 ) {
   return collabFetch<import('./types.js').CollabComment | null>(
     config,
-    `/collaboration/comments/${encodeURIComponent(commentId)}`,
+    route(config, `/comments/${encodeURIComponent(commentId)}`),
     { method: 'PATCH', params: { doc: docName }, body: { resolved } },
   );
 }
@@ -123,14 +147,19 @@ export function deleteComment(
 ) {
   return collabFetch<{ deleted: boolean }>(
     config,
-    `/collaboration/comments/${encodeURIComponent(commentId)}`,
+    route(config, `/comments/${encodeURIComponent(commentId)}`),
     { method: 'DELETE', params: { doc: docName } },
   );
 }
 
-export function listVersions(config: CollaborationClientConfig, docName: string) {
-  return collabFetch<import('./types.js').CollabVersion[]>(config, '/collaboration/versions', {
-    params: { doc: docName },
+/** One page of a document's versions — see {@link CollabListOptions} for the defaults. */
+export function listVersions(
+  config: CollaborationClientConfig,
+  docName: string,
+  options?: CollabListOptions,
+) {
+  return collabFetch<import('./types.js').CollabVersion[]>(config, route(config, '/versions'), {
+    params: { doc: docName, ...listParams(options) },
   });
 }
 
@@ -144,7 +173,7 @@ export function createVersion(
   docName: string,
   label: string | null,
 ) {
-  return collabFetch<import('./types.js').CollabVersion>(config, '/collaboration/versions', {
+  return collabFetch<import('./types.js').CollabVersion>(config, route(config, '/versions'), {
     method: 'POST',
     body: { docName, label },
   });
@@ -155,7 +184,7 @@ export function restoreVersion(
   docName: string,
   versionId: string,
 ) {
-  return collabFetch<void>(config, '/collaboration/versions/restore', {
+  return collabFetch<void>(config, route(config, '/versions/restore'), {
     method: 'POST',
     body: { docName, versionId },
   });

@@ -28,11 +28,11 @@ export type {
   UseCollabEditorResult,
 } from './hooks/use_collab_editor.js';
 export { useCollabEditor } from './hooks/use_collab_editor.js';
-export type { UseCommentsResult } from './hooks/use_comments.js';
+export type { UseCommentsOptions, UseCommentsResult } from './hooks/use_comments.js';
 export { useComments } from './hooks/use_comments.js';
 export type { ExcalidrawAPIHandle, UseExcalidrawSyncOptions } from './hooks/use_excalidraw_sync.js';
 export { useExcalidrawSync } from './hooks/use_excalidraw_sync.js';
-export type { UseVersionsResult } from './hooks/use_versions.js';
+export type { UseVersionsOptions, UseVersionsResult } from './hooks/use_versions.js';
 export { useVersions } from './hooks/use_versions.js';
 export {
   PRE_ISSUED_TOKEN_MIN_TTL_MS,
@@ -44,6 +44,7 @@ export {
   collabFetch,
   createComment,
   createVersion,
+  DEFAULT_COLLAB_PREFIX,
   deleteComment,
   fetchToken,
   listComments,
@@ -59,6 +60,7 @@ export { PartyKitCollabTransport } from './transports/partykit.js';
 export { PartyServerCollabTransport } from './transports/partyserver.js';
 export type {
   CollabComment,
+  CollabListOptions,
   CollaborationClientConfig,
   CollabPeer,
   CollabStatus,

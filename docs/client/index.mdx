@@ -34,6 +34,7 @@ import { CollaborationProvider } from '@adonis-agora/collaboration-client'
 | `getHeaders` | called **per request** — return the auth headers your API needs. A function, so a rotating token is picked up without a remount |
 | `createTransport` | override the transport factory — tests, or an engine of your own |
 | `fetchImpl` | override `fetch` — tests and SSR |
+| `prefix` | where the collaboration routes are mounted. Default `/collaboration`; set it to the server's `routes.prefix` when you change that |
 
 The provider's real job is holding the **session map**: one `DocSession` per document name, each
 owning a `Y.Doc`, a transport and a reconnect loop. Sessions are created on demand and

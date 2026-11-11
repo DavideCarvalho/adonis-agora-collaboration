@@ -154,7 +154,7 @@ clear message if it is read too early.
 | `hasLiveDocument({ docName })` | `Promise<boolean>` — is this process holding the document open right now |
 | `getVersionState({ docName, versionId })` | `Promise<Uint8Array>` — the binary state of one version; throws on an unknown id |
 | `createVersion({ docName, createdBy, label? })` | `Promise<CollabVersion>` |
-| `listVersions({ docName })` | `Promise<CollabVersion[]>` |
+| `listVersions({ docName, page?, size?, order? })` | `Promise<CollabVersion[]>` — every version when no paging option is given |
 | `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live; first snapshots the replaced state as a new `restored from #<seq>` version, attributed to `restoredBy` |
 | `diffVersions({ docName, aId, bId })` | `Promise<{ added: number; removed: number }>` |
 | `pruneVersions({ keep, docName?, dryRun? })` | `Promise<number>` — versions deleted; `keep` is per document |
@@ -170,7 +170,7 @@ clear message if it is read too early.
 
 | Method | Returns |
 | --- | --- |
-| `list(docName, space?)` | `Promise<CollabComment[]>` — sorted oldest first |
+| `list(docName, space?, page?)` | `Promise<CollabComment[]>` — oldest first; newest first with `{ order: 'desc' }` |
 | `get(docName, commentId)` | `Promise<CollabComment \| null>` — one comment, through the storage's indexed lookup when it has one (`getComment`), else a filtered list |
 | `create(docName, { space, anchor, body, userId, authorName? })` | `Promise<CollabComment>` |
 | `resolve(docName, commentId, resolved)` | `Promise<CollabComment \| null>` — a toggle |
@@ -259,8 +259,9 @@ interface CollaborationStorage {
 
 ```ts
 interface ListPageOptions {
-  page?: number  // 1-based, default 1
-  size?: number  // default 50, capped at 200
+  page?: number            // 1-based, default 1
+  size?: number            // default 50, capped at 200
+  order?: 'asc' | 'desc'   // default 'asc' (oldest first); paging applies after the sort
 }
 ```
 
@@ -360,11 +361,11 @@ rule through the manager — the same one the handshake uses — and deny when n
 | Method | Path | Body / query |
 | --- | --- | --- |
 | `GET` | `/token` | `?doc=` |
-| `GET` | `/comments` | `?doc=&space=&page=&size=` |
+| `GET` | `/comments` | `?doc=&space=&page=&size=&order=` — `order=desc` for newest first |
 | `POST` | `/comments` | `{ docName, space, anchor, body }` — author (id and name) is the caller |
 | `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) — author or `canWrite` |
 | `DELETE` | `/comments/:id` | `?doc=` — author or `canWrite` |
-| `GET` | `/versions` | `?doc=&page=&size=` |
+| `GET` | `/versions` | `?doc=&page=&size=&order=` — `order=desc` for newest first |
 | `POST` | `/versions` | `{ docName, label? }` — `createdBy` is the caller |
 | `POST` | `/versions/restore` | `{ docName, versionId }` → `204` |
 | `GET` | `/state` | `?doc=` → `application/octet-stream` |
@@ -405,6 +406,7 @@ CollabDocumentNameFor<'researches/:id/writing'>       // `researches/${string}/w
   createTransport?={(info, doc, docName) => CollabTransport}
   fetchImpl?={typeof fetch}
   initialTokens?={Record<string, CollabTokenInfo>}  // pre-issued, by docName
+  prefix?={string}           // default '/collaboration' — match the server's routes.prefix
 />
 ```
 
@@ -463,7 +465,7 @@ useExcalidrawSync({ doc, excalidrawAPI, editorId? }): void
 // doc: CollabDoc | Y.Doc | null — either of the two useCollabDoc returns
 // editorId defaults to 'excalidraw'; the scene is last-write-wins on one key
 
-useComments({ docName, space? }): {
+useComments({ docName, space?, page?, size?, order? }): {
   comments: CollabComment[]
   loading: boolean
   error: Error | null
@@ -473,7 +475,7 @@ useComments({ docName, space? }): {
   remove(commentId): Promise<void>
 }
 
-useVersions({ docName }): {
+useVersions({ docName, page?, size?, order? }): {
   versions: CollabVersion[]
   loading: boolean
   error: Error | null
@@ -534,11 +536,11 @@ class DocSession {
 }
 
 fetchToken(config, docName)
-listComments(config, docName, space?)
+listComments(config, docName, space?, { page?, size?, order? }?)
 createComment(config, input)
 resolveComment(config, docName, commentId, resolved)
 deleteComment(config, docName, commentId)
-listVersions(config, docName)
+listVersions(config, docName, { page?, size?, order? }?)
 createVersion(config, docName, label)
 restoreVersion(config, docName, versionId)
 collabFetch<T>(config, path, init?)

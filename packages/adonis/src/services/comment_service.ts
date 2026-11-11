@@ -14,7 +14,8 @@ export class CommentService {
 
   async list(docName: string, space?: string, page?: ListPageOptions): Promise<CollabComment[]> {
     const comments = await this.storage.listComments(docName, space, page);
-    return comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const direction = page?.order === 'desc' ? -1 : 1;
+    return comments.sort((a, b) => direction * a.createdAt.localeCompare(b.createdAt));
   }
 
   /**

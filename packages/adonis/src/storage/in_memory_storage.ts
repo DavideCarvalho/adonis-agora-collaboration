@@ -13,7 +13,9 @@ function paginate<T>(items: T[], page?: ListPageOptions): T[] {
   // Same `(page - 1) * size` the SQL store computes — the 0-based offset is
   // derived here, it is never part of the interface.
   const { size, offset } = resolvePage(page);
-  return items.slice(offset, offset + size);
+  // Items are kept oldest first; newest first is the same list reversed.
+  const ordered = page.order === 'desc' ? [...items].reverse() : items;
+  return ordered.slice(offset, offset + size);
 }
 
 /**

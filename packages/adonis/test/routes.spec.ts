@@ -35,8 +35,19 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
       calls.push(`version:${docName}:${createdBy}:${label}`);
       return { id: 'v1', seq: 1 };
     },
-    async listVersions({ docName, page, size }: { docName: string; page?: number; size?: number }) {
+    async listVersions({
+      docName,
+      page,
+      size,
+      order,
+    }: {
+      docName: string;
+      page?: number;
+      size?: number;
+      order?: 'asc' | 'desc';
+    }) {
       calls.push(`versions:${docName}:${page}:${size}`);
+      calls.push(`versions-order:${order}`);
       return [];
     },
     async restoreVersion() {},
@@ -46,6 +57,7 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
     comments: {
       async list(docName, space, page) {
         calls.push(`comments:${docName}:${space}:${page?.page}:${page?.size}`);
+        calls.push(`comments-order:${page?.order}`);
         return [{ id: 'c1' }];
       },
       async create(_docName, comment) {
@@ -388,6 +400,30 @@ describe('list pagination (versions + comments)', () => {
     // 200 is COLLAB_LIST_MAX_SIZE; a page below 1 clamps to the first page
     // rather than erroring or producing a negative offset in the database.
     expect(manager.calls).toContain('versions:d/1:1:200');
+  });
+
+  it('lists oldest first by default and newest first with order=desc', async () => {
+    const manager = makeManager();
+    const { router, find } = makeRouter();
+    await collaborationRoutes(router, baseOptions(manager));
+
+    await find('GET', '/versions').handler(makeCtx({ qs: { doc: 'd/1' }, user: { id: 'u1' } }));
+    expect(manager.calls).toContain('versions-order:asc');
+
+    await find('GET', '/versions').handler(
+      makeCtx({ qs: { doc: 'd/1', order: 'desc' }, user: { id: 'u1' } }),
+    );
+    await find('GET', '/comments').handler(
+      makeCtx({ qs: { doc: 'd/1', order: 'desc' }, user: { id: 'u1' } }),
+    );
+    expect(manager.calls).toContain('versions-order:desc');
+    expect(manager.calls).toContain('comments-order:desc');
+
+    // Anything else is the default, not an error.
+    await find('GET', '/comments').handler(
+      makeCtx({ qs: { doc: 'd/1', order: 'sideways' }, user: { id: 'u1' } }),
+    );
+    expect(manager.calls).toContain('comments-order:asc');
   });
 
   it('falls back to the default on a garbage (non-numeric) page/size', async () => {
