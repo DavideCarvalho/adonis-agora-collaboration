@@ -146,6 +146,7 @@
     "@types/pg": "8.23.1",
     "@types/ws": "8.18.2",
     "luxon": "3.7.2",
+    "mysql2": "3.24.6",
     "pg": "8.23.1",
     "testcontainers": "12.2.1",
     "typescript": "7.0.2",

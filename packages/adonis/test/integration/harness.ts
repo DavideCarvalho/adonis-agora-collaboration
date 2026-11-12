@@ -9,9 +9,9 @@ import { Database } from '@adonisjs/lucid/database';
 import type { BaseSchema } from '@adonisjs/lucid/schema';
 
 /** The tables the package publishes, in dependency-free creation order. */
-const TABLES = ['collab_documents', 'collab_versions', 'collab_comments'] as const;
+export const TABLES = ['collab_documents', 'collab_versions', 'collab_comments'] as const;
 
-const stubPath = (table: string) =>
+export const stubPath = (table: string) =>
   fileURLToPath(new URL(`../../stubs/collaboration/migrations/${table}.stub`, import.meta.url));
 
 const generatedPath = (table: string, schema: string) =>
@@ -28,7 +28,7 @@ const generatedPath = (table: string, schema: string) =>
  * here to catch. So the stub is the source: strip its `{{{ exports(...) }}}` codegen
  * header, fill the one template variable the command fills, and import what is left.
  */
-async function loadMigration(table: string, schema = ''): Promise<typeof BaseSchema> {
+export async function loadMigration(table: string, schema = ''): Promise<typeof BaseSchema> {
   const stub = stubPath(table);
   const raw = await readFile(stub, 'utf-8');
   const header = raw.indexOf('}}}');
