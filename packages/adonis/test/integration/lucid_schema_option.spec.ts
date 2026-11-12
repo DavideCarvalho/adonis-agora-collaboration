@@ -154,7 +154,7 @@ describe('LucidStorage with `schema` (Postgres, default search_path)', () => {
     const role = `collab_ro_${process.pid}`;
     await integration.db.rawQuery(`DROP ROLE IF EXISTS ${role}`);
     await integration.db.rawQuery(`CREATE ROLE ${role} LOGIN PASSWORD 'pw'`);
-    await integration.db.rawQuery('REVOKE CREATE ON DATABASE test FROM PUBLIC');
+    // A new role has no CREATE on the database (PUBLIC gets only CONNECT and TEMP).
     const url = new URL(process.env.COLLAB_TEST_PG_URL as string);
     url.username = role;
     url.password = 'pw';

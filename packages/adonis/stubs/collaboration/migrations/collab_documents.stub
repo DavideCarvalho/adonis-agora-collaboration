@@ -9,7 +9,10 @@ export default class extends BaseSchema {
   protected schemaName = '{{ migration.schema }}'
 
   async up() {
-    if (this.schemaName) this.schema.createSchemaIfNotExists(this.schemaName)
+    // Postgres only; on MySQL the schema is a database you create yourself.
+    if (this.schemaName && this.db.dialect.name === 'postgres') {
+      this.schema.createSchemaIfNotExists(this.schemaName)
+    }
     this.schema.withSchema(this.schemaName).createTable(this.tableName, (table) => {
       // The document name is the identity — 'researches/42/writing'.
       table.string('doc_name').primary()

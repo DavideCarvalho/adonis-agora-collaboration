@@ -58,6 +58,7 @@ describe('lucidStorage({ schema })', () => {
         'utf8',
       );
       expect(stub).toContain("protected schemaName = '{{ migration.schema }}'");
+      expect(stub).toContain("if (this.schemaName && this.db.dialect.name === 'postgres') {");
       expect(stub).toContain('this.schema.createSchemaIfNotExists(this.schemaName)');
       expect(stub).toContain('this.schema.withSchema(this.schemaName).createTable(');
       expect(stub).toContain('this.schema.withSchema(this.schemaName).dropTable(');

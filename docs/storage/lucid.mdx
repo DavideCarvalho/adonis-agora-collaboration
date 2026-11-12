@@ -87,8 +87,8 @@ other clients' connections. `schema` never touches `search_path`.
 </Callout>
 
 On MySQL, `schema` is the database the tables go in (`` `collab`.`collab_documents` ``), created
-with `CREATE DATABASE IF NOT EXISTS` on first use. The published migrations create a Postgres
-schema; on MySQL create the database yourself before running them. SQLite has no schemas: with
+with `CREATE DATABASE IF NOT EXISTS` on first use. The published migrations create the schema on
+Postgres only; on MySQL create the database yourself before running them. SQLite has no schemas: with
 `schema` set on a SQLite connection, the app fails to boot.
 
 When you read the tables yourself, name the schema too: `db.from('collab.collab_comments')`.
