@@ -9,13 +9,15 @@ import { Database } from '@adonisjs/lucid/database';
 import type { BaseSchema } from '@adonisjs/lucid/schema';
 
 /** The tables the package publishes, in dependency-free creation order. */
-const TABLES = ['collab_documents', 'collab_versions', 'collab_comments'] as const;
+export const TABLES = ['collab_documents', 'collab_versions', 'collab_comments'] as const;
 
-const stubPath = (table: string) =>
+export const stubPath = (table: string) =>
   fileURLToPath(new URL(`../../stubs/collaboration/migrations/${table}.stub`, import.meta.url));
 
-const generatedPath = (table: string) =>
-  fileURLToPath(new URL(`./__generated__/${table}.ts`, import.meta.url));
+const generatedPath = (table: string, schema: string) =>
+  fileURLToPath(
+    new URL(`./__generated__/${table}${schema ? `.${schema}` : ''}.ts`, import.meta.url),
+  );
 
 /**
  * Materialize a PUBLISHED migration stub as an importable module.
@@ -26,7 +28,7 @@ const generatedPath = (table: string) =>
  * here to catch. So the stub is the source: strip its `{{{ exports(...) }}}` codegen
  * header, fill the one template variable the command fills, and import what is left.
  */
-async function loadMigration(table: string): Promise<typeof BaseSchema> {
+export async function loadMigration(table: string, schema = ''): Promise<typeof BaseSchema> {
   const stub = stubPath(table);
   const raw = await readFile(stub, 'utf-8');
   const header = raw.indexOf('}}}');
@@ -37,14 +39,15 @@ async function loadMigration(table: string): Promise<typeof BaseSchema> {
   const source = raw
     .slice(header + 3)
     .trimStart()
-    .replaceAll('{{ migration.tableName }}', table);
+    .replaceAll('{{ migration.tableName }}', table)
+    .replaceAll('{{ migration.schema }}', schema);
   if (source.includes('{{')) {
     throw new Error(
       `${stub} has a template variable this harness does not fill — the migration it runs would not be the one apps get.`,
     );
   }
 
-  const generated = generatedPath(table);
+  const generated = generatedPath(table, schema);
   await mkdir(dirname(generated), { recursive: true });
   // Every spec file runs in its own fork and materializes the same module. Written in place,
   // one fork could import it while another had truncated it mid-write — an empty module and
@@ -61,6 +64,18 @@ export interface IntegrationDatabase {
   teardown(): Promise<void>;
 }
 
+export interface IntegrationDatabaseOptions {
+  /**
+   * `searchPath` (default): the connection's search_path is the schema and the
+   * migrations run unqualified. `qualified`: the connection keeps its default
+   * search_path (`public`) and the migrations are rendered with
+   * `migration.schema`, the way `collaboration:init` renders them for
+   * `lucidStorage({ schema })`. `none`: like `qualified`, but no tables are
+   * created, so `LucidStorage` has to create the schema and tables itself.
+   */
+  mode?: 'searchPath' | 'qualified' | 'none';
+}
+
 /**
  * A Lucid `Database` bound to the throwaway Postgres from `global_setup`, with the
  * collaboration tables created by the real migrations.
@@ -70,7 +85,10 @@ export interface IntegrationDatabase {
  * versions of every document" is only meaningful when the table holds nothing but this
  * test's documents.
  */
-export async function createIntegrationDatabase(schemaName: string): Promise<IntegrationDatabase> {
+export async function createIntegrationDatabase(
+  schemaName: string,
+  { mode = 'searchPath' }: IntegrationDatabaseOptions = {},
+): Promise<IntegrationDatabase> {
   const url = process.env.COLLAB_TEST_PG_URL;
   if (!url) {
     throw new Error(
@@ -95,7 +113,7 @@ export async function createIntegrationDatabase(schemaName: string): Promise<Int
         primary: {
           client: 'pg',
           connection: url,
-          searchPath: [schemaName],
+          ...(mode === 'searchPath' ? { searchPath: [schemaName] } : {}),
           pool: { min: 0, max: 4 },
         },
       },
@@ -104,10 +122,15 @@ export async function createIntegrationDatabase(schemaName: string): Promise<Int
     emitter,
   );
 
-  await db.rawQuery(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+  if (mode === 'searchPath') {
+    await db.rawQuery(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
+  } else {
+    // The qualified migrations create the schema themselves.
+    await db.rawQuery(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
+  }
 
-  for (const table of TABLES) {
-    const Migration = await loadMigration(table);
+  for (const table of mode === 'none' ? [] : TABLES) {
+    const Migration = await loadMigration(table, mode === 'qualified' ? schemaName : '');
     const migration = new Migration(db.connection(), stubPath(table), false);
     await migration.execUp();
   }

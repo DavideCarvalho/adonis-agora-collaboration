@@ -20,6 +20,47 @@ export interface LucidConnectionLike {
 /** Ids deleted per statement by `pruneVersions` — keeps the IN (...) sane. */
 const PRUNE_BATCH_SIZE = 500;
 
+/** The tables `LucidStorage` owns. */
+export const COLLAB_TABLES = ['collab_documents', 'collab_versions', 'collab_comments'] as const;
+
+const SCHEMA_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
+/**
+ * Throws unless `schema` is a plain identifier of at most 63 characters —
+ * it ends up in SQL as an identifier.
+ */
+export function assertSchemaName(schema: string): void {
+  if (typeof schema !== 'string' || !SCHEMA_NAME.test(schema) || schema.length > 63) {
+    throw new Error(
+      `[@adonis-agora/collaboration] invalid schema ${JSON.stringify(schema)} ` +
+        '(letters, digits, _ and $, not starting with a digit, at most 63 characters)',
+    );
+  }
+}
+
+type Dialect = 'postgres' | 'mysql' | 'sqlite' | 'other';
+
+function dialectOf(name: string | undefined): Dialect {
+  if (!name) return 'other';
+  if (/postgres|pg|redshift/i.test(name)) return 'postgres';
+  if (/mysql|maria/i.test(name)) return 'mysql';
+  if (/sqlite|libsql/i.test(name)) return 'sqlite';
+  return 'other';
+}
+
+/** Options of {@link lucidStorage}. */
+export interface LucidStorageOptions {
+  /** Lucid connection name. Default: the default connection. */
+  connection?: string | undefined;
+  /**
+   * Postgres schema (MySQL: database) holding the tables. Every query names
+   * it (`"collab"."collab_documents"`), so nothing depends on the connection's
+   * `search_path`, and the first use creates it when missing. Default: the
+   * connection's current schema.
+   */
+  schema?: string | undefined;
+}
+
 /**
  * Official Lucid storage — persists docs (binary state), versions and
  * anchored comments in tables of the app's database.
@@ -33,21 +74,94 @@ const PRUNE_BATCH_SIZE = 500;
  */
 export class LucidStorage implements CollaborationStorage {
   private ready: Promise<void> | null = null;
+  private readonly connection: string | undefined;
+  /** The schema (MySQL: database) holding the tables, or undefined for the current one. */
+  readonly schema: string | undefined;
 
-  constructor(
-    db?: LucidConnectionLike,
-    private connection?: string,
-  ) {
+  constructor(db?: LucidConnectionLike, options?: string | LucidStorageOptions) {
     // Tests pass a real or mocked db instance; if so, bypass lazy import.
     if (db) LucidStorage._db = db;
+    const opts = typeof options === 'string' ? { connection: options } : (options ?? {});
+    if (opts.schema !== undefined) assertSchemaName(opts.schema);
+    this.connection = opts.connection;
+    this.schema = opts.schema;
   }
 
   /** Ensures the tables lazily on demand — boot doesn't touch the database. */
   private ensure(): Promise<void> {
     if (!this.ready) {
-      this.ready = this.ensureSchema();
+      // A failed attempt (database down, missing grant) is retried next time.
+      this.ready = this.ensureSchema().catch((error: unknown) => {
+        this.ready = null;
+        throw error;
+      });
     }
     return this.ready;
+  }
+
+  /** `table` as the query builder should name it: `schema.table` when a schema is set. */
+  private t(table: (typeof COLLAB_TABLES)[number]): string {
+    return this.schema ? `${this.schema}.${table}` : table;
+  }
+
+  /** A schema builder bound to the configured schema. */
+  private schemaBuilder(knex: Knex): Knex.SchemaBuilder {
+    return this.schema ? knex.schema.withSchema(this.schema) : knex.schema;
+  }
+
+  private async dialect(): Promise<Dialect> {
+    const client = (await this.knex()) as unknown as { dialect?: { name?: string } };
+    return dialectOf(client.dialect?.name);
+  }
+
+  /**
+   * Fails when `schema` is set on a connection that has no schemas (SQLite).
+   * Reads the connection config only; no query is sent. The provider calls it
+   * when the app boots.
+   */
+  async assertSchemaSupported(): Promise<void> {
+    if (this.schema === undefined) return;
+    if ((await this.dialect()) === 'sqlite') {
+      throw new Error(
+        `[@adonis-agora/collaboration] lucidStorage({ schema: '${this.schema}' }) needs Postgres or MySQL; ` +
+          'SQLite has no schemas. Remove `schema`, or point `connection` at a Postgres/MySQL connection.',
+      );
+    }
+  }
+
+  private async schemaExists(knex: Knex): Promise<boolean> {
+    const rows = await knex
+      .from('information_schema.schemata')
+      .select('schema_name')
+      .where('schema_name', this.schema as string);
+    return (rows as unknown[]).length > 0;
+  }
+
+  private async createSchema(knex: Knex): Promise<void> {
+    const schema = this.schema as string;
+    if (await this.schemaExists(knex)) return;
+    const dialect = await this.dialect();
+    const statement =
+      dialect === 'mysql'
+        ? `CREATE DATABASE IF NOT EXISTS \`${schema}\``
+        : `CREATE SCHEMA IF NOT EXISTS "${schema}"`;
+    try {
+      // A Lucid client's `raw()` only builds a fragment; `rawQuery()` runs it.
+      const client = knex as unknown as { rawQuery?(sql: string): Promise<unknown> };
+      await (client.rawQuery ? client.rawQuery(statement) : knex.raw(statement));
+    } catch (error) {
+      // Another process may have created it between the check and the CREATE.
+      if (await this.schemaExists(knex).catch(() => false)) return;
+      throw new Error(
+        `[@adonis-agora/collaboration] could not create the ${dialect === 'mysql' ? 'database' : 'schema'} ` +
+          `"${schema}" (${error instanceof Error ? error.message : String(error)}). Create it yourself ` +
+          `(${statement}) or let the database role create it ` +
+          (dialect === 'mysql'
+            ? '(GRANT CREATE ON *.* TO <user>).'
+            : '(GRANT CREATE ON DATABASE <database> TO <role>).'),
+        { cause: error },
+      );
+    }
   }
 
   private static _db: LucidConnectionLike | null = null;
@@ -66,8 +180,12 @@ export class LucidStorage implements CollaborationStorage {
 
   private async ensureSchema(): Promise<void> {
     const knex = await this.knex();
+    if (this.schema !== undefined) {
+      await this.assertSchemaSupported();
+      await this.createSchema(knex);
+    }
 
-    const schema = knex.schema.createTableIfNotExists('collab_documents', (t) => {
+    const schema = this.schemaBuilder(knex).createTableIfNotExists('collab_documents', (t) => {
       t.string('doc_name').primary();
       t.binary('state');
       t.jsonb('meta').nullable();
@@ -75,7 +193,7 @@ export class LucidStorage implements CollaborationStorage {
       t.timestamp('updated_at', { useTz: true });
     });
 
-    const versions = knex.schema.createTableIfNotExists('collab_versions', (t) => {
+    const versions = this.schemaBuilder(knex).createTableIfNotExists('collab_versions', (t) => {
       t.string('doc_name');
       t.string('id');
       t.string('created_by').nullable();
@@ -88,7 +206,7 @@ export class LucidStorage implements CollaborationStorage {
       t.primary(['doc_name', 'id']);
     });
 
-    const comments = knex.schema.createTableIfNotExists('collab_comments', (t) => {
+    const comments = this.schemaBuilder(knex).createTableIfNotExists('collab_comments', (t) => {
       t.string('id').primary();
       t.string('doc_name');
       t.string('space').defaultTo('text');
@@ -107,18 +225,31 @@ export class LucidStorage implements CollaborationStorage {
     // ("relation already exists") for an app that ran the published
     // migrations. So only the builders for missing tables are executed; knex
     // builders are lazy, nothing runs until they are awaited.
-    const present = await Promise.all([
-      knex.schema.hasTable('collab_documents'),
-      knex.schema.hasTable('collab_versions'),
-      knex.schema.hasTable('collab_comments'),
-    ]);
-    await Promise.all([schema, versions, comments].filter((_, index) => !present[index]));
+    const tablesPresent = () =>
+      Promise.all([
+        this.schemaBuilder(knex).hasTable('collab_documents'),
+        this.schemaBuilder(knex).hasTable('collab_versions'),
+        this.schemaBuilder(knex).hasTable('collab_comments'),
+      ]);
+    const present = await tablesPresent();
+    const results = await Promise.allSettled(
+      [schema, versions, comments].filter((_, index) => !present[index]),
+    );
+    const failed = results.find((result) => result.status === 'rejected');
+    if (!failed) return;
+    // Another process creating the same tables at the same moment makes one of
+    // the two CREATEs (or its CREATE INDEX) fail. Give it a moment to finish.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if ((await tablesPresent()).every(Boolean)) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw failed.reason;
   }
 
   async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
     await this.ensure();
     const row = await (await this.knex())
-      .from('collab_documents')
+      .from(this.t('collab_documents'))
       .where('doc_name', docName)
       .first();
     if (!row?.state) return null;
@@ -140,7 +271,7 @@ export class LucidStorage implements CollaborationStorage {
     // conflict target. `created_at` is deliberately left out of `.merge()` —
     // an update must not look like the row was created just now.
     await knex
-      .table('collab_documents')
+      .table(this.t('collab_documents'))
       .insert({
         doc_name: docName,
         state: Buffer.from(state),
@@ -160,7 +291,7 @@ export class LucidStorage implements CollaborationStorage {
     // just to map them away — on every listing, and on every `createVersion`,
     // which lists to find the next `seq`.
     let query = knex
-      .from('collab_versions')
+      .from(this.t('collab_versions'))
       .select('id', 'created_by', 'label', 'seq', 'created_at')
       .where('doc_name', docName)
       .orderBy('seq', page?.order === 'desc' ? 'desc' : 'asc');
@@ -187,7 +318,7 @@ export class LucidStorage implements CollaborationStorage {
   async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
     await this.ensure();
     await (await this.knex())
-      .table('collab_versions')
+      .table(this.t('collab_versions'))
       .insert({
         doc_name: docName,
         id: version.id,
@@ -204,7 +335,7 @@ export class LucidStorage implements CollaborationStorage {
   async loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null> {
     await this.ensure();
     const row = await (await this.knex())
-      .from('collab_versions')
+      .from(this.t('collab_versions'))
       .where('doc_name', docName)
       .andWhere('id', versionId)
       .first();
@@ -218,7 +349,7 @@ export class LucidStorage implements CollaborationStorage {
     await this.ensure();
 
     const knex = await this.knex();
-    let query = knex.from('collab_versions').select('doc_name', 'id', 'seq');
+    let query = knex.from(this.t('collab_versions')).select('doc_name', 'id', 'seq');
     if (docName) query = query.where('doc_name', docName);
     const rows = (await query) as Array<{ doc_name: string; id: string; seq: number }>;
 
@@ -240,7 +371,7 @@ export class LucidStorage implements CollaborationStorage {
       for (let index = 0; index < doomed.length; index += PRUNE_BATCH_SIZE) {
         const batch = doomed.slice(index, index + PRUNE_BATCH_SIZE).map((version) => version.id);
         removed += await knex
-          .from('collab_versions')
+          .from(this.t('collab_versions'))
           .where('doc_name', name)
           .whereIn('id', batch)
           .delete();
@@ -257,7 +388,7 @@ export class LucidStorage implements CollaborationStorage {
     await this.ensure();
     const knex = await this.knex();
     let query = knex
-      .from('collab_comments')
+      .from(this.t('collab_comments'))
       .where('doc_name', docName)
       .orderBy('created_at', page?.order === 'desc' ? 'desc' : 'asc');
     if (space) query = query.where('space', space);
@@ -300,7 +431,7 @@ export class LucidStorage implements CollaborationStorage {
     await this.ensure();
     const knex = await this.knex();
     const row = await knex
-      .from('collab_comments')
+      .from(this.t('collab_comments'))
       .where('doc_name', docName)
       .where('id', commentId)
       .first();
@@ -325,7 +456,7 @@ export class LucidStorage implements CollaborationStorage {
     // key, and `created_at` is excluded from `.merge()` so an edit does not
     // reset when the comment was created.
     await knex
-      .table('collab_comments')
+      .table(this.t('collab_comments'))
       .insert({
         id: comment.id,
         ...payload,
@@ -338,7 +469,7 @@ export class LucidStorage implements CollaborationStorage {
 
   async deleteComment(docName: string, commentId: string): Promise<void> {
     await this.ensure();
-    await (await this.knex()).from('collab_comments').where('id', commentId).delete();
+    await (await this.knex()).from(this.t('collab_comments')).where('id', commentId).delete();
     void docName;
   }
 }
@@ -350,8 +481,8 @@ export class LucidStorage implements CollaborationStorage {
  *
  * @example
  * // config/collaboration.ts
- * storage: lucidStorage({ connection: 'entretextos' })
+ * storage: lucidStorage({ connection: 'entretextos', schema: 'collab' })
  */
-export function lucidStorage(options: { connection?: string } = {}): LucidStorage {
-  return new LucidStorage(undefined, options.connection);
+export function lucidStorage(options: LucidStorageOptions = {}): LucidStorage {
+  return new LucidStorage(undefined, options);
 }

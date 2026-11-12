@@ -1,4 +1,5 @@
 import { BaseCommand, flags } from '@adonisjs/core/ace';
+import { assertSchemaName, LucidStorage } from '../src/storage/lucid_storage.js';
 import { stubsRoot } from '../stubs/main.js';
 
 /**
@@ -27,11 +28,22 @@ export default class CollaborationInit extends BaseCommand {
   })
   declare engine?: string;
 
+  @flags.string({
+    description:
+      'Postgres schema for the tables — defaults to `schema` of lucidStorage() in config',
+  })
+  declare schema?: string;
+
   override async run(): Promise<void> {
     const appConfig = this.app.config.get<{
       engine?: string;
       partykit?: { roomHost: string };
+      storage?: unknown;
     }>('collaboration', {});
+    const schema =
+      this.schema ??
+      (appConfig.storage instanceof LucidStorage ? appConfig.storage.schema : undefined);
+    if (schema !== undefined) assertSchemaName(schema);
 
     const resolvedEngine = this.engine ?? appConfig.engine ?? 'yjs';
     const hasDatabase = this.app.config.has('database');
@@ -49,6 +61,7 @@ export default class CollaborationInit extends BaseCommand {
         await codemods.makeUsingStub(stubsRoot, `collaboration/migrations/${tableName}.stub`, {
           migration: {
             tableName,
+            schema: schema ?? '',
             fileName: `${prefix}_${index}_create_${tableName}_table.ts`,
           },
         });
