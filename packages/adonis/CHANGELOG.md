@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 1.0.0-rc.2
+
+### Minor Changes
+
+- [#170](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/170) [`4a9d122`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/4a9d122a1df15a8a4631328b0523419acee873b8) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `lucidStorage({ connection, schema })`: the `collab_documents`, `collab_versions` and `collab_comments` tables live in their own Postgres schema (MySQL: database). Every query names it, so nothing depends on `search_path` and it is safe behind PgBouncer in transaction mode; the first use creates the schema when missing and explains the grant when the role cannot. `collaboration:init --schema` (defaulting to the configured one) publishes migrations that create the schema and the tables in it. A `schema` on a SQLite connection fails the boot. Two processes creating the tables at the same moment no longer fail, and a failed table creation is retried on the next call.
+
 ## 1.0.0-rc.1
 
 ### Patch Changes
