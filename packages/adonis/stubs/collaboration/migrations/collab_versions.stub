@@ -5,9 +5,12 @@ import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class extends BaseSchema {
   protected tableName = '{{ migration.tableName }}'
+  /** Postgres schema for the table (schema in lucidStorage); empty = the connection's current one. */
+  protected schemaName = '{{ migration.schema }}'
 
   async up() {
-    this.schema.createTable(this.tableName, (table) => {
+    if (this.schemaName) this.schema.createSchemaIfNotExists(this.schemaName)
+    this.schema.withSchema(this.schemaName).createTable(this.tableName, (table) => {
       table.string('doc_name').notNullable()
       table.string('id').notNullable()
       table.string('created_by').nullable()
@@ -23,6 +26,6 @@ export default class extends BaseSchema {
   }
 
   async down() {
-    this.schema.dropTable(this.tableName)
+    this.schema.withSchema(this.schemaName).dropTable(this.tableName)
   }
 }

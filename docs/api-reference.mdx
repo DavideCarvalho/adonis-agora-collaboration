@@ -269,7 +269,7 @@ interface ListPageOptions {
 `@adonis-agora/*` package pages identically. Omit it entirely to get every row — that is what the
 internal `seq` and restore lookups rely on; the HTTP routes always supply one.
 
-Implementations: `lucidStorage({ connection })` / `LucidStorage`, `FileSystemStorage(baseDir?)`,
+Implementations: `lucidStorage({ connection, schema })` / `LucidStorage`, `FileSystemStorage(baseDir?)`,
 `InMemoryCollaborationStorage`.
 
 ## Token helpers
@@ -392,7 +392,7 @@ CollabDocumentNameFor<'researches/:id/writing'>       // `researches/${string}/w
 
 | Command | Flags |
 | --- | --- |
-| `collaboration:init` | `--engine=yjs\|automerge\|partykit` |
+| `collaboration:init` | `--engine=yjs\|automerge\|partykit` · `--schema=<name>` |
 | `make:collab-document <name>` | `--spaces=a,b` · `--anchors=text-range,canvas-object,timestamp` |
 
 ## Client — `@adonis-agora/collaboration-client`

@@ -54,6 +54,45 @@ works before anyone has migrated. Both paths create the same schema — but ship
 anyway. They are what makes the schema reviewable in a pull request, versioned with the code, and
 reversible. The lazy creation is there so development does not stall, not so you can skip it.
 
+## Database schema
+
+By default the tables live in the connection's current schema (`public` on Postgres). To keep them
+in a schema of their own, pass `schema`:
+
+```ts title="config/collaboration.ts"
+import { defineConfig, lucidStorage } from '@adonis-agora/collaboration'
+
+export default defineConfig({
+  engine: 'yjs',
+  storage: lucidStorage({ connection: 'primary', schema: 'collab' }),
+  // ...
+})
+```
+
+Every query the storage sends names the schema (`"collab"."collab_documents"`). Before its first
+query it runs `CREATE SCHEMA IF NOT EXISTS "collab"` and creates the tables there. If the database
+role cannot create schemas, the error names the schema and the grant it needs; create the schema
+yourself, or grant `CREATE` on the database.
+
+Run `node ace collaboration:init` after setting `schema` (or pass `--schema=collab`): the migrations
+it publishes create the schema and the tables in it.
+
+The name must be a plain identifier: letters, digits, `_` and `$`, not starting with a digit, at
+most 63 characters.
+
+<Callout type="warn" title="Don't use searchPath for this">
+Don't move the tables with a Lucid connection that sets `searchPath`. Knex sends
+`SET search_path` on the session, and behind PgBouncer in transaction mode that setting leaks to
+other clients' connections. `schema` never touches `search_path`.
+</Callout>
+
+On MySQL, `schema` is the database the tables go in (`` `collab`.`collab_documents` ``), created
+with `CREATE DATABASE IF NOT EXISTS` on first use. The published migrations create a Postgres
+schema; on MySQL create the database yourself before running them. SQLite has no schemas: with
+`schema` set on a SQLite connection, the app fails to boot.
+
+When you read the tables yourself, name the schema too: `db.from('collab.collab_comments')`.
+
 ## Reading the data yourself
 
 These are ordinary tables. Nothing stops you from querying them, and some things are much easier

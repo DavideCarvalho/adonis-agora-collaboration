@@ -6,6 +6,7 @@ import { type CollabLogger, setCollaborationLogger } from '../src/observability.
 import { collaborationRoutes } from '../src/routes.js';
 import { setBootedApp } from '../src/services/booted_app.js';
 import { RedisPresenceStore } from '../src/services/presence_service.js';
+import { LucidStorage } from '../src/storage/lucid_storage.js';
 import type { CollaborationConfig } from '../src/types.js';
 
 /**
@@ -62,6 +63,13 @@ export default class CollaborationServiceProvider {
     } catch {
       // No logger bound (bare container, some test harnesses): the event
       // stream in src/observability.ts still carries every failure.
+    }
+
+    // `lucidStorage({ schema })` on a connection without schemas (SQLite)
+    // fails the boot here rather than on the first document. Reads the
+    // connection config only; no query is sent.
+    if (this.config?.storage instanceof LucidStorage) {
+      await this.config.storage.assertSchemaSupported();
     }
 
     // Auto-register built-in REST endpoints unless explicitly disabled.
