@@ -31,6 +31,9 @@ node ace collaboration:documents:show --doc=researches/42/writing
 `documents:show` reads the stored state and counts. It does not open the document or call its
 `load` hook.
 
+`documents:list` shows the engine each declaration names. If you set `engineFor` in the config, it
+can route a document elsewhere; `documents:show` always prints the engine the document really uses.
+
 ## Versions
 
 ```bash

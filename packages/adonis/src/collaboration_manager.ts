@@ -79,13 +79,14 @@ export class CollaborationManager {
 
   /** Documento declarado que casa com o docName (pattern match). */
   #documentFor(docName: string): {
+    pattern: string;
     declaration: import('./documents.js').CollabDocumentDeclaration;
     params: Record<string, string>;
   } | null {
     if (!this.config.documents) return null;
     for (const [pattern, declaration] of Object.entries(this.config.documents)) {
       const params = matchDocumentPattern(pattern, docName);
-      if (params) return { declaration, params };
+      if (params) return { pattern, declaration, params };
     }
     return null;
   }
@@ -444,8 +445,12 @@ export class CollaborationManager {
 
   /**
    * The `documents` declared in `config/collaboration.ts`: each pattern, its
-   * `:params`, the engine it runs on and which hooks it declares. What
-   * `node ace collaboration:documents:list` prints.
+   * `:params`, the engine it declares (or the default) and which hooks it
+   * declares. What `node ace collaboration:documents:list` prints.
+   *
+   * `engineFor` in the config overrides the declared engine per document name,
+   * so with it set `engine` here is only what the declaration says;
+   * {@link describeDocument} resolves the engine a document really runs on.
    */
   listDocumentDeclarations(): DocumentDeclarationInfo[] {
     const fallback = this.config.engine ?? 'yjs';
@@ -468,7 +473,7 @@ export class CollaborationManager {
    * `node ace collaboration:documents:show` prints.
    */
   async describeDocument({ docName }: { docName: string }): Promise<DocumentDescription> {
-    const declared = this.#findDeclaration(docName);
+    const declared = this.#documentFor(docName);
     const [engine, stored, versions, comments, presence, live] = await Promise.all([
       this.engineFor({ docName }),
       this.config.storage ? this.config.storage.loadDocument(docName) : Promise.resolve(null),
@@ -489,14 +494,6 @@ export class CollaborationManager {
       presence: presence.length,
       liveHere: live,
     };
-  }
-
-  #findDeclaration(docName: string): { pattern: string; params: Record<string, string> } | null {
-    for (const pattern of Object.keys(this.config.documents ?? {})) {
-      const params = matchDocumentPattern(pattern, docName);
-      if (params) return { pattern, params };
-    }
-    return null;
   }
 
   async close(): Promise<void> {
