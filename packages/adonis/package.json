@@ -113,7 +113,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.compat.json --noEmit"
   },
   "dependencies": {
-    "@adonis-agora/filter": "^1.0.0-rc.5",
+    "@adonis-agora/filter": "1.0.0-rc.5",
     "@automerge/automerge": "3.5.0",
     "@hocuspocus/server": "4.8.0",
     "@hocuspocus/transformer": "4.8.0",
