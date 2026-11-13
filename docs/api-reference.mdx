@@ -155,6 +155,7 @@ clear message if it is read too early.
 | `getVersionState({ docName, versionId })` | `Promise<Uint8Array>` — the binary state of one version; throws on an unknown id |
 | `createVersion({ docName, createdBy, label? })` | `Promise<CollabVersion>` |
 | `listVersions({ docName, page?, size?, order? })` | `Promise<CollabVersion[]>` — every version when no paging option is given |
+| `countVersions({ docName })` | `Promise<number>` — how many versions the document has |
 | `restoreVersion({ docName, versionId, restoredBy })` | `Promise<void>` — applies live; first snapshots the replaced state as a new `restored from #<seq>` version, attributed to `restoredBy` |
 | `diffVersions({ docName, aId, bId })` | `Promise<{ added: number; removed: number }>` |
 | `pruneVersions({ keep, docName?, dryRun? })` | `Promise<number>` — versions deleted; `keep` is per document |
@@ -171,6 +172,7 @@ clear message if it is read too early.
 | Method | Returns |
 | --- | --- |
 | `list(docName, space?, page?)` | `Promise<CollabComment[]>` — oldest first; newest first with `{ order: 'desc' }` |
+| `count(docName, space?)` | `Promise<number>` — how many comments the document has, in `space` when given |
 | `get(docName, commentId)` | `Promise<CollabComment \| null>` — one comment, through the storage's indexed lookup when it has one (`getComment`), else a filtered list |
 | `create(docName, { space, anchor, body, userId, authorName? })` | `Promise<CollabComment>` |
 | `resolve(docName, commentId, resolved)` | `Promise<CollabComment \| null>` — a toggle |
@@ -246,11 +248,13 @@ interface CollaborationStorage {
   saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void>
 
   listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]>
+  countVersions?(docName: string): Promise<number>                                // optional
   saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>
   loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>
   pruneVersions(options: { keep: number; docName?: string; dryRun?: boolean }): Promise<number>
 
   listComments(docName: string, space?: string, page?: ListPageOptions): Promise<CollabComment[]>
+  countComments?(docName: string, space?: string): Promise<number>                // optional
   getComment?(docName: string, commentId: string): Promise<CollabComment | null>  // optional
   saveComment(docName: string, comment: CollabComment): Promise<void>
   deleteComment(docName: string, commentId: string): Promise<void>
@@ -268,6 +272,9 @@ interface ListPageOptions {
 `ListPageOptions` mirrors `@adonis-agora/filter`'s pagination shape (`page`/`size`) so every
 `@adonis-agora/*` package pages identically. Omit it entirely to get every row — that is what the
 internal `seq` and restore lookups rely on; the HTTP routes always supply one.
+
+`countVersions` and `countComments` give the `total` of a listing page. A storage without them is
+counted through the full `listVersions` / `listComments` result.
 
 Implementations: `lucidStorage({ connection, schema })` / `LucidStorage`, `FileSystemStorage(baseDir?)`,
 `InMemoryCollaborationStorage`.
@@ -361,19 +368,21 @@ rule through the manager — the same one the handshake uses — and deny when n
 | Method | Path | Body / query |
 | --- | --- | --- |
 | `GET` | `/token` | `?doc=` |
-| `GET` | `/comments` | `?doc=&space=&page=&size=&order=` — `order=desc` for newest first |
+| `GET` | `/comments` | `?doc=&filter[space]=&sort=&page=&size=` → `{ data, meta }` — `sort=-createdAt` for newest first |
 | `POST` | `/comments` | `{ docName, space, anchor, body }` — author (id and name) is the caller |
 | `PATCH` | `/comments/:id` | `?doc=` · `{ resolved? }` (default `true`) — author or `canWrite` |
 | `DELETE` | `/comments/:id` | `?doc=` — author or `canWrite` |
-| `GET` | `/versions` | `?doc=&page=&size=&order=` — `order=desc` for newest first |
+| `GET` | `/versions` | `?doc=&sort=&page=&size=` → `{ data, meta }` — `sort=-seq` for newest first |
 | `POST` | `/versions` | `{ docName, label? }` — `createdBy` is the caller |
 | `POST` | `/versions/restore` | `{ docName, versionId }` → `204` |
 | `GET` | `/state` | `?doc=` → `application/octet-stream` |
 | `POST` | `/state` | `?doc=` · raw body · `x-collab-worker-secret` |
 
-`GET /comments` and `GET /versions` page with `page`/`size` — offset-based, `page` **1-based**
-(default `1`) and `size` clamped server-side to `1..200` (default `50`). Same shape as
-`@adonis-agora/filter`, so every Agora list endpoint pages identically.
+`GET /comments` and `GET /versions` use the `@adonis-agora/filter` list format: offset paging with a
+**1-based** `page` (default `1`) and `size` clamped to `1..200` (default `50`), answered as
+`{ data, meta: { total, perPage, currentPage, lastPage, firstPage } }`. Comments filter by
+`filter[space]` and sort by `createdAt`; versions sort by `seq`. An unknown filter field or sort
+answers `400`.
 
 Also exported: `defaultResolveUser` (authenticates via `ctx.auth.check()` before reading the user),
 `canMutateComment({ comment, userId, permission })` and `secretsMatch(received, expected)`.
@@ -465,8 +474,9 @@ useExcalidrawSync({ doc, excalidrawAPI, editorId? }): void
 // doc: CollabDoc | Y.Doc | null — either of the two useCollabDoc returns
 // editorId defaults to 'excalidraw'; the scene is last-write-wins on one key
 
-useComments({ docName, space?, page?, size?, order? }): {
-  comments: CollabComment[]
+useComments({ docName, space?, sort?, page?, size? }): {
+  comments: CollabComment[]          // the current page
+  meta: OffsetPageMeta | null        // total, perPage, currentPage, lastPage, firstPage
   loading: boolean
   error: Error | null
   refresh(): Promise<void>
@@ -475,8 +485,9 @@ useComments({ docName, space?, page?, size?, order? }): {
   remove(commentId): Promise<void>
 }
 
-useVersions({ docName, page?, size?, order? }): {
-  versions: CollabVersion[]
+useVersions({ docName, sort?, page?, size? }): {
+  versions: CollabVersion[]          // the current page
+  meta: OffsetPageMeta | null
   loading: boolean
   error: Error | null
   refresh(): Promise<void>
@@ -536,11 +547,11 @@ class DocSession {
 }
 
 fetchToken(config, docName)
-listComments(config, docName, space?, { page?, size?, order? }?)
+listComments(config, docName, { space?, sort?, page?, size? }?)   // → OffsetPage<CollabComment>
 createComment(config, input)
 resolveComment(config, docName, commentId, resolved)
 deleteComment(config, docName, commentId)
-listVersions(config, docName, { page?, size?, order? }?)
+listVersions(config, docName, { sort?, page?, size? }?)           // → OffsetPage<CollabVersion>
 createVersion(config, docName, label)
 restoreVersion(config, docName, versionId)
 collabFetch<T>(config, path, init?)

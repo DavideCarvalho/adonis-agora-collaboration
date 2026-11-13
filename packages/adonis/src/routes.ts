@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { offsetPage } from '@adonis-agora/filter';
 import {
   type AuthorizeFn,
   CollabForbiddenError,
   type IssuedToken,
   issueToken,
 } from './auth/token.js';
+import { InvalidColumnFilterError, parseCommentList, parseVersionList } from './http/list_api.js';
 import {
   type CollabHttpContext,
   type CollabManagerLike,
@@ -14,30 +16,7 @@ import {
   CollabUnauthorizedError,
   type ResolveUserFn,
 } from './http/types.js';
-import { clampPage, clampSize } from './storage/shared.js';
 import type { CollabPermission } from './types.js';
-
-/**
- * Parses `page`/`size`/`order` off a query string, clamped to a sane page.
- * `page` is 1-based, matching `@adonis-agora/filter`'s `?page=1&size=25` wire
- * format; `order=desc` lists newest first, anything else oldest first.
- */
-function pageOf(qs: Record<string, unknown>): {
-  page: number;
-  size: number;
-  order: 'asc' | 'desc';
-} {
-  const toNumber = (value: unknown): number | undefined => {
-    if (typeof value === 'number') return value;
-    if (typeof value === 'string' && value.trim() !== '') return Number(value);
-    return undefined;
-  };
-  return {
-    page: clampPage(toNumber(qs.page)),
-    size: clampSize(toNumber(qs.size)),
-    order: qs.order === 'desc' ? 'desc' : 'asc',
-  };
-}
 
 /**
  * Built-in REST endpoints for the collaboration package.
@@ -349,19 +328,31 @@ async function handleListComments(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const qs = ctx.request.qs() as {
-    doc?: string;
-    space?: string;
-    page?: string;
-    size?: string;
-    order?: string;
-  };
-  const { doc, space } = qs;
-  const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
+  const qs = ctx.request.qs();
+  const allowed = await guard(ctx, runtime, resolveUser, qs.doc as string | undefined, 'canRead');
   if (isDenied(allowed)) return allowed.denied;
 
+  let list: Awaited<ReturnType<typeof parseCommentList>>;
+  try {
+    list = await parseCommentList(qs);
+  } catch (error) {
+    return badListRequest(ctx, error);
+  }
+  const { space, page, size, order } = list;
   const manager = await runtime.manager();
-  return manager.comments.list(allowed.docName, space, pageOf(qs));
+  const [rows, total] = await Promise.all([
+    manager.comments.list(allowed.docName, space, { page, size, order }),
+    manager.comments.count(allowed.docName, space),
+  ]);
+  return offsetPage(rows, { total, page, size });
+}
+
+/** A refused filter or sort is the caller's mistake: `400`, never a silently wider list. */
+function badListRequest(ctx: CollabHttpContext, error: unknown): unknown {
+  if (error instanceof InvalidColumnFilterError) {
+    return ctx.response.status(400).json({ error: error.message });
+  }
+  throw error;
 }
 
 async function handleCreateComment(
@@ -459,12 +450,23 @@ async function handleListVersions(
   runtime: Runtime,
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
-  const qs = ctx.request.qs() as { doc?: string; page?: string; size?: string; order?: string };
-  const allowed = await guard(ctx, runtime, resolveUser, qs.doc, 'canRead');
+  const qs = ctx.request.qs();
+  const allowed = await guard(ctx, runtime, resolveUser, qs.doc as string | undefined, 'canRead');
   if (isDenied(allowed)) return allowed.denied;
 
+  let list: Awaited<ReturnType<typeof parseVersionList>>;
+  try {
+    list = await parseVersionList(qs);
+  } catch (error) {
+    return badListRequest(ctx, error);
+  }
+  const { page, size, order } = list;
   const manager = await runtime.manager();
-  return manager.listVersions({ docName: allowed.docName, ...pageOf(qs) });
+  const [rows, total] = await Promise.all([
+    manager.listVersions({ docName: allowed.docName, page, size, order }),
+    manager.countVersions({ docName: allowed.docName }),
+  ]);
+  return offsetPage(rows, { total, page, size });
 }
 
 async function handleCreateVersion(

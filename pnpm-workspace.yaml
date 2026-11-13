@@ -16,3 +16,5 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@types/node@26.5.0'
   - unplugin-swc@1.6.0
+  - '@adonis-agora/filter-client@1.0.0-rc.1'
+  - '@adonis-agora/filter@1.0.0-rc.5'

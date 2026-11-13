@@ -24,6 +24,9 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
       calls.push(`versions:${docName}`);
       return [];
     },
+    async countVersions() {
+      return 0;
+    },
     async restoreVersion({ docName, restoredBy }) {
       calls.push(`restore:${docName}:${restoredBy}`);
     },
@@ -31,6 +34,9 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
       async list(docName) {
         calls.push(`comments:${docName}`);
         return [];
+      },
+      async count() {
+        return 0;
       },
       async create(docName, comment) {
         calls.push(`comment-create:${docName}:${(comment as { userId: string }).userId}`);

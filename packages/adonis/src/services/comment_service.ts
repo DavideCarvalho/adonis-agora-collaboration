@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { countCommentsIn } from '../storage/shared.js';
 import type { CollabComment, CollaborationStorage, ListPageOptions } from '../types.js';
 
 /**
@@ -16,6 +17,11 @@ export class CommentService {
     const comments = await this.storage.listComments(docName, space, page);
     const direction = page?.order === 'desc' ? -1 : 1;
     return comments.sort((a, b) => direction * a.createdAt.localeCompare(b.createdAt));
+  }
+
+  /** How many comments the document has (in `space`, when given). */
+  count(docName: string, space?: string): Promise<number> {
+    return countCommentsIn(this.storage, docName, space);
   }
 
   /**

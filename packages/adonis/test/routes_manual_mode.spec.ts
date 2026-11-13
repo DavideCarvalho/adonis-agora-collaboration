@@ -50,6 +50,9 @@ function makeManager(permission: {
       calls.push('versions');
       return [];
     },
+    async countVersions() {
+      return 0;
+    },
     async restoreVersion() {
       calls.push('restore');
     },
@@ -57,6 +60,9 @@ function makeManager(permission: {
       async list() {
         calls.push('comments');
         return [];
+      },
+      async count() {
+        return 0;
       },
       async create() {
         return {};

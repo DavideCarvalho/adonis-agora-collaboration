@@ -1,3 +1,4 @@
+export type { OffsetPage, OffsetPageMeta } from '@adonis-agora/filter-client';
 export type { ExcalidrawBoardProps } from './components/excalidraw_board.js';
 export { ExcalidrawBoard } from './components/excalidraw_board.js';
 export type { CollaborationProviderProps, GetOrCreateSessionOptions } from './context.js';
@@ -60,6 +61,7 @@ export { PartyKitCollabTransport } from './transports/partykit.js';
 export { PartyServerCollabTransport } from './transports/partyserver.js';
 export type {
   CollabComment,
+  CollabCommentListOptions,
   CollabListOptions,
   CollaborationClientConfig,
   CollabPeer,
@@ -67,5 +69,6 @@ export type {
   CollabTokenInfo,
   CollabTransport,
   CollabVersion,
+  CollabVersionListOptions,
   TransportFactory,
 } from './types.js';

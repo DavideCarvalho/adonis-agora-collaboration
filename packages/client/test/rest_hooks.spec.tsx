@@ -25,6 +25,11 @@ const versions = [
   { id: 'v1', createdAt: new Date().toISOString(), createdBy: null, label: null, seq: 1 },
 ];
 
+const page = <T,>(data: T[]) => ({
+  data,
+  meta: { total: data.length, perPage: 50, currentPage: 1, lastPage: 1, firstPage: 1 },
+});
+
 function makeWrapper(extra: { prefix?: string } = {}) {
   const { factory } = fakeTransportFactory();
   const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -36,13 +41,13 @@ function makeWrapper(extra: { prefix?: string } = {}) {
       return Response.json({ ...comments[0], id: 'c2' });
     }
     if (url.includes('/comments')) {
-      return Response.json(comments);
+      return Response.json(page(comments));
     }
     if (url.includes('/versions') && (input as Request).method === 'POST') {
       return Response.json({ ...versions[0], id: 'v2', seq: 2 });
     }
     if (url.includes('/versions')) {
-      return Response.json(versions);
+      return Response.json(page(versions));
     }
     return new Response('not found', { status: 404 });
   });
@@ -74,11 +79,12 @@ describe('useComments', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.comments).toHaveLength(1);
+    expect(result.current.meta).toMatchObject({ total: 1, currentPage: 1 });
     const [url] = fetchMock.mock.calls.find((call) => String(call[0]).includes('/comments')) as [
       string,
     ];
     expect(url).toContain('doc=docs%2F9');
-    expect(url).toContain('space=text');
+    expect(url).toContain('filter%5Bspace%5D=text');
   });
 
   it('create chama POST e refresca a lista', async () => {
@@ -158,7 +164,7 @@ describe('list paging through the hooks', () => {
     const { wrapper, fetchMock } = makeWrapper();
     const { result, rerender } = renderHook(
       ({ page }: { page: number }) =>
-        useVersions({ docName: 'docs/9', order: 'desc', size: 20, page }),
+        useVersions({ docName: 'docs/9', sort: '-seq', size: 20, page }),
       { wrapper, initialProps: { page: 1 } },
     );
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -168,7 +174,7 @@ describe('list paging through the hooks', () => {
       doc: 'docs/9',
       page: '1',
       size: '20',
-      order: 'desc',
+      sort: '-seq',
     });
 
     rerender({ page: 2 });
@@ -177,10 +183,10 @@ describe('list paging through the hooks', () => {
     expect(urls.at(-1)!.searchParams.get('page')).toBe('2');
   });
 
-  it('useComments passes order and size along with the space', async () => {
+  it('useComments passes sort and size along with the space filter', async () => {
     const { wrapper, fetchMock } = makeWrapper({ prefix: '/api/collab' });
     const { result } = renderHook(
-      () => useComments({ docName: 'docs/9', space: 'text', order: 'desc', size: 10 }),
+      () => useComments({ docName: 'docs/9', space: 'text', sort: '-createdAt', size: 10 }),
       { wrapper },
     );
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -189,9 +195,9 @@ describe('list paging through the hooks', () => {
     expect(url.pathname).toBe('/api/collab/comments');
     expect(Object.fromEntries(url.searchParams)).toEqual({
       doc: 'docs/9',
-      space: 'text',
+      'filter[space]': 'text',
       size: '10',
-      order: 'desc',
+      sort: '-createdAt',
     });
   });
 });

@@ -79,35 +79,57 @@ describe('rest_client', () => {
   });
 });
 
+const emptyPage = {
+  data: [],
+  meta: { total: 0, perPage: 50, currentPage: 1, lastPage: 1, firstPage: 1 },
+};
+
 describe('rest_client paging and prefix', () => {
   const lastUrl = (fetchMock: ReturnType<typeof vi.fn>) =>
     new URL((fetchMock.mock.calls.at(-1) as [string])[0]);
 
-  it('sends page, size and order on the list calls, and nothing it was not given', async () => {
-    const fetchMock = vi.fn().mockImplementation(async () => Response.json([]));
+  it('sends filter[space], sort, page and size on the list calls, and nothing it was not given', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(emptyPage));
     vi.stubGlobal('fetch', fetchMock);
 
-    await listVersions(config, 'd/1', { page: 2, size: 25, order: 'desc' });
+    await listVersions(config, 'd/1', { page: 2, size: 25, sort: '-seq' });
     expect(Object.fromEntries(lastUrl(fetchMock).searchParams)).toEqual({
       doc: 'd/1',
       page: '2',
       size: '25',
-      order: 'desc',
+      sort: '-seq',
     });
 
-    await listComments(config, 'd/1', 'text', { order: 'desc' });
+    await listComments(config, 'd/1', { space: 'text', sort: '-createdAt' });
     expect(Object.fromEntries(lastUrl(fetchMock).searchParams)).toEqual({
       doc: 'd/1',
-      space: 'text',
-      order: 'desc',
+      'filter[space]': 'text',
+      sort: '-createdAt',
+    });
+
+    await listComments(config, 'd/1', { sort: 'createdAt', page: 3 });
+    expect(Object.fromEntries(lastUrl(fetchMock).searchParams)).toEqual({
+      doc: 'd/1',
+      sort: 'createdAt',
+      page: '3',
     });
 
     await listVersions(config, 'd/1');
     expect(Object.fromEntries(lastUrl(fetchMock).searchParams)).toEqual({ doc: 'd/1' });
   });
 
+  it('returns the { data, meta } page as the server sent it', async () => {
+    const page = {
+      data: [{ id: 'v1', createdAt: '', createdBy: null, label: null, seq: 1 }],
+      meta: { total: 51, perPage: 50, currentPage: 2, lastPage: 2, firstPage: 1 },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(page)));
+
+    await expect(listVersions(config, 'd/1', { page: 2 })).resolves.toEqual(page);
+  });
+
   it('mounts every route under config.prefix', async () => {
-    const fetchMock = vi.fn().mockImplementation(async () => Response.json([]));
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(emptyPage));
     vi.stubGlobal('fetch', fetchMock);
 
     await listVersions({ ...config, prefix: '/api/collab/' }, 'd/1');

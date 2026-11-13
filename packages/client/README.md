@@ -41,8 +41,8 @@ function Writing({ docName }: { docName: string }) {
   // Y.Doc shared per docName (cached across mounts), + connection status
   const { doc, status, error } = useCollabDoc(docName)
   const { peers } = useAwareness(docName)          // who's online
-  const { comments, create, resolve, remove } = useComments(docName, 'text')
-  const { versions, create: createVersion, restore } = useVersions(docName)
+  const { comments, create, resolve, remove } = useComments({ docName, space: 'text' })
+  const { versions, create: createVersion, restore } = useVersions({ docName, sort: '-seq' })
 
   if (status === 'error') return <p>{error?.message}</p>
 
@@ -78,8 +78,8 @@ Bring your own sync engine by injecting a factory:
 |---|---|
 | `useCollabDoc(docName)` | `{ doc: Y.Doc, status: 'connecting'\|'connected'\|'disconnected'\|'error', error }` |
 | `useAwareness(docName)` | `{ peers: CollabPeer[], status }` |
-| `useComments(docName, space?)` | `{ comments, loading, error, refresh, create, resolve, remove }` |
-| `useVersions(docName)` | `{ versions, loading, error, refresh, create, restore }` |
+| `useComments({ docName, space?, sort?, page?, size? })` | `{ comments, meta, loading, error, refresh, create, resolve, remove }` |
+| `useVersions({ docName, sort?, page?, size? })` | `{ versions, meta, loading, error, refresh, create, restore }` |
 
 ## License
 

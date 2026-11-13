@@ -42,6 +42,12 @@ export interface CollaborationDriver {
   /** Lists the versions in the history. `page` bounds the result — omit it for every version. */
   listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]>;
 
+  /**
+   * How many versions the history has. Optional: without it the manager
+   * counts `listVersions(docName)`.
+   */
+  countVersions?(docName: string): Promise<number>;
+
   /** Restores the document to a version (creates a new "restored from X" version). */
   restoreVersion(docName: string, versionId: string, restoredBy: string | null): Promise<void>;
 

@@ -333,6 +333,13 @@ export class CollaborationManager {
     return this.#driverFor(docName).then((driver) => driver.listVersions(docName, options));
   }
 
+  /** How many versions the document has — the `total` next to a page of {@link listVersions}. */
+  async countVersions({ docName }: { docName: string }): Promise<number> {
+    const driver = await this.#driverFor(docName);
+    if (driver.countVersions) return driver.countVersions(docName);
+    return (await driver.listVersions(docName)).length;
+  }
+
   /**
    * Binary state stored for one version — `getDocumentState` for a point in
    * the history. Extracting the text of a version, diffing it against

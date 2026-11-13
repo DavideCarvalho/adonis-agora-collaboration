@@ -16,11 +16,11 @@ Adonis routes, Tuyau types them for your frontend like any other.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/collaboration/token?doc=` | mint a WebSocket credential for a document |
-| `GET` | `/collaboration/comments?doc=&space=&page=&size=` | list a document's comments, optionally one space |
+| `GET` | `/collaboration/comments?doc=&filter[space]=&sort=&page=&size=` | list a document's comments, optionally one space |
 | `POST` | `/collaboration/comments` | create an anchored comment |
 | `PATCH` | `/collaboration/comments/:id?doc=` | resolve or reopen a comment |
 | `DELETE` | `/collaboration/comments/:id?doc=` | remove a comment |
-| `GET` | `/collaboration/versions?doc=&page=&size=` | list a document's versions |
+| `GET` | `/collaboration/versions?doc=&sort=&page=&size=` | list a document's versions |
 | `POST` | `/collaboration/versions` | create a named version |
 | `POST` | `/collaboration/versions/restore` | restore a version into the live document |
 | `GET` | `/collaboration/state?doc=` | read the raw document binary |
@@ -49,20 +49,34 @@ GET /collaboration/token?doc=researches/42/writing
 
 | Status | When |
 | --- | --- |
-| `400` | the `doc` query param is missing |
+| `400` | the `doc` query param is missing — or, on a listing, an unknown filter field or sort |
 | `401` | no authenticated user could be resolved |
 | `403` | `authorize` returned `canRead: false` |
 
 ### Comments
 
 ```http
-GET /collaboration/comments?doc=researches/42/writing&space=text
+GET /collaboration/comments?doc=researches/42/writing&filter[space]=text&sort=-createdAt&page=1&size=25
 ```
 
-Returns `CollabComment[]`, oldest first. Omit `space` for every space. `page`/`size` page the
-result — offset-based with a **1-based** `page` (default `1`) and a `size` clamped server-side to
-`1..200` (default `50`), the same `?page=1&size=25` shape every `@adonis-agora/*` list endpoint
-uses. Omit both for the first page.
+```json
+{
+  "data": [{ "id": "…", "space": "text", "body": "rephrase this", "createdAt": "…" }],
+  "meta": { "total": 120, "perPage": 25, "currentPage": 1, "lastPage": 5, "firstPage": 1 }
+}
+```
+
+The listing speaks the `@adonis-agora/filter` wire format:
+
+| Param | Meaning |
+| --- | --- |
+| `filter[space]` | one comment space; omit it for every space |
+| `sort` | `createdAt` (oldest first, the default) or `-createdAt` (newest first) |
+| `page` | 1-based page number, default `1` |
+| `size` | page size, default `50`, capped at `200` |
+
+Any other `filter[…]` field, an operator other than equality on `space`, or a `sort` outside the
+list above answers `400` with `{ "error": "…" }`.
 
 ```http
 POST /collaboration/comments
@@ -100,7 +114,9 @@ POST /collaboration/versions            { "docName": "…", "label": "before rev
 POST /collaboration/versions/restore    { "docName": "…", "versionId": "…" }
 ```
 
-`GET /versions` takes the same `page`/`size` paging as `GET /comments`. `POST /versions` returns
+`GET /versions` answers the same `{ data, meta }` page and takes `page`/`size` like
+`GET /comments`. Its `sort` is `seq` (oldest first, the default) or `-seq` (newest first); it has
+no filter field, so any `filter[…]` answers `400`. `POST /versions` returns
 the created `CollabVersion`; like a comment, its `createdBy` is the authenticated caller and a
 `userId` in the body is ignored. `POST /versions/restore` returns `204`
 and takes effect **live** — every connected client receives the restored content through the sync

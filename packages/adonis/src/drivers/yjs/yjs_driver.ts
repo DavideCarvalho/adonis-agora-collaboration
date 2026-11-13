@@ -22,6 +22,7 @@ import type {
   SelfHostedDriverOptions,
 } from '../../driver.js';
 import { reportCollaborationError } from '../../observability.js';
+import { countVersionsIn } from '../../storage/shared.js';
 import type {
   CollabConnectionContext,
   CollabDiffSummary,
@@ -621,6 +622,10 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
 
   async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
     return this.storage.listVersions(docName, page);
+  }
+
+  countVersions(docName: string): Promise<number> {
+    return countVersionsIn(this.storage, docName);
   }
 
   /**

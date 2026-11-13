@@ -48,7 +48,11 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
     }) {
       calls.push(`versions:${docName}:${page}:${size}`);
       calls.push(`versions-order:${order}`);
-      return [];
+      return [{ id: 'v1', seq: 1 }];
+    },
+    async countVersions({ docName }: { docName: string }) {
+      calls.push(`versions-count:${docName}`);
+      return 120;
     },
     async restoreVersion() {},
     async persistDocument({ docName, state }: { docName: string; state: Uint8Array }) {
@@ -59,6 +63,10 @@ function makeManager(): CollabManagerLike & { calls: string[] } {
         calls.push(`comments:${docName}:${space}:${page?.page}:${page?.size}`);
         calls.push(`comments-order:${page?.order}`);
         return [{ id: 'c1' }];
+      },
+      async count(docName, space) {
+        calls.push(`comments-count:${docName}:${space}`);
+        return 7;
       },
       async create(_docName, comment) {
         calls.push(`comment-create:${JSON.stringify(comment)}`);
@@ -350,92 +358,138 @@ describe('comments + versions endpoints', () => {
 });
 
 /**
- * `GET /versions` and `GET /comments` used to hand the manager `docName`
- * alone — every version/comment of a long-lived document came back as one
- * JSON array. The route now always clamps a page (default size 50, max 200)
- * and passes it through, so an unbounded query string can't select the whole
- * table even for a caller who never heard of pagination.
- *
- * The wire format is `?page=1&size=25` — 1-based, matching
- * `@adonis-agora/filter` so every Agora endpoint pages identically.
+ * `GET /versions` and `GET /comments` speak the `@adonis-agora/filter` list
+ * wire format: `filter[space]=…`, `sort=…`, 1-based `page` + `size` (default
+ * 50, max 200), answered as `{ data, meta }`.
  */
-describe('list pagination (versions + comments)', () => {
-  it('defaults to page 1 / size 50 when the query string has none', async () => {
+describe('list API (versions + comments)', () => {
+  async function setup() {
     const manager = makeManager();
     const { router, find } = makeRouter();
     await collaborationRoutes(router, baseOptions(manager));
+    const get = async (pattern: string, qs: Record<string, unknown>) => {
+      const ctx = makeCtx({ qs, user: { id: 'u1' } });
+      const result = await find('GET', pattern).handler(ctx);
+      return { result, ctx };
+    };
+    return { manager, get };
+  }
 
-    await find('GET', '/versions').handler(makeCtx({ qs: { doc: 'd/1' }, user: { id: 'u1' } }));
-    await find('GET', '/comments').handler(makeCtx({ qs: { doc: 'd/1' }, user: { id: 'u1' } }));
+  it('answers the offset envelope with the total from the count', async () => {
+    const { get } = await setup();
+
+    const versions = await get('/versions', { doc: 'd/1', page: '2', size: '50' });
+    expect(versions.result).toEqual({
+      data: [{ id: 'v1', seq: 1 }],
+      meta: { total: 120, perPage: 50, currentPage: 2, lastPage: 3, firstPage: 1 },
+    });
+
+    const comments = await get('/comments', { doc: 'd/1' });
+    expect(comments.result).toEqual({
+      data: [{ id: 'c1' }],
+      meta: { total: 7, perPage: 50, currentPage: 1, lastPage: 1, firstPage: 1 },
+    });
+  });
+
+  it('defaults to page 1 / size 50 when the query string has none', async () => {
+    const { manager, get } = await setup();
+    await get('/versions', { doc: 'd/1' });
+    await get('/comments', { doc: 'd/1' });
 
     expect(manager.calls).toContain('versions:d/1:1:50');
     expect(manager.calls).toContain('comments:d/1:undefined:1:50');
   });
 
   it('passes through a requested page/size within bounds', async () => {
-    const manager = makeManager();
-    const { router, find } = makeRouter();
-    await collaborationRoutes(router, baseOptions(manager));
-
-    await find('GET', '/versions').handler(
-      makeCtx({ qs: { doc: 'd/1', page: '3', size: '10' }, user: { id: 'u1' } }),
-    );
-    await find('GET', '/comments').handler(
-      makeCtx({ qs: { doc: 'd/1', space: 'text', page: '4', size: '5' }, user: { id: 'u1' } }),
-    );
+    const { manager, get } = await setup();
+    await get('/versions', { doc: 'd/1', page: '3', size: '10' });
+    await get('/comments', { doc: 'd/1', page: '4', size: '5' });
 
     expect(manager.calls).toContain('versions:d/1:3:10');
-    expect(manager.calls).toContain('comments:d/1:text:4:5');
+    expect(manager.calls).toContain('comments:d/1:undefined:4:5');
   });
 
   it('clamps an oversized size and a page below one instead of trusting the client', async () => {
-    const manager = makeManager();
-    const { router, find } = makeRouter();
-    await collaborationRoutes(router, baseOptions(manager));
-
-    await find('GET', '/versions').handler(
-      makeCtx({ qs: { doc: 'd/1', page: '-5', size: '999999' }, user: { id: 'u1' } }),
-    );
-
-    // 200 is COLLAB_LIST_MAX_SIZE; a page below 1 clamps to the first page
-    // rather than erroring or producing a negative offset in the database.
+    const { manager, get } = await setup();
+    await get('/versions', { doc: 'd/1', page: '-5', size: '999999' });
     expect(manager.calls).toContain('versions:d/1:1:200');
   });
 
-  it('lists oldest first by default and newest first with order=desc', async () => {
-    const manager = makeManager();
-    const { router, find } = makeRouter();
-    await collaborationRoutes(router, baseOptions(manager));
-
-    await find('GET', '/versions').handler(makeCtx({ qs: { doc: 'd/1' }, user: { id: 'u1' } }));
-    expect(manager.calls).toContain('versions-order:asc');
-
-    await find('GET', '/versions').handler(
-      makeCtx({ qs: { doc: 'd/1', order: 'desc' }, user: { id: 'u1' } }),
-    );
-    await find('GET', '/comments').handler(
-      makeCtx({ qs: { doc: 'd/1', order: 'desc' }, user: { id: 'u1' } }),
-    );
-    expect(manager.calls).toContain('versions-order:desc');
-    expect(manager.calls).toContain('comments-order:desc');
-
-    // Anything else is the default, not an error.
-    await find('GET', '/comments').handler(
-      makeCtx({ qs: { doc: 'd/1', order: 'sideways' }, user: { id: 'u1' } }),
-    );
-    expect(manager.calls).toContain('comments-order:asc');
+  it('falls back to the default on a garbage (non-numeric) page/size', async () => {
+    const { manager, get } = await setup();
+    await get('/versions', { doc: 'd/1', page: 'not-a-number', size: 'nope' });
+    expect(manager.calls).toContain('versions:d/1:1:50');
   });
 
-  it('falls back to the default on a garbage (non-numeric) page/size', async () => {
-    const manager = makeManager();
-    const { router, find } = makeRouter();
-    await collaborationRoutes(router, baseOptions(manager));
+  it('dispatches filter[space] to the comment filter and counts the same space', async () => {
+    const { manager, get } = await setup();
+    await get('/comments', { doc: 'd/1', filter: { space: 'text' }, page: '2', size: '5' });
 
-    await find('GET', '/versions').handler(
-      makeCtx({ qs: { doc: 'd/1', page: 'not-a-number', size: 'nope' }, user: { id: 'u1' } }),
+    expect(manager.calls).toContain('comments:d/1:text:2:5');
+    expect(manager.calls).toContain('comments-count:d/1:text');
+  });
+
+  it('answers 400 for an unknown filter field', async () => {
+    const { manager, get } = await setup();
+
+    const comments = await get('/comments', { doc: 'd/1', filter: { author: 'u2' } });
+    expect(comments.ctx.__responses[0]).toMatchObject({ status: 400 });
+    expect(String((comments.ctx.__responses[0]!.payload as { error: string }).error)).toContain(
+      'author',
     );
 
-    expect(manager.calls).toContain('versions:d/1:1:50');
+    // Versions have no filterable field at all.
+    const versions = await get('/versions', { doc: 'd/1', filter: { space: 'text' } });
+    expect(versions.ctx.__responses[0]).toMatchObject({ status: 400 });
+
+    expect(manager.calls.some((c) => c.startsWith('comments:'))).toBe(false);
+    expect(manager.calls.some((c) => c.startsWith('versions:'))).toBe(false);
+  });
+
+  it('answers 400 for an operator the space filter does not support', async () => {
+    const { get } = await setup();
+    const { ctx } = await get('/comments', {
+      doc: 'd/1',
+      filter: { space: { contains: 'te' } },
+    });
+    expect(ctx.__responses[0]).toMatchObject({ status: 400 });
+  });
+
+  it('sorts oldest first by default and newest first with the reversed field', async () => {
+    const { manager, get } = await setup();
+
+    await get('/versions', { doc: 'd/1' });
+    await get('/comments', { doc: 'd/1' });
+    expect(manager.calls).toContain('versions-order:asc');
+    expect(manager.calls).toContain('comments-order:asc');
+
+    await get('/versions', { doc: 'd/1', sort: '-seq' });
+    await get('/comments', { doc: 'd/1', sort: '-createdAt' });
+    expect(manager.calls).toContain('versions-order:desc');
+    expect(manager.calls).toContain('comments-order:desc');
+  });
+
+  it('answers 400 for a sort field outside the allow-list', async () => {
+    const { manager, get } = await setup();
+
+    const versions = await get('/versions', { doc: 'd/1', sort: '-createdAt' });
+    expect(versions.ctx.__responses[0]).toMatchObject({ status: 400 });
+
+    const comments = await get('/comments', { doc: 'd/1', sort: 'body' });
+    expect(comments.ctx.__responses[0]).toMatchObject({ status: 400 });
+
+    const twoKeys = await get('/comments', { doc: 'd/1', sort: 'createdAt,-createdAt' });
+    expect(twoKeys.ctx.__responses[0]).toMatchObject({ status: 400 });
+
+    expect(manager.calls.some((c) => c.endsWith('-order:asc'))).toBe(false);
+  });
+
+  it('checks the read permission before parsing the listing', async () => {
+    const { manager, get } = await setup();
+    const { ctx } = await get('/comments', { filter: { nope: 'x' } });
+    expect(ctx.__responses[0]).toMatchObject({ status: 400 });
+    expect(String((ctx.__responses[0]!.payload as { error: string }).error)).toContain('doc');
+    expect(manager.calls).toHaveLength(0);
   });
 });
 

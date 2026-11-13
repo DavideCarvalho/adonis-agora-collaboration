@@ -108,6 +108,8 @@ export interface CollabManagerLike {
     size?: number;
     order?: 'asc' | 'desc';
   }): Promise<unknown[]>;
+  /** How many versions the document has — the `total` of a version listing. */
+  countVersions(options: { docName: string }): Promise<number>;
   restoreVersion(options: {
     docName: string;
     versionId: string;
@@ -120,6 +122,8 @@ export interface CollabManagerLike {
       space?: string,
       page?: { page?: number; size?: number; order?: 'asc' | 'desc' },
     ): Promise<unknown[]>;
+    /** How many comments the document has (in `space`, when given). */
+    count(docName: string, space?: string): Promise<number>;
     get(docName: string, commentId: string): Promise<unknown>;
     create(docName: string, comment: Record<string, unknown>): Promise<unknown>;
     resolve(docName: string, commentId: string, resolved: boolean): Promise<unknown>;

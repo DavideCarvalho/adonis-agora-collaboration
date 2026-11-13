@@ -1,3 +1,4 @@
+import type { OffsetPageMeta } from '@adonis-agora/filter-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollaborationContext } from '../context.js';
 import {
@@ -5,14 +6,17 @@ import {
   restoreVersion as apiRestoreVersion,
   listVersions,
 } from '../rest_client.js';
-import type { CollabListOptions, CollabVersion } from '../types.js';
+import type { CollabVersion, CollabVersionListOptions } from '../types.js';
 
-export interface UseVersionsOptions extends CollabListOptions {
+export interface UseVersionsOptions extends CollabVersionListOptions {
   docName: string;
 }
 
 export interface UseVersionsResult {
+  /** The current page's versions. */
   versions: CollabVersion[];
+  /** Paging of the last fetch (`total`, `currentPage`, `lastPage`…); `null` before it lands. */
+  meta: OffsetPageMeta | null;
   loading: boolean;
   error: Error | null;
   refresh(): Promise<void>;
@@ -23,20 +27,21 @@ export interface UseVersionsResult {
 /**
  * Version control de um documento (REST — snapshots ficam no Adonis).
  *
- * Lista uma página por vez (`size` padrão 50); `order: 'desc'` traz as mais
+ * Lista uma página por vez (`size` padrão 50); `sort: '-seq'` traz as mais
  * novas primeiro.
  *
  * ```tsx
- * const { versions, create, restore } = useVersions({ docName, order: 'desc' })
+ * const { versions, meta, create, restore } = useVersions({ docName, sort: '-seq' })
  * ```
  */
 export function useVersions(options: UseVersionsOptions): UseVersionsResult {
-  const { docName, page, size, order } = options;
+  const { docName, page, size, sort } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
   // Versões são REST puro — sem sessão/Y.Doc criados no corpo do render.
 
   const [versions, setVersions] = useState<CollabVersion[]>([]);
+  const [meta, setMeta] = useState<OffsetPageMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const mountedRef = useRef(true);
@@ -51,9 +56,10 @@ export function useVersions(options: UseVersionsOptions): UseVersionsResult {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listVersions(config, docName, { page, size, order });
+      const result = await listVersions(config, docName, { page, size, sort });
       if (mountedRef.current) {
-        setVersions(data);
+        setVersions(result.data);
+        setMeta(result.meta);
         setError(null);
       }
     } catch (cause) {
@@ -63,7 +69,7 @@ export function useVersions(options: UseVersionsOptions): UseVersionsResult {
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [config, docName, page, size, order]);
+  }, [config, docName, page, size, sort]);
 
   useEffect(() => {
     void refresh();
@@ -86,5 +92,5 @@ export function useVersions(options: UseVersionsOptions): UseVersionsResult {
     [config, docName, refresh],
   );
 
-  return { versions, loading, error, refresh, create, restore };
+  return { versions, meta, loading, error, refresh, create, restore };
 }

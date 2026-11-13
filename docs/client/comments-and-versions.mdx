@@ -14,7 +14,8 @@ control.
 
 ```tsx
 const {
-  comments,   // CollabComment[] — oldest first
+  comments,   // CollabComment[] — the current page, oldest first
+  meta,       // { total, perPage, currentPage, lastPage, firstPage } | null
   loading,
   error,
   create,
@@ -87,7 +88,7 @@ lets the sidebar still show what a comment was about. See
 ## `useVersions`
 
 ```tsx
-const { versions, loading, error, create, restore, refresh } = useVersions({ docName })
+const { versions, meta, loading, error, create, restore, refresh } = useVersions({ docName })
 
 const version = await create('before review')  // label is optional
 await restore(versions[0].id)
@@ -102,15 +103,19 @@ Render `seq` rather than `id`: it is the friendly 1, 2, 3… the library maintai
 ## Paging
 
 Both lists come back one page at a time: 50 rows by default (at most 200), oldest first. Pass
-`page`, `size` and `order` to choose the page. A version history usually wants the newest first:
+`page`, `size` and `sort` to choose the page, and read `meta` for the page count. A version history
+usually wants the newest first:
 
 ```tsx title="inertia/components/version_history.tsx"
 const [page, setPage] = useState(1)
-const { versions } = useVersions({ docName, order: 'desc', size: 20, page })
+const { versions, meta } = useVersions({ docName, sort: '-seq', size: 20, page })
+
+const hasMore = meta !== null && meta.currentPage < meta.lastPage
 ```
 
-`useComments` takes the same three options next to `space`. Changing any of them refetches. With
-`order: 'desc'`, page 1 is the newest rows; the list keeps that order.
+`useComments` takes `page`, `size` and `sort: 'createdAt' | '-createdAt'` next to `space`.
+Changing any of them refetches. With a `-` sort, page 1 is the newest rows; the list keeps that
+order.
 
 ```tsx
 {versions.map((version) => (
