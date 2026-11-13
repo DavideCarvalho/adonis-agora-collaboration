@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 1.0.0-rc.4
+
+### Minor Changes
+
+- [#175](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/175) [`c6af23e`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/c6af23e83ee1862c423680ae8f4aa29531cb5349) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `node ace` commands for documents, versions and comments: `collaboration:documents:list|show`, `collaboration:versions:list|create|restore` and `collaboration:comments:list|resolve|delete`. They call the same manager methods as the REST routes, print a table or `--json` (`{ data, meta }` for lists), ask before restore/delete unless `--force`, and record `cli:<os user>` as the version author. A restore refuses while anyone is in presence. New `CollaborationManager.listDocumentDeclarations()` and `describeDocument({ docName })`.
+
 ## 1.0.0-rc.3
 
 ### Major Changes
