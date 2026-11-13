@@ -1,0 +1,89 @@
+---
+title: CLI
+description: Read documents, versions and comments, create and restore versions, and resolve or delete comments from the terminal with node ace.
+icon: Terminal
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+What the [REST routes](/docs/collaboration/routes) do for versions and comments is also an ace
+command, plus two reads about documents.
+
+| Command | What it does |
+| --- | --- |
+| `collaboration:documents:list` | the `documents` patterns declared in `config/collaboration.ts` |
+| `collaboration:documents:show --doc=<name>` | one document: engine, stored size, versions, comments, presence |
+| `collaboration:versions:list --doc=<name>` | the version history |
+| `collaboration:versions:create --doc=<name>` | take a version now |
+| `collaboration:versions:restore <versionId> --doc=<name>` | bring the document back to a version |
+| `collaboration:comments:list --doc=<name>` | the comments |
+| `collaboration:comments:resolve <commentId> --doc=<name>` | resolve a comment, or reopen it with `--reopen` |
+| `collaboration:comments:delete <commentId> --doc=<name>` | delete a comment |
+| `collaboration:prune` · `collaboration:compact` · `collaboration:init` | see [Commands](/docs/collaboration/codegen/commands) |
+
+## Documents
+
+```bash
+node ace collaboration:documents:list
+node ace collaboration:documents:show --doc=researches/42/writing
+```
+
+`documents:show` reads the stored state and counts. It does not open the document or call its
+`load` hook.
+
+`documents:list` shows the engine each declaration names. If you set `engineFor` in the config, it
+can route a document elsewhere; `documents:show` always prints the engine the document really uses.
+
+## Versions
+
+```bash
+node ace collaboration:versions:list --doc=researches/42/writing
+node ace collaboration:versions:list --doc=researches/42/writing --order=desc --size=10 --page=2
+node ace collaboration:versions:create --doc=researches/42/writing --label="before import"
+node ace collaboration:versions:restore 3f2a… --doc=researches/42/writing        # asks first
+node ace collaboration:versions:restore 3f2a… --doc=researches/42/writing --force
+```
+
+Versions created or restored from the terminal are recorded with `createdBy` set to
+`cli:<your OS user>`. A restore keeps the current state as a version first, so it can be undone.
+
+<Callout type="warn" title="Restore when nobody has the document open">
+On the `yjs` and `automerge` engines a document lives in the memory of the server process that has
+it open. A restore from the terminal writes storage, and a server that still holds the document will
+save its own copy over it. The command refuses while anyone is in presence. Presence crosses
+processes only with `redisUrl` set, so without Redis run the restore from the app, or when you know
+nobody is editing. On `partykit` the restore goes to the live room and is safe at any time.
+</Callout>
+
+`versions:create` on a self-hosted engine snapshots the **stored** state, which can be up to one
+debounce behind what people are typing right now.
+
+## Comments
+
+```bash
+node ace collaboration:comments:list --doc=researches/42/writing
+node ace collaboration:comments:list --doc=researches/42/writing --space=text --order=desc
+node ace collaboration:comments:resolve 9c1e… --doc=researches/42/writing
+node ace collaboration:comments:resolve 9c1e… --doc=researches/42/writing --reopen
+node ace collaboration:comments:delete 9c1e… --doc=researches/42/writing          # asks first
+```
+
+## Flags
+
+| Flag | On | |
+| --- | --- | --- |
+| `--doc=<name>` | every command except `documents:list` | the document name (required) |
+| `--json` | every command except `restore` and `delete` | print JSON: lists as `{ data, meta }` like the REST routes, the others as the object |
+| `--page=<n>` · `--size=<n>` | lists | page from 1; size defaults to 50, at most 200 |
+| `--order=asc\|desc` | lists | oldest first (default) or newest first |
+| `--space=<name>` | `comments:list` | only this comment space |
+| `--label=<text>` | `versions:create` | the version label |
+| `--force` | `versions:restore`, `comments:delete` | do not ask; without a terminal these refuse unless you pass it |
+
+Every command exits with `1` on a missing `--doc`, a bad flag, an unknown version or comment, or a
+refused action.
+
+<Callout type="info">
+Without `storage` in `config/collaboration.ts` everything is in the memory of each process, so the
+commands see nothing of your running app. `documents:show` warns when that is the case.
+</Callout>

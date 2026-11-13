@@ -161,6 +161,8 @@ clear message if it is read too early.
 | `pruneVersions({ keep, docName?, dryRun? })` | `Promise<number>` — versions deleted; `keep` is per document |
 | `persistDocument({ docName, state })` | `Promise<void>` — throws without configured storage |
 | `listPresence({ docName })` | `Promise<PresenceMember[]>` — `[]` without Redis |
+| `describeDocument({ docName })` | `Promise<DocumentDescription>` — declaration, engine, stored bytes, version/comment/presence counts; reads storage without opening the document |
+| `listDocumentDeclarations()` | `DocumentDeclarationInfo[]` — the declared `documents` patterns with params, engine and hooks |
 | `attach(server)` | `Promise<void>` — called by the provider |
 | `close()` | `Promise<void>` — writes pending saves, closes each driver's server and the sockets still open, then the presence connection |
 | `comments` | the `CommentService` (below) |

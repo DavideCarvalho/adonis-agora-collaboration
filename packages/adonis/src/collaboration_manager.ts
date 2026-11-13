@@ -79,13 +79,14 @@ export class CollaborationManager {
 
   /** Documento declarado que casa com o docName (pattern match). */
   #documentFor(docName: string): {
+    pattern: string;
     declaration: import('./documents.js').CollabDocumentDeclaration;
     params: Record<string, string>;
   } | null {
     if (!this.config.documents) return null;
     for (const [pattern, declaration] of Object.entries(this.config.documents)) {
       const params = matchDocumentPattern(pattern, docName);
-      if (params) return { declaration, params };
+      if (params) return { pattern, declaration, params };
     }
     return null;
   }
@@ -442,10 +443,94 @@ export class CollaborationManager {
     return this.presence?.list(docName) ?? [];
   }
 
+  /**
+   * The `documents` declared in `config/collaboration.ts`: each pattern, its
+   * `:params`, the engine it declares (or the default) and which hooks it
+   * declares. What `node ace collaboration:documents:list` prints.
+   *
+   * `engineFor` in the config overrides the declared engine per document name,
+   * so with it set `engine` here is only what the declaration says;
+   * {@link describeDocument} resolves the engine a document really runs on.
+   */
+  listDocumentDeclarations(): DocumentDeclarationInfo[] {
+    const fallback = this.config.engine ?? 'yjs';
+    return Object.entries(this.config.documents ?? {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([pattern, declaration]) => ({
+        pattern,
+        params: documentPatternParams(pattern),
+        engine: declaration.engine ?? fallback,
+        authorize: typeof declaration.authorize === 'function',
+        load: typeof declaration.load === 'function',
+      }));
+  }
+
+  /**
+   * What is known about one document without opening it: the declaration it
+   * matches, its engine, the stored size, how many versions and comments it
+   * has and who is in presence. Reads storage directly, so it never seeds or
+   * loads the document the way `getDocumentState` can. What
+   * `node ace collaboration:documents:show` prints.
+   */
+  async describeDocument({ docName }: { docName: string }): Promise<DocumentDescription> {
+    const declared = this.#documentFor(docName);
+    const [engine, stored, versions, comments, presence, live] = await Promise.all([
+      this.engineFor({ docName }),
+      this.config.storage ? this.config.storage.loadDocument(docName) : Promise.resolve(null),
+      this.countVersions({ docName }),
+      this.comments.count(docName),
+      this.listPresence({ docName }),
+      this.hasLiveDocument({ docName }),
+    ]);
+    return {
+      docName,
+      pattern: declared?.pattern ?? null,
+      params: declared?.params ?? {},
+      engine,
+      storage: this.config.storage ? 'configured' : 'memory',
+      storedBytes: stored ? stored.state.byteLength : null,
+      versions,
+      comments,
+      presence: presence.length,
+      liveHere: live,
+    };
+  }
+
   async close(): Promise<void> {
     await Promise.all([...this.drivers.values()].map((driver) => driver.close()));
     await this.presence?.close();
   }
+}
+
+/** One entry of {@link CollaborationManager.listDocumentDeclarations}. */
+export interface DocumentDeclarationInfo {
+  pattern: string;
+  /** The `:param` names of the pattern, in order. */
+  params: string[];
+  engine: CollaborationEngine;
+  /** Whether the declaration has its own `authorize` (else the global one applies). */
+  authorize: boolean;
+  /** Whether the declaration seeds new documents with `load`. */
+  load: boolean;
+}
+
+/** What {@link CollaborationManager.describeDocument} returns. */
+export interface DocumentDescription {
+  docName: string;
+  /** The declared pattern it matches, or `null`. */
+  pattern: string | null;
+  params: Record<string, string>;
+  engine: CollaborationEngine;
+  /** `'memory'`: no storage configured, so only this process's memory is read. */
+  storage: 'configured' | 'memory';
+  /** Bytes of the stored state, `null` when nothing is stored. */
+  storedBytes: number | null;
+  versions: number;
+  comments: number;
+  /** People in presence (across instances when `redisUrl` is set). */
+  presence: number;
+  /** Whether THIS process holds the document open. */
+  liveHere: boolean;
 }
 
 export type { CollaborationConfig, CollaborationDriver };

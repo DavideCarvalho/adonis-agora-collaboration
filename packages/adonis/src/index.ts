@@ -21,7 +21,11 @@ export {
   verifyCollabToken,
   verifySelfHostedToken,
 } from './auth/token.js';
-export { CollaborationManager } from './collaboration_manager.js';
+export {
+  CollaborationManager,
+  type DocumentDeclarationInfo,
+  type DocumentDescription,
+} from './collaboration_manager.js';
 export {
   type CollabDocumentNameFor,
   type CollabDocuments,
