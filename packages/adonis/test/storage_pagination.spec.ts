@@ -6,6 +6,7 @@ import * as Y from 'yjs';
 import { YjsDriver } from '../src/drivers/yjs/yjs_driver.js';
 import { FileSystemStorage } from '../src/storage/file_system_storage.js';
 import { InMemoryCollaborationStorage } from '../src/storage/in_memory_storage.js';
+import { countCommentsIn } from '../src/storage/shared.js';
 import type { CollabComment, CollabVersion } from '../src/types.js';
 import { TEST_TOKEN_SECRET } from './helpers/token.js';
 
@@ -129,6 +130,20 @@ describe('InMemoryCollaborationStorage pagination', () => {
     expect(second.map((c) => c.id)).toEqual(['d']);
   });
 
+  it('counts versions and comments (per space) for the listing total', async () => {
+    const storage = new InMemoryCollaborationStorage();
+    for (let seq = 1; seq <= 3; seq++) {
+      await storage.saveVersion(DOC, version(seq), new Uint8Array([seq]));
+    }
+    await storage.saveComment(DOC, comment('a', 'text', 1));
+    await storage.saveComment(DOC, comment('b', 'canvas', 2));
+
+    expect(await storage.countVersions(DOC)).toBe(3);
+    expect(await storage.countVersions('docs/none')).toBe(0);
+    expect(await storage.countComments(DOC)).toBe(2);
+    expect(await storage.countComments(DOC, 'text')).toBe(1);
+  });
+
   it('does not truncate the history a live driver uses to compute the next seq', async () => {
     // Regression guard: `listVersions` without a `page` must still return every
     // version, or `seqVersions(existing)` inside `YjsDriver.createVersion` would
@@ -169,6 +184,8 @@ describe('FileSystemStorage pagination', () => {
       expect(
         (await storage.listComments(DOC, undefined, { order: 'desc', size: 2 })).map((c) => c.id),
       ).toEqual(['c', 'b']);
+      // No `countComments` here: the total falls back to the full listing.
+      expect(await countCommentsIn(storage, DOC, 'text')).toBe(3);
     } finally {
       await rm(baseDir, { recursive: true, force: true });
     }

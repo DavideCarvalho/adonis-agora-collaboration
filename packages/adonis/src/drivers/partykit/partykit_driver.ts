@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import { signCollabToken } from '../../auth/token.js';
 import type { CollaborationDriver, PartyKitDriverOptions } from '../../driver.js';
+import { countVersionsIn } from '../../storage/shared.js';
 import type {
   CollabDiffSummary,
   CollaborationStorage,
@@ -159,6 +160,10 @@ export class PartyKitDriver implements CollaborationDriver {
 
   async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
     return this.storage.listVersions(docName, page);
+  }
+
+  countVersions(docName: string): Promise<number> {
+    return countVersionsIn(this.storage, docName);
   }
 
   async restoreVersion(

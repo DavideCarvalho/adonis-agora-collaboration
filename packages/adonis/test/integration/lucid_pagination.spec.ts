@@ -118,6 +118,15 @@ describe('LucidStorage list pagination (Postgres)', () => {
     ).toEqual(Array.from({ length: 10 }, (_, index) => index + 1));
   });
 
+  it('counts the whole matching set for the listing total', async () => {
+    await storage.saveComment(DOC, { ...comment('canvas-1', 11), space: 'canvas' });
+
+    expect(await storage.countVersions(DOC)).toBe(10);
+    expect(await storage.countVersions('docs/none')).toBe(0);
+    expect(await storage.countComments(DOC)).toBe(11);
+    expect(await storage.countComments(DOC, 'text')).toBe(10);
+  });
+
   it('narrows to a page and to a space at the same time', async () => {
     await storage.saveComment(DOC, {
       ...comment('canvas-1', 11),

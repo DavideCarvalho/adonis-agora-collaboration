@@ -1,4 +1,4 @@
-import type { ListPageOptions } from '../types.js';
+import type { CollaborationStorage, ListPageOptions } from '../types.js';
 
 /**
  * Pure helpers shared by every storage implementation. Nothing here touches a
@@ -66,4 +66,23 @@ export function clampPage(page: number | undefined): number {
 export function resolvePage(page: ListPageOptions): { size: number; offset: number } {
   const size = clampSize(page.size);
   return { size, offset: (clampPage(page.page) - 1) * size };
+}
+
+/** `storage.countVersions`, or the length of the full listing when the storage has none. */
+export async function countVersionsIn(
+  storage: CollaborationStorage,
+  docName: string,
+): Promise<number> {
+  if (storage.countVersions) return storage.countVersions(docName);
+  return (await storage.listVersions(docName)).length;
+}
+
+/** `storage.countComments`, or the length of the full listing when the storage has none. */
+export async function countCommentsIn(
+  storage: CollaborationStorage,
+  docName: string,
+  space?: string,
+): Promise<number> {
+  if (storage.countComments) return storage.countComments(docName, space);
+  return (await storage.listComments(docName, space)).length;
 }

@@ -43,11 +43,17 @@ function makeManager(): CollabManagerLike & {
     async listVersions() {
       return [];
     },
+    async countVersions() {
+      return 0;
+    },
     async restoreVersion() {},
     comments: {
       async list() {
         reads.push('list');
         return comments;
+      },
+      async count() {
+        return comments.length;
       },
       async get(_docName, commentId) {
         reads.push(`get:${commentId}`);

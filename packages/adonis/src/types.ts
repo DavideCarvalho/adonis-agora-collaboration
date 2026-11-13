@@ -191,6 +191,11 @@ export interface CollaborationStorage {
    * internally); the HTTP route always supplies one.
    */
   listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]>;
+  /**
+   * How many versions the document has — the `total` of a paged listing.
+   * Optional: without it the count is `listVersions(docName).length`.
+   */
+  countVersions?(docName: string): Promise<number>;
   saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void>;
   loadVersionSnapshot(docName: string, versionId: string): Promise<Uint8Array | null>;
   /**
@@ -203,6 +208,12 @@ export interface CollaborationStorage {
    * result the same way it does for {@link listVersions}.
    */
   listComments(docName: string, space?: string, page?: ListPageOptions): Promise<CollabComment[]>;
+  /**
+   * How many comments the document has (in `space`, when given) — the
+   * `total` of a paged listing. Optional: without it the count is
+   * `listComments(docName, space).length`.
+   */
+  countComments?(docName: string, space?: string): Promise<number>;
   /**
    * One comment by id. Optional: a storage that cannot look one up directly is
    * served by {@link CommentService.get} falling back to a filtered list — the

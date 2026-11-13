@@ -42,6 +42,10 @@ export class InMemoryCollaborationStorage implements CollaborationStorage {
     return paginate(all, page);
   }
 
+  async countVersions(docName: string): Promise<number> {
+    return this.versions.get(docName)?.length ?? 0;
+  }
+
   async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
     if (!this.versions.has(docName)) {
       this.versions.set(docName, []);
@@ -85,6 +89,11 @@ export class InMemoryCollaborationStorage implements CollaborationStorage {
     const all = this.comments.get(docName) ?? [];
     const filtered = space ? all.filter((comment) => comment.space === space) : all;
     return paginate(filtered, page);
+  }
+
+  async countComments(docName: string, space?: string): Promise<number> {
+    const all = this.comments.get(docName) ?? [];
+    return space ? all.filter((comment) => comment.space === space).length : all.length;
   }
 
   async saveComment(docName: string, comment: CollabComment): Promise<void> {

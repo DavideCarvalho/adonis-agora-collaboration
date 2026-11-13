@@ -1,3 +1,4 @@
+import type { OffsetPageMeta } from '@adonis-agora/filter-client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCollaborationContext } from '../context.js';
 import {
@@ -6,16 +7,17 @@ import {
   listComments,
   resolveComment,
 } from '../rest_client.js';
-import type { CollabComment, CollabListOptions } from '../types.js';
+import type { CollabComment, CollabCommentListOptions } from '../types.js';
 
-export interface UseCommentsOptions extends CollabListOptions {
+export interface UseCommentsOptions extends CollabCommentListOptions {
   docName: string;
-  /** Optional comment space (default: all). */
-  space?: string;
 }
 
 export interface UseCommentsResult {
+  /** The current page's comments. */
   comments: CollabComment[];
+  /** Paging of the last fetch (`total`, `currentPage`, `lastPage`…); `null` before it lands. */
+  meta: OffsetPageMeta | null;
   loading: boolean;
   error: Error | null;
   refresh(): Promise<void>;
@@ -32,11 +34,11 @@ export interface UseCommentsResult {
  * Comentários ancorados de um documento (REST — dados relacionais no Adonis).
  *
  * ```tsx
- * const { comments, create, resolve } = useComments('researches/42/writing', 'text')
+ * const { comments, meta, create, resolve } = useComments({ docName, space: 'text' })
  * ```
  */
 export function useComments(options: UseCommentsOptions): UseCommentsResult {
-  const { docName, space, page, size, order } = options;
+  const { docName, space, page, size, sort } = options;
   const context = useCollaborationContext();
   const config = context.getConfig();
 
@@ -45,6 +47,7 @@ export function useComments(options: UseCommentsOptions): UseCommentsResult {
   // provider (e vazava um Y.Doc por render de servidor) sem nunca iniciá-la.
 
   const [comments, setComments] = useState<CollabComment[]>([]);
+  const [meta, setMeta] = useState<OffsetPageMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const mountedRef = useRef(true);
@@ -59,9 +62,10 @@ export function useComments(options: UseCommentsOptions): UseCommentsResult {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await listComments(config, docName, space, { page, size, order });
+      const result = await listComments(config, docName, { space, page, size, sort });
       if (mountedRef.current) {
-        setComments(data);
+        setComments(result.data);
+        setMeta(result.meta);
         setError(null);
       }
     } catch (cause) {
@@ -71,7 +75,7 @@ export function useComments(options: UseCommentsOptions): UseCommentsResult {
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [config, docName, space, page, size, order]);
+  }, [config, docName, space, page, size, sort]);
 
   useEffect(() => {
     void refresh();
@@ -108,5 +112,5 @@ export function useComments(options: UseCommentsOptions): UseCommentsResult {
     [config, docName],
   );
 
-  return { comments, loading, error, refresh, create, resolve, remove };
+  return { comments, meta, loading, error, refresh, create, resolve, remove };
 }

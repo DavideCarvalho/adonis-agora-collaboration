@@ -1,4 +1,12 @@
-import type { CollabListOptions, CollaborationClientConfig } from './types.js';
+import { filterQuery, type OffsetPage } from '@adonis-agora/filter-client';
+import type {
+  CollabComment,
+  CollabCommentListOptions,
+  CollabListOptions,
+  CollaborationClientConfig,
+  CollabVersion,
+  CollabVersionListOptions,
+} from './types.js';
 
 /**
  * Cliente REST mínimo pra rotas de colaboração geradas por
@@ -27,10 +35,14 @@ function buildUrl(
   config: CollaborationClientConfig,
   path: string,
   params?: Record<string, string | undefined>,
+  query?: string,
 ): string {
   const url = new URL(`${resolveBaseUrl(config)}${path}`);
   for (const [key, value] of Object.entries(params ?? {})) {
     if (value !== undefined) url.searchParams.set(key, value);
+  }
+  if (query) {
+    for (const [key, value] of new URLSearchParams(query)) url.searchParams.append(key, value);
   }
   return url.toString();
 }
@@ -41,6 +53,8 @@ export async function collabFetch<T>(
   init?: {
     method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
     params?: Record<string, string | undefined>;
+    /** An encoded query string appended after `params` (a `filterQuery().toQueryString()`). */
+    query?: string;
     body?: unknown;
   },
 ): Promise<T> {
@@ -61,7 +75,7 @@ export async function collabFetch<T>(
     requestInit.body = JSON.stringify(init.body);
   }
 
-  const response = await fetchImpl(buildUrl(config, path, init?.params), requestInit);
+  const response = await fetchImpl(buildUrl(config, path, init?.params, init?.query), requestInit);
 
   if (!response.ok) {
     throw new CollabRestError(response.status, await response.text().catch(() => ''));
@@ -83,13 +97,30 @@ function route(config: CollaborationClientConfig, path: string): string {
   return trimmed === '' ? path : `/${trimmed}${path}`;
 }
 
-/** `page`/`size`/`order` as query params, leaving out what was not given. */
-function listParams(options: CollabListOptions | undefined): Record<string, string | undefined> {
-  return {
-    page: options?.page === undefined ? undefined : String(options.page),
-    size: options?.size === undefined ? undefined : String(options.size),
-    order: options?.order,
-  };
+/**
+ * The `@adonis-agora/filter` query string of a listing: `filter[space]`,
+ * `sort`, `page`/`size` — each left out when not given.
+ */
+function listQuery(
+  options: (CollabListOptions & { sort?: string | undefined }) | undefined,
+  filters: Record<string, string | undefined> = {},
+): string {
+  const query = filterQuery();
+  for (const [field, value] of Object.entries(filters)) {
+    if (value !== undefined) query.where(field, value);
+  }
+  const sort = options?.sort;
+  if (sort) {
+    query.sort(sort.replace(/^-/, ''), sort.startsWith('-') ? 'desc' : 'asc');
+  }
+  let qs = query.toQueryString();
+  // `page()` always sends both; send only what was given.
+  const paging = new URLSearchParams();
+  if (options?.page !== undefined) paging.set('page', String(options.page));
+  if (options?.size !== undefined) paging.set('size', String(options.size));
+  const extra = paging.toString();
+  if (extra) qs = qs ? `${qs}&${extra}` : extra;
+  return qs;
 }
 
 export function fetchToken(config: CollaborationClientConfig, docName: string) {
@@ -98,15 +129,18 @@ export function fetchToken(config: CollaborationClientConfig, docName: string) {
   });
 }
 
-/** One page of a document's comments — see {@link CollabListOptions} for the defaults. */
+/**
+ * One page of a document's comments, as `{ data, meta }` — see
+ * {@link CollabCommentListOptions} for the defaults.
+ */
 export function listComments(
   config: CollaborationClientConfig,
   docName: string,
-  space?: string,
-  options?: CollabListOptions,
+  options?: CollabCommentListOptions,
 ) {
-  return collabFetch<import('./types.js').CollabComment[]>(config, route(config, '/comments'), {
-    params: { doc: docName, space, ...listParams(options) },
+  return collabFetch<OffsetPage<CollabComment>>(config, route(config, '/comments'), {
+    params: { doc: docName },
+    query: listQuery(options, { space: options?.space }),
   });
 }
 
@@ -152,14 +186,18 @@ export function deleteComment(
   );
 }
 
-/** One page of a document's versions — see {@link CollabListOptions} for the defaults. */
+/**
+ * One page of a document's versions, as `{ data, meta }` — see
+ * {@link CollabVersionListOptions} for the defaults.
+ */
 export function listVersions(
   config: CollaborationClientConfig,
   docName: string,
-  options?: CollabListOptions,
+  options?: CollabVersionListOptions,
 ) {
-  return collabFetch<import('./types.js').CollabVersion[]>(config, route(config, '/versions'), {
-    params: { doc: docName, ...listParams(options) },
+  return collabFetch<OffsetPage<CollabVersion>>(config, route(config, '/versions'), {
+    params: { doc: docName },
+    query: listQuery(options),
   });
 }
 

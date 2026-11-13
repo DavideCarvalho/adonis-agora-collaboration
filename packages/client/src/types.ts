@@ -137,11 +137,27 @@ export interface CollaborationClientConfig {
 
 /**
  * Paging of a comment or version listing. The server pages every listing:
- * `size` defaults to 50 (max 200), `page` is 1-based, and `order` is `'asc'`
- * (oldest first, the default) or `'desc'` (newest first).
+ * `page` is 1-based and `size` defaults to 50 (max 200).
  */
 export interface CollabListOptions {
   page?: number | undefined;
   size?: number | undefined;
-  order?: 'asc' | 'desc' | undefined;
+}
+
+/**
+ * A comment listing: one `space` (all spaces when omitted), paged, sorted
+ * by `createdAt` — `'createdAt'` oldest first (default), `'-createdAt'`
+ * newest first.
+ */
+export interface CollabCommentListOptions extends CollabListOptions {
+  space?: string | undefined;
+  sort?: 'createdAt' | '-createdAt' | undefined;
+}
+
+/**
+ * A version listing, paged, sorted by `seq` — `'seq'` oldest first
+ * (default), `'-seq'` newest first.
+ */
+export interface CollabVersionListOptions extends CollabListOptions {
+  sort?: 'seq' | '-seq' | undefined;
 }

@@ -1,6 +1,6 @@
 ---
 title: Migrating to 1.0
-description: What changes in your code when you move @adonis-agora/collaboration and @adonis-agora/collaboration-client to 1.0 — the comment author name and the token helper names.
+description: What changes in your code when you move @adonis-agora/collaboration and @adonis-agora/collaboration-client to 1.0 — the comment author name, the token helper names and the list format.
 icon: CircleArrowUp
 ---
 
@@ -213,4 +213,38 @@ After:
 import { Secret } from '@adonisjs/core/helpers'
 
 export const appKey = new Secret(env.get('APP_KEY'))
+```
+
+## Comment and version listings answer `{ data, meta }`
+
+`GET /comments` and `GET /versions` take the `@adonis-agora/filter` list params and answer a page
+envelope instead of a bare array.
+
+| Before | After |
+| --- | --- |
+| `?space=text` | `?filter[space]=text` |
+| `?order=desc` on `/comments` | `?sort=-createdAt` |
+| `?order=desc` on `/versions` | `?sort=-seq` |
+| `CollabComment[]` / `CollabVersion[]` | `{ data, meta: { total, perPage, currentPage, lastPage, firstPage } }` |
+
+An unknown `filter[…]` field or `sort` answers `400`.
+
+On the client, `useComments` and `useVersions` take `sort` instead of `order` and also return
+`meta`. `listComments` takes `space` inside its options, and both REST helpers return the page:
+
+Before:
+
+```tsx title="inertia/components/version_history.tsx"
+const { versions } = useVersions({ docName, order: 'desc', page })
+const comments = await listComments(config, docName, 'text', { order: 'desc' })
+```
+
+After:
+
+```tsx title="inertia/components/version_history.tsx"
+const { versions, meta } = useVersions({ docName, sort: '-seq', page })
+const { data: comments, meta: commentsMeta } = await listComments(config, docName, {
+  space: 'text',
+  sort: '-createdAt',
+})
 ```

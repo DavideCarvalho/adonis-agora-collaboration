@@ -44,6 +44,9 @@ that fail quietly rather than loudly:
    comment up by id, and `manager.comments.get` — which the route guard calls on every comment
    PATCH and DELETE — stops loading a document's whole thread to authorize one row. Leave it out and
    that call falls back to a filtered `listComments`, which is correct but O(n) in the thread.
+   `countVersions` and `countComments` are **optional** too: they give the `total` of a listing
+   page. Implement them with a `COUNT(*)`; leave them out and the total is the length of the full
+   `listVersions` / `listComments` result.
 5. **`pruneVersions` keeps `keep` versions *per document*.** Keeping the N newest rows across the
    whole store lets one busy document delete another one's history. Validate `keep` (a negative or
    fractional value is a mistake, `0` is a legitimate "delete them all"), honour `dryRun` by
@@ -167,6 +170,13 @@ export class S3CollabStorage implements CollaborationStorage {
         .delete()
     }
     return removed
+  }
+
+  async countComments(docName: string, space?: string): Promise<number> {
+    const query = db.from('collab_comments').where('doc_name', docName)
+    if (space) query.andWhere('space', space)
+    const [{ total }] = await query.count('* as total')
+    return Number(total)
   }
 
   async listComments(docName: string, space?: string, page?: ListPageOptions): Promise<CollabComment[]> {

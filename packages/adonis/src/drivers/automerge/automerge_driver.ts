@@ -2,6 +2,7 @@ import { WebSocketServer } from 'ws';
 import { verifySelfHostedToken } from '../../auth/token.js';
 import type { CollaborationDriver, SelfHostedDriverOptions } from '../../driver.js';
 import { reportCollaborationError, reportCollaborationWarning } from '../../observability.js';
+import { countVersionsIn } from '../../storage/shared.js';
 import type {
   CollabDiffSummary,
   CollaborationStorage,
@@ -468,6 +469,10 @@ export class AutomergeDriver implements CollaborationDriver {
 
   async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {
     return this.storage.listVersions(docName, page);
+  }
+
+  countVersions(docName: string): Promise<number> {
+    return countVersionsIn(this.storage, docName);
   }
 
   /**

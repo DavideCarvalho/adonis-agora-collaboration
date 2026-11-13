@@ -315,6 +315,16 @@ export class LucidStorage implements CollaborationStorage {
     }));
   }
 
+  async countVersions(docName: string): Promise<number> {
+    await this.ensure();
+    const row = await (await this.knex())
+      .from(this.t('collab_versions'))
+      .where('doc_name', docName)
+      .count({ total: '*' })
+      .first();
+    return Number(row?.total ?? 0);
+  }
+
   async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
     await this.ensure();
     await (await this.knex())
@@ -399,6 +409,14 @@ export class LucidStorage implements CollaborationStorage {
     }
     const rows = await query;
     return rows.map((row) => this.toComment(row));
+  }
+
+  async countComments(docName: string, space?: string): Promise<number> {
+    await this.ensure();
+    let query = (await this.knex()).from(this.t('collab_comments')).where('doc_name', docName);
+    if (space) query = query.where('space', space);
+    const row = await query.count({ total: '*' }).first();
+    return Number(row?.total ?? 0);
   }
 
   private toComment(row: Record<string, unknown>): CollabComment {
