@@ -598,6 +598,7 @@ export class LucidStorage implements CollaborationStorage {
     }
     await this.ensure();
     const knex = await this.knex();
+    const dialect = await this.dialect();
     const result: ReencodeResult = { documents: 0, versions: 0, comments: 0 };
     const report = () => options.onProgress?.({ ...result });
 
@@ -622,14 +623,17 @@ export class LucidStorage implements CollaborationStorage {
         const meta = parseMeta(row.meta);
         const ctx = { docName: row.doc_name, kind: 'document', field: 'state', meta } as const;
         const plain = await codec.decodeBinary(new Uint8Array(row.state), ctx);
-        result.documents++;
-        if (options.dryRun) continue;
+        if (options.dryRun) {
+          result.documents++;
+          continue;
+        }
         const encoded = await codec.encodeBinary(plain, ctx);
-        await knex
+        const updated = await knex
           .from(this.t('collab_documents'))
           .where('doc_name', row.doc_name)
           .where('state', row.state)
           .update({ state: Buffer.from(encoded) });
+        if (Number(updated) > 0) result.documents++;
       }
       report();
     }
@@ -671,15 +675,18 @@ export class LucidStorage implements CollaborationStorage {
           versionId: row.id,
         } as const;
         const plain = await codec.decodeBinary(new Uint8Array(row.snapshot), ctx);
-        result.versions++;
-        if (options.dryRun) continue;
+        if (options.dryRun) {
+          result.versions++;
+          continue;
+        }
         const encoded = await codec.encodeBinary(plain, ctx);
-        await knex
+        const updated = await knex
           .from(this.t('collab_versions'))
           .where('doc_name', row.doc_name)
           .where('id', row.id)
           .where('snapshot', row.snapshot)
           .update({ snapshot: Buffer.from(encoded) });
+        if (Number(updated) > 0) result.versions++;
       }
       report();
     }
@@ -700,14 +707,21 @@ export class LucidStorage implements CollaborationStorage {
         const body = row.body as string;
         if (isTextEnvelope(body) && isEncodedAnchor(row.anchor)) continue;
         const plain = await codec.decodeComment(this.rowToComment(row));
-        result.comments++;
-        if (options.dryRun) continue;
+        if (options.dryRun) {
+          result.comments++;
+          continue;
+        }
         const encoded = await codec.encodeComment(plain);
-        await knex
+        // Compare-and-swap on both columns the update writes: an edit that
+        // changed only the anchor meanwhile must not be reverted.
+        const anchorJson = typeof row.anchor === 'string' ? row.anchor : JSON.stringify(row.anchor);
+        const updated = await knex
           .from(this.t('collab_comments'))
           .where('id', row.id as string)
           .where('body', body)
+          .whereRaw(anchorEquals[dialect], [anchorJson])
           .update({ body: encoded.body, anchor: encoded.anchor });
+        if (Number(updated) > 0) result.comments++;
       }
       report();
     }
@@ -715,6 +729,14 @@ export class LucidStorage implements CollaborationStorage {
     return result;
   }
 }
+
+/** `anchor` equal to a JSON text, per dialect (jsonb/JSON compare by value, not by text). */
+const anchorEquals: Record<Dialect, string> = {
+  postgres: 'anchor = ?::jsonb',
+  mysql: 'anchor = CAST(? AS JSON)',
+  sqlite: 'anchor = ?',
+  other: 'anchor = ?',
+};
 
 /** `meta` as stored: a jsonb object, or its JSON text on drivers that return strings. */
 function parseMeta(value: unknown): Record<string, unknown> | null {

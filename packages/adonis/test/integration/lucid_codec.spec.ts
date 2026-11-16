@@ -171,4 +171,34 @@ describe('LucidStorage with a codec (Postgres)', () => {
     // Idempotent: a second run has nothing left to do.
     expect(await storage.reencodeAll()).toEqual({ documents: 0, versions: 0, comments: 0 });
   });
+
+  it('leaves a comment alone when its anchor changes while it is being encoded', async () => {
+    await make().saveComment(DOC, comment('c1'));
+    const base = aes(key);
+    const moved = { kind: 'text-range', start: 10, end: 15, selectedText: 'moved' };
+    let edited = false;
+    const storage = make({
+      ...base,
+      async encode(plaintext, ctx) {
+        // A concurrent edit lands between the batch SELECT and the UPDATE.
+        if (!edited && ctx.kind === 'comment') {
+          edited = true;
+          await integration.db.rawQuery(
+            `UPDATE "${SCHEMA}".collab_comments SET anchor = ?::jsonb WHERE id = 'c1'`,
+            [JSON.stringify(moved)],
+          );
+        }
+        return base.encode(plaintext, ctx);
+      },
+    });
+
+    expect(await storage.reencodeAll()).toEqual({ documents: 0, versions: 0, comments: 0 });
+    const [row] = await raw(`SELECT body, anchor FROM "${SCHEMA}".collab_comments`);
+    expect(row.anchor).toEqual(moved);
+    expect(row.body).toBe('note c1');
+
+    // The next run picks it up.
+    expect((await storage.reencodeAll()).comments).toBe(1);
+    expect((await storage.getComment(DOC, 'c1'))!.anchor).toEqual(moved);
+  });
 });
