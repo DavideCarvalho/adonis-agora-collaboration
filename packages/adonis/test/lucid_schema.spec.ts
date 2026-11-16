@@ -53,6 +53,6 @@ describe('LucidStorage schema ↔ published migrations', () => {
 
     const storage = await source('../src/storage/lucid_storage.ts');
     expect(storage).toMatch(/saveVersion\([^)]*snapshot: Uint8Array/);
-    expect(storage).toContain('snapshot: Buffer.from(snapshot)');
+    expect(storage).toContain('snapshot: Buffer.from(stored)');
   });
 });

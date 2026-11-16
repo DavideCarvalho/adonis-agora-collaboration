@@ -15,6 +15,7 @@ Domain vocabulary for `adonis-collaboration`. Keep names exact across code, docs
 
 - **Driver registry** (`collaboration_manager.ts`) — engine ↔ Driver adapters.
 - **CollaborationStorage** — host-app persistence injected into drivers/manager.
+- **StorageCodec** (`src/storage/codec.ts`) — encode/decode of stored values (encryption at rest): `lucidStorage({ codec })` or `withCodec(storage, codec)`. Drivers never see ciphertext.
 - **auth/token** (`src/auth/token.ts`) — issue/verify credentials; enforces `authorize` on both WS handshake and REST `/token`. Two wire formats: JWT (partykit) and legacy base64 (self-hosted).
 - **Comments** live ONLY at `manager.comments` — drivers never touch them.
 - **REST surface** — built-in handlers in `routes.ts`; auto-registered by the provider, or manual via `collaborationRoutes(router)`.

@@ -6,6 +6,14 @@ import type {
   ListPageOptions,
   PruneVersionsOptions,
 } from '../types.js';
+import {
+  CodecStorage,
+  isBinaryEnvelope,
+  isEncodedAnchor,
+  isTextEnvelope,
+  type StorageCodec,
+  StorageCodecRunner,
+} from './codec.js';
 import { assertPruneKeep, resolvePage, versionsToPrune } from './shared.js';
 
 /**
@@ -59,6 +67,30 @@ export interface LucidStorageOptions {
    * connection's current schema.
    */
   schema?: string | undefined;
+  /**
+   * Encodes (typically encrypts) what is stored: document state, version
+   * snapshots, comment bodies and anchors. Rows written before it was set
+   * keep loading as plaintext and are encoded on their next save, or all at
+   * once with {@link LucidStorage.reencodeAll}.
+   */
+  codec?: StorageCodec | undefined;
+}
+
+/** Options of {@link LucidStorage.reencodeAll}. */
+export interface ReencodeOptions {
+  /** Rows read per query. Default 100. */
+  batchSize?: number;
+  /** Count what would be encoded without writing. */
+  dryRun?: boolean;
+  /** Called after each batch. */
+  onProgress?: (progress: ReencodeResult) => void;
+}
+
+/** What {@link LucidStorage.reencodeAll} encoded (or would encode, with `dryRun`). */
+export interface ReencodeResult {
+  documents: number;
+  versions: number;
+  comments: number;
 }
 
 /**
@@ -77,6 +109,7 @@ export class LucidStorage implements CollaborationStorage {
   private readonly connection: string | undefined;
   /** The schema (MySQL: database) holding the tables, or undefined for the current one. */
   readonly schema: string | undefined;
+  private readonly codec: StorageCodecRunner | undefined;
 
   constructor(db?: LucidConnectionLike, options?: string | LucidStorageOptions) {
     // Tests pass a real or mocked db instance; if so, bypass lazy import.
@@ -85,6 +118,12 @@ export class LucidStorage implements CollaborationStorage {
     if (opts.schema !== undefined) assertSchemaName(opts.schema);
     this.connection = opts.connection;
     this.schema = opts.schema;
+    this.codec = opts.codec ? new StorageCodecRunner(opts.codec) : undefined;
+  }
+
+  /** True when a codec is configured. */
+  get hasCodec(): boolean {
+    return this.codec !== undefined;
   }
 
   /** Ensures the tables lazily on demand — boot doesn't touch the database. */
@@ -246,14 +285,31 @@ export class LucidStorage implements CollaborationStorage {
     throw failed.reason;
   }
 
-  async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
+  async loadDocument(
+    docName: string,
+  ): Promise<{ state: Uint8Array; meta: Record<string, unknown> | null } | null> {
     await this.ensure();
     const row = await (await this.knex())
       .from(this.t('collab_documents'))
+      .select('state', 'meta')
       .where('doc_name', docName)
       .first();
-    if (!row?.state) return null;
-    return { state: new Uint8Array(row.state as Buffer) };
+    const meta = parseMeta(row?.meta);
+    if (!row?.state || (row.state as Buffer).byteLength === 0) {
+      this.codec?.markReadable(docName);
+      return null;
+    }
+    const stored = new Uint8Array(row.state as Buffer);
+    const state = this.codec ? await this.codec.decodeDocument(stored, docName, meta) : stored;
+    return { state, meta };
+  }
+
+  /**
+   * Lets the next save overwrite a document whose stored state failed to
+   * decode in this process. Only for when losing that state is intended.
+   */
+  forgetDecodeFailure(docName: string): void {
+    this.codec?.markReadable(docName);
   }
 
   async saveDocument(
@@ -261,7 +317,16 @@ export class LucidStorage implements CollaborationStorage {
     state: Uint8Array,
     meta?: Record<string, unknown>,
   ): Promise<void> {
+    this.codec?.assertWritable(docName);
     await this.ensure();
+    const stored = this.codec
+      ? await this.codec.encodeBinary(state, {
+          docName,
+          kind: 'document',
+          field: 'state',
+          ...(meta !== undefined ? { meta } : {}),
+        })
+      : state;
     const knex = await this.knex();
     const now = new Date();
     // Single upsert instead of a SELECT to decide insert-vs-update: the old
@@ -274,7 +339,7 @@ export class LucidStorage implements CollaborationStorage {
       .table(this.t('collab_documents'))
       .insert({
         doc_name: docName,
-        state: Buffer.from(state),
+        state: Buffer.from(stored),
         meta: meta ?? null,
         created_at: now,
         updated_at: now,
@@ -327,6 +392,14 @@ export class LucidStorage implements CollaborationStorage {
 
   async saveVersion(docName: string, version: CollabVersion, snapshot: Uint8Array): Promise<void> {
     await this.ensure();
+    const stored = this.codec
+      ? await this.codec.encodeBinary(snapshot, {
+          docName,
+          kind: 'version',
+          field: 'snapshot',
+          versionId: version.id,
+        })
+      : snapshot;
     await (await this.knex())
       .table(this.t('collab_versions'))
       .insert({
@@ -335,7 +408,7 @@ export class LucidStorage implements CollaborationStorage {
         created_by: version.createdBy,
         label: version.label,
         seq: version.seq,
-        snapshot: Buffer.from(snapshot),
+        snapshot: Buffer.from(stored),
         created_at: new Date(version.createdAt),
       })
       .onConflict(['doc_name', 'id'])
@@ -351,7 +424,14 @@ export class LucidStorage implements CollaborationStorage {
       .first();
     if (!row) return null;
     if (!row.snapshot) return (await this.loadDocument(docName))?.state ?? null;
-    return new Uint8Array(row.snapshot as Buffer);
+    const stored = new Uint8Array(row.snapshot as Buffer);
+    if (!this.codec || stored.byteLength === 0) return stored;
+    return this.codec.decodeBinary(stored, {
+      docName,
+      kind: 'version',
+      field: 'snapshot',
+      versionId,
+    });
   }
 
   async pruneVersions({ keep, docName, dryRun }: PruneVersionsOptions): Promise<number> {
@@ -408,7 +488,7 @@ export class LucidStorage implements CollaborationStorage {
       query = query.limit(size).offset(offset);
     }
     const rows = await query;
-    return rows.map((row) => this.toComment(row));
+    return Promise.all(rows.map((row) => this.toComment(row)));
   }
 
   async countComments(docName: string, space?: string): Promise<number> {
@@ -419,7 +499,12 @@ export class LucidStorage implements CollaborationStorage {
     return Number(row?.total ?? 0);
   }
 
-  private toComment(row: Record<string, unknown>): CollabComment {
+  private async toComment(row: Record<string, unknown>): Promise<CollabComment> {
+    const comment = this.rowToComment(row);
+    return this.codec ? this.codec.decodeComment(comment) : comment;
+  }
+
+  private rowToComment(row: Record<string, unknown>): CollabComment {
     return {
       id: row.id as string,
       documentName: row.doc_name as string,
@@ -459,12 +544,13 @@ export class LucidStorage implements CollaborationStorage {
 
   async saveComment(docName: string, comment: CollabComment): Promise<void> {
     await this.ensure();
+    const stored = this.codec ? await this.codec.encodeComment(comment) : comment;
     const knex = await this.knex();
     const payload = {
       doc_name: comment.documentName,
       space: comment.space,
-      anchor: comment.anchor,
-      body: comment.body,
+      anchor: stored.anchor,
+      body: stored.body,
       user_id: comment.userId,
       author_name: comment.authorName ?? null,
       resolved_at: comment.resolvedAt ? new Date(comment.resolvedAt) : null,
@@ -490,6 +576,182 @@ export class LucidStorage implements CollaborationStorage {
     await (await this.knex()).from(this.t('collab_comments')).where('id', commentId).delete();
     void docName;
   }
+
+  /**
+   * Encodes every row written before the codec was configured, in batches.
+   * Rows already encoded are skipped, so it can be stopped and run again. A
+   * row that changes while it is being encoded is left alone (its new value
+   * was written through the codec). Throws without a codec.
+   */
+  async reencodeAll(options: ReencodeOptions = {}): Promise<ReencodeResult> {
+    const codec = this.codec;
+    if (!codec) {
+      throw new Error(
+        '[@adonis-agora/collaboration] reencodeAll needs lucidStorage({ codec }) — there is nothing to encode with',
+      );
+    }
+    const batchSize = options.batchSize ?? 100;
+    if (!Number.isInteger(batchSize) || batchSize < 1) {
+      throw new Error(
+        `[@adonis-agora/collaboration] reencodeAll requires a positive integer batchSize — received ${String(batchSize)}`,
+      );
+    }
+    await this.ensure();
+    const knex = await this.knex();
+    const dialect = await this.dialect();
+    const result: ReencodeResult = { documents: 0, versions: 0, comments: 0 };
+    const report = () => options.onProgress?.({ ...result });
+
+    // Documents, keyset-paged by primary key.
+    let after: string | undefined;
+    for (;;) {
+      let query = knex
+        .from(this.t('collab_documents'))
+        .select('doc_name', 'state', 'meta')
+        .orderBy('doc_name', 'asc')
+        .limit(batchSize);
+      if (after !== undefined) query = query.where('doc_name', '>', after);
+      const rows = (await query) as Array<{
+        doc_name: string;
+        state: Buffer | null;
+        meta: unknown;
+      }>;
+      if (rows.length === 0) break;
+      after = rows[rows.length - 1]!.doc_name;
+      for (const row of rows) {
+        if (!row.state || row.state.byteLength === 0 || isBinaryEnvelope(row.state)) continue;
+        const meta = parseMeta(row.meta);
+        const ctx = { docName: row.doc_name, kind: 'document', field: 'state', meta } as const;
+        const plain = await codec.decodeBinary(new Uint8Array(row.state), ctx);
+        if (options.dryRun) {
+          result.documents++;
+          continue;
+        }
+        const encoded = await codec.encodeBinary(plain, ctx);
+        const updated = await knex
+          .from(this.t('collab_documents'))
+          .where('doc_name', row.doc_name)
+          .where('state', row.state)
+          .update({ state: Buffer.from(encoded) });
+        if (Number(updated) > 0) result.documents++;
+      }
+      report();
+    }
+
+    // Versions, keyset-paged by (doc_name, id).
+    let cursor: { doc_name: string; id: string } | undefined;
+    for (;;) {
+      let query = knex
+        .from(this.t('collab_versions'))
+        .select('doc_name', 'id', 'snapshot')
+        .orderBy([
+          { column: 'doc_name', order: 'asc' },
+          { column: 'id', order: 'asc' },
+        ])
+        .limit(batchSize);
+      if (cursor) {
+        const { doc_name: doc, id } = cursor;
+        query = query.where((q) =>
+          q
+            .where('doc_name', '>', doc)
+            .orWhere((inner) => inner.where('doc_name', doc).where('id', '>', id)),
+        );
+      }
+      const rows = (await query) as Array<{
+        doc_name: string;
+        id: string;
+        snapshot: Buffer | null;
+      }>;
+      if (rows.length === 0) break;
+      const last = rows[rows.length - 1]!;
+      cursor = { doc_name: last.doc_name, id: last.id };
+      for (const row of rows) {
+        if (!row.snapshot || row.snapshot.byteLength === 0 || isBinaryEnvelope(row.snapshot))
+          continue;
+        const ctx = {
+          docName: row.doc_name,
+          kind: 'version',
+          field: 'snapshot',
+          versionId: row.id,
+        } as const;
+        const plain = await codec.decodeBinary(new Uint8Array(row.snapshot), ctx);
+        if (options.dryRun) {
+          result.versions++;
+          continue;
+        }
+        const encoded = await codec.encodeBinary(plain, ctx);
+        const updated = await knex
+          .from(this.t('collab_versions'))
+          .where('doc_name', row.doc_name)
+          .where('id', row.id)
+          .where('snapshot', row.snapshot)
+          .update({ snapshot: Buffer.from(encoded) });
+        if (Number(updated) > 0) result.versions++;
+      }
+      report();
+    }
+
+    // Comments, keyset-paged by id.
+    let afterComment: string | undefined;
+    for (;;) {
+      let query = knex
+        .from(this.t('collab_comments'))
+        .select('*')
+        .orderBy('id', 'asc')
+        .limit(batchSize);
+      if (afterComment !== undefined) query = query.where('id', '>', afterComment);
+      const rows = (await query) as Array<Record<string, unknown>>;
+      if (rows.length === 0) break;
+      afterComment = rows[rows.length - 1]!.id as string;
+      for (const row of rows) {
+        const body = row.body as string;
+        if (isTextEnvelope(body) && isEncodedAnchor(row.anchor)) continue;
+        const plain = await codec.decodeComment(this.rowToComment(row));
+        if (options.dryRun) {
+          result.comments++;
+          continue;
+        }
+        const encoded = await codec.encodeComment(plain);
+        // Compare-and-swap on both columns the update writes: an edit that
+        // changed only the anchor meanwhile must not be reverted.
+        const anchorJson = typeof row.anchor === 'string' ? row.anchor : JSON.stringify(row.anchor);
+        const updated = await knex
+          .from(this.t('collab_comments'))
+          .where('id', row.id as string)
+          .where('body', body)
+          .whereRaw(anchorEquals[dialect], [anchorJson])
+          .update({ body: encoded.body, anchor: encoded.anchor });
+        if (Number(updated) > 0) result.comments++;
+      }
+      report();
+    }
+
+    return result;
+  }
+}
+
+/** `anchor` equal to a JSON text, per dialect (jsonb/JSON compare by value, not by text). */
+const anchorEquals: Record<Dialect, string> = {
+  postgres: 'anchor = ?::jsonb',
+  mysql: 'anchor = CAST(? AS JSON)',
+  sqlite: 'anchor = ?',
+  other: 'anchor = ?',
+};
+
+/** `meta` as stored: a jsonb object, or its JSON text on drivers that return strings. */
+function parseMeta(value: unknown): Record<string, unknown> | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return typeof parsed === 'object' && parsed !== null
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
 /**
@@ -503,4 +765,14 @@ export class LucidStorage implements CollaborationStorage {
  */
 export function lucidStorage(options: LucidStorageOptions = {}): LucidStorage {
   return new LucidStorage(undefined, options);
+}
+
+/**
+ * The `LucidStorage` behind `storage`, also when it is wrapped by
+ * `withCodec`; `undefined` for any other storage.
+ */
+export function lucidStorageOf(storage: unknown): LucidStorage | undefined {
+  let current = storage;
+  while (current instanceof CodecStorage) current = current.inner;
+  return current instanceof LucidStorage ? current : undefined;
 }

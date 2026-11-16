@@ -1,0 +1,151 @@
+---
+title: Encryption at rest
+description: Encrypt stored documents, version snapshots and comments with a storage codec, with your own keys per document.
+icon: Lock
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A **storage codec** transforms everything the storage writes and reverses it on read. The server
+keeps working on plaintext in memory (diffs, text extraction, versions), and only the stored bytes
+are encrypted.
+
+It covers:
+
+| Stored value | Column (Lucid) | Codec receives |
+| --- | --- | --- |
+| document state | `collab_documents.state` | `Uint8Array` |
+| version snapshot | `collab_versions.snapshot` | `Uint8Array` |
+| comment body | `collab_comments.body` | `string` |
+| comment anchor | `collab_comments.anchor` | `string` (the anchor as JSON) |
+
+Anchors are included because a `text-range` anchor carries the quoted text. Document names, ids,
+authors, timestamps and `meta` are stored as they are, so listing and filtering still work.
+
+## Configure it
+
+```ts title="config/collaboration.ts"
+import { defineConfig, lucidStorage } from '@adonis-agora/collaboration'
+import { documentCodec } from '#services/collaboration/document_codec'
+
+export default defineConfig({
+  engine: 'yjs',
+  storage: lucidStorage({ connection: 'primary', codec: documentCodec }),
+  // ...
+})
+```
+
+For any other storage, wrap it:
+
+```ts
+import { withCodec } from '@adonis-agora/collaboration'
+
+storage: withCodec(new S3CollabStorage({ bucket }), documentCodec)
+```
+
+## Write a codec
+
+A codec is two async functions. `encode` may return bytes or a string; `decode` gets back exactly
+what `encode` returned and must return the plaintext: a `Uint8Array` for `state` and `snapshot`, a
+`string` for `body` and `anchor`.
+
+```ts title="app/services/collaboration/document_codec.ts"
+import type { StorageCodec, StorageCodecContext } from '@adonis-agora/collaboration'
+import crypto from '@adonis-agora/crypto/services/main'
+
+/** 'researches/42/writing' → the key of researcher 42. */
+const keyFor = (ctx: StorageCodecContext) => `research-${ctx.docName.split('/')[1]}`
+
+/** Binds the ciphertext to its row, so it cannot be moved to another document. */
+const aad = (ctx: StorageCodecContext) => `${ctx.docName}:${ctx.kind}:${ctx.field}`
+
+export const documentCodec: StorageCodec = {
+  async encode(plaintext, ctx) {
+    const text = typeof plaintext === 'string' ? plaintext : Buffer.from(plaintext).toString('base64')
+    const { ciphertext } = await crypto.encrypt({ key: keyFor(ctx), plaintext: text, aad: aad(ctx) })
+    return ciphertext
+  },
+  async decode(encoded, ctx) {
+    const { plaintext } = await crypto.decrypt({
+      key: keyFor(ctx),
+      ciphertext: encoded as string,
+      aad: aad(ctx),
+    })
+    return ctx.field === 'body' || ctx.field === 'anchor'
+      ? plaintext
+      : new Uint8Array(Buffer.from(plaintext, 'base64'))
+  },
+}
+```
+
+The `ctx` argument says what is being encoded:
+
+| Field | Value |
+| --- | --- |
+| `docName` | the document (for a comment, its document). Same on encode and decode. |
+| `kind` | `'document'`, `'version'` or `'comment'` |
+| `field` | `'state'`, `'snapshot'`, `'body'` or `'anchor'` |
+| `versionId` / `commentId` | set for versions and comments |
+| `meta` | the document's `meta`, when the storage has it at hand |
+
+Pick the key from `docName`: it is the one value that is always there and identical on both sides.
+If the owner is not part of the name, look it up from the name in your own tables.
+
+## Columns
+
+Ciphertext fits the existing columns, so no migration is needed:
+
+- **Binary** values (`state`, `snapshot`) stay binary. A codec that returns bytes is stored as is;
+  one that returns a string is stored as its UTF-8 bytes.
+- **Text** values (`body`, `anchor`) are stored as text. A codec that returns bytes is stored as
+  base64 in them. The anchor is stored as a small JSON object (`{ "$agoraCodec": "..." }`) in the
+  same `jsonb` column.
+
+Each encoded value carries a short marker, which is how the storage tells it from a plaintext one.
+Encrypted values are larger than the plaintext (a few dozen bytes per value with AES-GCM, about a
+third more for base64), which matters only for MySQL, where `binary()` is a 64 KB `BLOB`.
+
+## Errors
+
+Every failure is thrown as a `StorageCodecError` with a `code`:
+
+| `code` | Meaning |
+| --- | --- |
+| `decode-failed` | `decode` threw (wrong key, tampered value) |
+| `encode-failed` | `encode` threw; nothing was written |
+| `invalid-output` | the codec returned the wrong type, or an empty document for a stored one |
+| `previous-state-unreadable` | a save was refused, see below |
+
+When a document fails to decode, opening it fails (the client cannot connect, and the error is
+reported through `onCollaborationError` with `operation: 'loadDocument'`). Nothing is ever served
+as an empty document, and the storage then **refuses every save of that document** until a later
+load succeeds: an empty or partial state would otherwise replace the real one.
+
+To replace an undecodable document on purpose, call `forgetDecodeFailure(docName)` on the storage
+before saving.
+
+## Existing plaintext data
+
+Turning a codec on does not break existing rows. A value without the marker is read as plaintext
+and written encoded on its next save.
+
+To encode everything at once, run:
+
+```sh
+node ace collaboration:reencode --dry-run   # count what would change
+node ace collaboration:reencode --batch-size=100
+```
+
+It reads rows in batches, skips rows that are already encoded, and leaves a row alone when it
+changes while being encoded, so it is safe to run while the app is serving and to run again. The
+same from code: `await storage.reencodeAll({ batchSize: 100 })` on a `lucidStorage({ codec })`.
+
+If your app already stored values it encrypted itself, add `isEncoded(value, ctx)` to the codec:
+values without the marker for which it returns `true` are decoded instead of read as plaintext.
+
+<Callout type="warn" title="Rotating keys">
+`collaboration:reencode` only encodes plaintext rows; it does not re-encrypt rows that are already
+encoded. Rotate with a key service that keeps old key versions readable (`@adonis-agora/crypto`
+records the version in the ciphertext): new saves use the new version, and old rows stay readable
+until they are saved again.
+</Callout>
