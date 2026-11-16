@@ -1,5 +1,5 @@
 import { BaseCommand, flags } from '@adonisjs/core/ace';
-import { assertSchemaName, LucidStorage } from '../src/storage/lucid_storage.js';
+import { assertSchemaName, lucidStorageOf } from '../src/storage/lucid_storage.js';
 import { stubsRoot } from '../stubs/main.js';
 
 /**
@@ -40,9 +40,7 @@ export default class CollaborationInit extends BaseCommand {
       partykit?: { roomHost: string };
       storage?: unknown;
     }>('collaboration', {});
-    const schema =
-      this.schema ??
-      (appConfig.storage instanceof LucidStorage ? appConfig.storage.schema : undefined);
+    const schema = this.schema ?? lucidStorageOf(appConfig.storage)?.schema;
     if (schema !== undefined) assertSchemaName(schema);
 
     const resolvedEngine = this.engine ?? appConfig.engine ?? 'yjs';

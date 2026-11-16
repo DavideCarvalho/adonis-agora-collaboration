@@ -94,10 +94,29 @@ export {
   type PresenceStore,
   RedisPresenceStore,
 } from './services/presence_service.js';
+export {
+  CodecStorage,
+  ENCODED_ANCHOR_KEY,
+  isBinaryEnvelope,
+  isEncodedAnchor,
+  isTextEnvelope,
+  type StorageCodec,
+  type StorageCodecContext,
+  StorageCodecError,
+  type StorageCodecErrorCode,
+  type StorageCodecField,
+  type StorageCodecKind,
+  type StorageCodecValue,
+  withCodec,
+} from './storage/codec.js';
 export { FileSystemStorage } from './storage/file_system_storage.js';
 export { InMemoryCollaborationStorage } from './storage/in_memory_storage.js';
-export type { LucidStorageOptions } from './storage/lucid_storage.js';
-export { LucidStorage, lucidStorage } from './storage/lucid_storage.js';
+export type {
+  LucidStorageOptions,
+  ReencodeOptions,
+  ReencodeResult,
+} from './storage/lucid_storage.js';
+export { LucidStorage, lucidStorage, lucidStorageOf } from './storage/lucid_storage.js';
 export type {
   CollabComment,
   CollabConnectionContext,

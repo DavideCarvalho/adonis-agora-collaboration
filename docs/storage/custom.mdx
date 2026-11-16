@@ -21,7 +21,8 @@ export default defineConfig({
 ```
 
 Reasons this comes up: documents large enough that object storage beats a `bytea` column;
-encryption at rest with your own keys; a different ORM; a tenant-per-database layout; or a
+encryption at rest with your own keys (or wrap any storage with `withCodec`, see
+[Encryption at rest](/docs/collaboration/storage/encryption)); a different ORM; a tenant-per-database layout; or a
 read-through cache in front of the real store.
 
 ## The five contracts to get right

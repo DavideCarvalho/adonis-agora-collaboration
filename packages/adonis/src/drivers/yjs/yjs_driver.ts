@@ -418,7 +418,23 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       // empty document the persistence fix was written to prevent, and only a
       // test that called the hook directly could still see it "working".
       async onLoadDocument({ documentName }: onLoadDocumentPayload) {
-        const stored = await storage.loadDocument(documentName);
+        // A storage that cannot read the stored state (a codec that fails to
+        // decrypt, a database outage) must fail the load: falling through to
+        // an empty document would have the next save overwrite the real one.
+        // Hocuspocus closes the connection and destroys the document, so
+        // nothing is stored for it.
+        let stored: Awaited<ReturnType<typeof storage.loadDocument>>;
+        try {
+          stored = await storage.loadDocument(documentName);
+        } catch (error) {
+          reportCollaborationError({
+            scope: 'storage',
+            operation: 'loadDocument',
+            docName: documentName,
+            error,
+          });
+          throw error;
+        }
         if (stored?.state && stored.state.byteLength > 0) return stored.state;
 
         return seedDocumentOnce(documentName);

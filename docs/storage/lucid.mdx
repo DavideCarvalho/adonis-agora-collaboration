@@ -41,6 +41,9 @@ somewhere other than your primary database.
 Document state and version snapshots are stored as **binary**. Comment anchors are `jsonb`, so a
 future anchor kind is a code change rather than a migration.
 
+To encrypt what these tables hold, pass a `codec`; see
+[Encryption at rest](/docs/collaboration/storage/encryption).
+
 ## Migrations, and the tables that create themselves
 
 `node ace collaboration:init` publishes a migration per table. Run them like any other:

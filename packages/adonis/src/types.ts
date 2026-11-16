@@ -183,7 +183,15 @@ export type ListOrder = 'asc' | 'desc';
  * this (database, S3...) and the library only knows the interface.
  */
 export interface CollaborationStorage {
-  loadDocument(docName: string): Promise<{ state: Uint8Array } | null>;
+  /**
+   * The stored state, or `null` for a document never saved. `meta` is
+   * optional: a storage that keeps it may return it (a codec then sees it).
+   * Throw when the stored state cannot be read — never return an empty state
+   * for a document that has one.
+   */
+  loadDocument(
+    docName: string,
+  ): Promise<{ state: Uint8Array; meta?: Record<string, unknown> | null } | null>;
   saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void>;
   /**
    * Versions of a document, oldest first. `page` bounds the result — omit it
