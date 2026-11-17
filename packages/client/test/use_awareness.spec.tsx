@@ -194,9 +194,9 @@ describe('useAwareness', () => {
       });
     }
 
-    // At most React's one-off eager-bailout render (the same-value `setStatus`);
-    // a new peers array per cursor move re-rendered on every one of the 20.
-    expect(renders - before).toBeLessThanOrEqual(1);
+    // No render at all: neither a new peers array nor a same-value `setStatus` reaches React
+    // (each used to cost a render — the array on all 20 moves, the status once via React's bailout).
+    expect(renders - before).toBe(0);
     expect(result.current.peers).toBe(peers);
 
     // A change a peer carries (the name) still comes through.

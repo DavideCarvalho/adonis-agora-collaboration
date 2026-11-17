@@ -110,6 +110,8 @@ export function useAwareness(options: UseAwarenessOptions): UseAwarenessResult {
   /** Last peers handed to React, so an unchanged snapshot never schedules a render. */
   const peersRef = useRef<CollabPeer[]>(peers);
   const [status, setStatus] = useState<CollabStatus>(() => session?.getStatus() ?? 'connecting');
+  /** Last status handed to React: a remote cursor move re-reads the same status every time. */
+  const statusRef = useRef<CollabStatus>(status);
   const [awareness, setAwareness] = useState<AwarenessProtocol.Awareness | null>(null);
 
   /** Last published local state — re-applied to every new awareness channel. */
@@ -143,7 +145,13 @@ export function useAwareness(options: UseAwarenessOptions): UseAwarenessResult {
     let bound: AwarenessProtocol.Awareness | null = null;
 
     const update = () => {
-      setStatus(session.getStatus());
+      // Compared outside `setStatus`, like the peers below: every awareness 'change' (each remote
+      // cursor move) lands here with the status unchanged, and the setter would still cost a render.
+      const nextStatus = session.getStatus();
+      if (nextStatus !== statusRef.current) {
+        statusRef.current = nextStatus;
+        setStatus(nextStatus);
+      }
       const next = session.transport?.awareness ?? null;
       if (next !== bound) {
         bound?.off('change', update);
