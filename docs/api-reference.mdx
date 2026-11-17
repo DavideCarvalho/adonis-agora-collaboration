@@ -149,6 +149,7 @@ clear message if it is read too early.
 | `authorize(ctx, docName)` | `Promise<CollabPermission>` — the resolved rule, same as the handshake uses |
 | `engineFor({ docName })` | `Promise<CollaborationEngine>` |
 | `getDocumentState({ docName })` | `Promise<Uint8Array>` — live document if open, else storage |
+| `getStoredDocumentState({ docName })` | `Promise<Uint8Array>` — what storage holds, even when this process has the document open; empty when nothing is stored |
 | `getDocumentText({ docName })` | `Promise<string>` — plain text; `''` when it is not a text layout |
 | `withLiveDocument({ docName, run })` | `Promise<LiveDocumentResult<T>>` — runs `run(doc)` on the live in-process document; `{ live: false, reason }` when there is none, and then `run` never runs |
 | `hasLiveDocument({ docName })` | `Promise<boolean>` — is this process holding the document open right now |

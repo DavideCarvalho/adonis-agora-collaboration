@@ -454,21 +454,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
         if (options.isEphemeralRoom?.(documentName)) return;
         // Hocuspocus swallows what this hook throws, so a storage outage was
         // completely silent — indistinguishable from a healthy save.
-        try {
-          const update = Y.encodeStateAsUpdate(document);
-          const print = fingerprint(update);
-          if (persistedFingerprint.get(document) === print) return;
-          await storage.saveDocument(documentName, update);
-          persistedFingerprint.set(document, print);
-        } catch (error) {
-          reportCollaborationError({
-            scope: 'storage',
-            operation: 'saveDocument',
-            docName: documentName,
-            error,
-          });
-          throw error;
-        }
+        await persistLiveDocument(storage, documentName, document);
       },
 
       // CRITICAL: when the last client disconnects (F5 / close tab / nav away),
@@ -480,21 +466,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       // debouncer state. This makes F5 reliable.
       async beforeUnloadDocument({ documentName, document }) {
         if (options.isEphemeralRoom?.(documentName)) return;
-        try {
-          const update = Y.encodeStateAsUpdate(document);
-          const print = fingerprint(update);
-          if (persistedFingerprint.get(document) === print) return;
-          await storage.saveDocument(documentName, update);
-          persistedFingerprint.set(document, print);
-        } catch (error) {
-          reportCollaborationError({
-            scope: 'storage',
-            operation: 'saveDocument',
-            docName: documentName,
-            error,
-          });
-          throw error;
-        }
+        await persistLiveDocument(storage, documentName, document);
       },
 
       debounce: options.debounce ?? 2000,
@@ -606,6 +578,18 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
     return stored?.state ?? new Uint8Array();
   }
 
+  /**
+   * What storage holds for the document, even while this process has it open.
+   *
+   * `getDocumentState` answers with the live copy when there is one, which is
+   * the right answer for an export and the wrong one for a process that wants
+   * to know what *another* process wrote — that only shows up here.
+   */
+  async getStoredDocumentState(docName: string): Promise<Uint8Array> {
+    const stored = await this.storage.loadDocument(docName);
+    return stored?.state ?? new Uint8Array();
+  }
+
   async getDocumentText(docName: string): Promise<string> {
     const doc = await this.ensureDoc(docName);
     const TiptapTransformer = await loadTiptapTransformer();
@@ -666,6 +650,9 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
     const restoredDoc = this.hydrate(state);
 
     const live = await this.ensureDoc(docName);
+    // What another process wrote since this one loaded the document belongs to
+    // the state being kept as "before the restore", not to a write that drops it.
+    if (this.liveDocument(docName) === live) await mergeStoredInto(this.storage, docName, live);
     const existing = await this.storage.listVersions(docName);
     const target = existing.find((version) => version.id === versionId);
 
@@ -685,9 +672,7 @@ export class YjsDriver implements CollaborationDriver, LiveDocumentDriver {
       applyRestoredContent(live, restoredDoc);
     });
 
-    const update = Y.encodeStateAsUpdate(live);
-    await this.storage.saveDocument(docName, update);
-    persistedFingerprint.set(live, fingerprint(update));
+    await persistLiveDocument(this.storage, docName, live, { force: true });
   }
 
   /**
@@ -879,6 +864,73 @@ function applyRestoredContent(live: Y.Doc, restored: Y.Doc): void {
  * new in it.
  */
 const persistedFingerprint = new WeakMap<Y.Doc, string>();
+
+/**
+ * Origin of the transaction that brings stored state into a live document.
+ *
+ * Hocuspocus' own "local" shape with `skipStoreHooks`: the clients still get
+ * the update (it is broadcast like any other), but it does not schedule
+ * another store — the write that is merging it is already under way, and a
+ * store that triggered a store would never settle.
+ */
+const MERGE_STORED_ORIGIN = { source: 'local', skipStoreHooks: true } as const;
+
+/**
+ * Brings what storage holds into `document`, so the write that follows keeps it.
+ *
+ * Saving is a REPLACE — every storage upserts the whole state. A live
+ * document only knows what reached it in this process, and anything another
+ * process wrote to storage meanwhile (a sync job merging an external edit, a
+ * second instance with the same document open) was dropped by the next
+ * autosave: silently, and for good. Yjs updates commute and are idempotent,
+ * so applying the stored state is safe whatever it contains; when storage
+ * still holds exactly what this document last wrote, there is nothing new
+ * and the decode is skipped.
+ *
+ * A failed read throws: writing without knowing what is stored is the very
+ * overwrite this exists to prevent. Hocuspocus keeps the document in memory
+ * and stores it again on the next change.
+ */
+async function mergeStoredInto(
+  storage: CollaborationStorage,
+  documentName: string,
+  document: Y.Doc,
+): Promise<void> {
+  const stored = await storage.loadDocument(documentName);
+  const state = stored?.state;
+  if (!state || state.byteLength === 0) return;
+  if (persistedFingerprint.get(document) === fingerprint(state)) return;
+  Y.applyUpdate(document, state, MERGE_STORED_ORIGIN);
+}
+
+/**
+ * Every write of a live document: the stored state merged in first (see
+ * {@link mergeStoredInto}), then the union saved — unless it is exactly what
+ * this document last wrote. Failures are reported and rethrown.
+ */
+async function persistLiveDocument(
+  storage: CollaborationStorage,
+  documentName: string,
+  document: Y.Doc,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  try {
+    await mergeStoredInto(storage, documentName, document);
+    const update = Y.encodeStateAsUpdate(document);
+    const print = fingerprint(update);
+    if (!options.force && persistedFingerprint.get(document) === print) return;
+    await storage.saveDocument(documentName, update);
+    persistedFingerprint.set(document, print);
+  } catch (error) {
+    reportCollaborationError({
+      scope: 'storage',
+      operation: 'saveDocument',
+      docName: documentName,
+      error,
+    });
+    throw error;
+  }
+}
 
 /**
  * A fragment child copied as a new item. `insert` is typed for elements and

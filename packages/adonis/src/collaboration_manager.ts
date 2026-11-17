@@ -230,6 +230,22 @@ export class CollaborationManager {
     return this.#driverFor(docName).then((driver) => driver.getDocumentState(docName));
   }
 
+  /**
+   * What storage holds for the document — never the live copy this process
+   * may have open, which is what `getDocumentState` prefers.
+   *
+   * The question a process asks when another one changed the document: an
+   * instance with the editor open reads this to catch up with a write made
+   * elsewhere (apply it to the live document; Yjs updates are idempotent).
+   * Empty when nothing is stored.
+   */
+  async getStoredDocumentState({ docName }: { docName: string }): Promise<Uint8Array> {
+    const driver = await this.#driverFor(docName);
+    if (driver.getStoredDocumentState) return driver.getStoredDocumentState(docName);
+    const stored = this.config.storage ? await this.config.storage.loadDocument(docName) : null;
+    return stored?.state ?? new Uint8Array();
+  }
+
   getDocumentText({ docName }: { docName: string }): Promise<string> {
     return this.#driverFor(docName).then((driver) => driver.getDocumentText(docName));
   }

@@ -193,6 +193,37 @@ The document is only alive where its clients are connected, so this is a same-pr
 construction — and, on more than one instance, a same-*instance* one. Read the section below.
 </Callout>
 
+## Writing from another process
+
+A process without the document open (a queue worker, another instance) changes it by merging into
+the stored state and saving it back:
+
+```ts
+import * as Y from 'yjs'
+import collaboration from '@adonis-agora/collaboration/services/main'
+
+const doc = new Y.Doc()
+Y.applyUpdate(doc, await collaboration.current.getStoredDocumentState({ docName }))
+doc.transact(() => applyExternalChange(doc))
+await collaboration.current.persistDocument({ docName, state: Y.encodeStateAsUpdate(doc) })
+```
+
+If some instance has the document open, its next save keeps that change: every save of a live
+document first merges what is stored, then writes the union. The open editors receive the change
+with that save. To show it sooner, tell the instance that has the document open (a Redis message,
+for example) and apply the stored state there:
+
+```ts
+const stored = await collaboration.current.getStoredDocumentState({ docName })
+await collaboration.current.withLiveDocument({
+  docName,
+  run: (doc) => Y.applyUpdate(doc, stored),
+})
+```
+
+`getStoredDocumentState` always reads storage. `getDocumentState` returns the live copy when this
+process has one.
+
 ## Running more than one instance
 
 The embedded server holds each document in the memory of **one process**. Two instances behind a
