@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration-client
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- [#189](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/189) [`670498e`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/670498e2015c3d9b09cad227fc48613c0f97bc8b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `useAwareness` no longer re-renders when a remote cursor moves and the connection status is unchanged.
+
 ## 1.0.0-rc.1
 
 ### Major Changes
