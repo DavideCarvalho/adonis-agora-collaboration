@@ -52,12 +52,15 @@ async function captured(run: () => Promise<void>): Promise<CollabErrorEvent[]> {
   return events;
 }
 
-const failing: CollaborationStorage = {
-  ...new InMemoryCollaborationStorage(),
-  async saveDocument() {
+// A real storage whose writes fail: a save reads what is stored first (to
+// merge it), so spreading an instance — which drops the prototype's methods —
+// no longer stands in for one.
+class FailingWrites extends InMemoryCollaborationStorage {
+  override async saveDocument(): Promise<void> {
     throw new Error('connection terminated unexpectedly');
-  },
-} as unknown as CollaborationStorage;
+  }
+}
+const failing: CollaborationStorage = new FailingWrites();
 
 afterEach(() => {
   setCollaborationLogger(undefined);

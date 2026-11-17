@@ -29,6 +29,12 @@ export interface CollaborationDriver {
   /** Current binary state of the document (for external export/push, e.g. Drive). */
   getDocumentState(docName: string): Promise<Uint8Array>;
 
+  /**
+   * What storage holds for the document, skipping the live copy this process
+   * may have open. Optional: engines without a local store leave it out.
+   */
+  getStoredDocumentState?(docName: string): Promise<Uint8Array>;
+
   /** Plain text of the document (for LanguageTool, RAG, comment indexes). */
   getDocumentText(docName: string): Promise<string>;
 
