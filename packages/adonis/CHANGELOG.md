@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 1.0.0-rc.7
+
+### Patch Changes
+
+- [#188](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/188) [`5c633cc`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/5c633ccbade3b96e6c963ba62126842ed1e56f81) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Yjs: saving a live document no longer drops changes another process wrote to storage. Every save (the debounced autosave, the save when the last client leaves, `restoreVersion`) first merges the stored state into the live document, then writes the union. Connected clients receive the merged changes. If the stored state can't be read, the save fails and nothing is overwritten. New `getStoredDocumentState({ docName })` reads storage even when this process has the document open.
+
 ## 1.0.0-rc.6
 
 ### Patch Changes
