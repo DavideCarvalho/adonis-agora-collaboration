@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 1.0.0-rc.6
+
+### Patch Changes
+
+- fix(deps): update dependency @adonis-agora/filter to ^1.0.0-rc ([#186](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/186))
+
 ## 1.0.0-rc.5
 
 ### Minor Changes
