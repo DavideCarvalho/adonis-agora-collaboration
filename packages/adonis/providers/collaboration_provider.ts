@@ -6,6 +6,7 @@ import { type CollabLogger, setCollaborationLogger } from '../src/observability.
 import { collaborationRoutes } from '../src/routes.js';
 import { setBootedApp } from '../src/services/booted_app.js';
 import { RedisPresenceStore } from '../src/services/presence_service.js';
+import { collaborationStackUses, describeStackUse } from '../src/stack.js';
 import { lucidStorageOf } from '../src/storage/lucid_storage.js';
 import type { CollaborationConfig } from '../src/types.js';
 
@@ -42,6 +43,8 @@ export default class CollaborationServiceProvider {
 
     const config = this.app.config.get<CollaborationAppConfig>('collaboration');
     this.config = config;
+    // What it runs on, with the app's defaults resolved, for telescope's Architecture page.
+    if (config) describeStackUse(config, collaborationStackUses(config, this.app.config));
 
     this.app.container.singleton(CollaborationManager, () => {
       const presenceStore =

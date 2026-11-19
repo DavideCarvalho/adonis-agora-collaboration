@@ -31,6 +31,11 @@ export class FileSystemStorage implements CollaborationStorage {
     this.baseDir = baseDir ?? join(process.cwd(), '.collab-data');
   }
 
+  /** The directory the documents live in. */
+  get directory(): string {
+    return this.baseDir;
+  }
+
   private async ensure(): Promise<void> {
     await mkdir(join(this.baseDir, 'versions'), { recursive: true });
     await mkdir(join(this.baseDir, 'comments'), { recursive: true });
