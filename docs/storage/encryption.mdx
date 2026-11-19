@@ -43,6 +43,30 @@ import { withCodec } from '@adonis-agora/collaboration'
 storage: withCodec(new S3CollabStorage({ bucket }), documentCodec)
 ```
 
+## With `@adonis-agora/crypto`
+
+`@adonis-agora/crypto-integrations` ships a ready codec: per-subject keys (`crypto.subjects`) or a
+named key on the crypto server, a `docs` filter, and an AAD bound to the row and column.
+
+```ts title="config/collaboration.ts"
+import crypto from '@adonis-agora/crypto/services/main'
+import { collaborationCodec } from '@adonis-agora/crypto-integrations/collaboration'
+
+storage: lucidStorage({
+  connection: 'primary',
+  codec: collaborationCodec({
+    docs: /^projects\/([^/]+)\/writing$/, // other documents are stored as they are
+    subjects: () => crypto.subjects,
+    // ownerOf: your own lookup of the project's owner
+    subject: async ([, projectId]) => ({ type: 'researcher', id: await ownerOf(projectId) }),
+  }),
+}),
+```
+
+Its options (a named key, a key per document, envelope mode for large states) are in the
+[crypto integrations docs](https://davidecarvalho.github.io/agora/docs/crypto/integrations#collaboration--collaboration).
+Write your own codec when your keys live elsewhere.
+
 ## Write a codec
 
 A codec is two async functions. `encode` may return bytes or a string; `decode` gets back exactly
