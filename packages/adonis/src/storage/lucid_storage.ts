@@ -121,6 +121,11 @@ export class LucidStorage implements CollaborationStorage {
     this.codec = opts.codec ? new StorageCodecRunner(opts.codec) : undefined;
   }
 
+  /** The Lucid connection name, or undefined for the default connection. */
+  get connectionName(): string | undefined {
+    return this.connection;
+  }
+
   /** True when a codec is configured. */
   get hasCodec(): boolean {
     return this.codec !== undefined;

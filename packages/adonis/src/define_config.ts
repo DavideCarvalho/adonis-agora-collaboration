@@ -1,5 +1,6 @@
 import type { CollabDocumentDeclaration, DocumentParams } from './documents.js';
 import type { ResolveUserFn } from './http/types.js';
+import { collaborationStackUses, describeStackUse } from './stack.js';
 import type { CollaborationConfig, PartyKitConfig } from './types.js';
 
 /**
@@ -76,7 +77,9 @@ export type CollaborationAppConfigFor<Pattern extends string> = Omit<
 export function defineConfig<Pattern extends string = never>(
   config: CollaborationAppConfigFor<Pattern>,
 ): CollaborationAppConfigFor<Pattern> {
-  return config;
+  // What it runs on, for telescope's Architecture page. The provider refines it at register, once
+  // the app's config names the default Lucid connection and the Redis connections.
+  return describeStackUse(config, collaborationStackUses(config));
 }
 
 /**
