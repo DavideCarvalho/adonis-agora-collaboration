@@ -112,7 +112,7 @@ routes: {
 
 Since 0.13.0 the default resolver also calls `check()`/`authenticate()` itself, and then asks
 `getUser()`/`getUserOrFail()` when `ctx.auth.user` is still empty — which is what auth stacks that
-resolve the user **on demand** (`@adonis-agora/authkit`) need, since they verify the session and
+resolve the user **on demand** (`@adonis-agora/authkit-client`) need, since they verify the session and
 never populate `user` at all. If you wrote a `resolveUser` that only called `getUserOrFail()`, you no
 longer need it.
 
