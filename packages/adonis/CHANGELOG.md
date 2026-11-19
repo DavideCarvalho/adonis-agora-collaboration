@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 1.0.0-rc.9
+
+### Patch Changes
+
+- [#192](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/192) [`566a93d`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/566a93d741559dd4c9b8c2a0783347ccc9a0b25a) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `config/collaboration.ts` describes what it runs on under `Symbol.for('@adonis-agora/stack')`: the Lucid or file-system storage (`documents`), `redisUrl` (`presence`, linked to the matching `config/redis.ts` connection when there is one) and the PartyKit host (`sync`). The provider resolves the default Lucid connection and its client, so telescope's Architecture page shows them with no extra code.
+
 ## 1.0.0-rc.8
 
 ### Patch Changes
