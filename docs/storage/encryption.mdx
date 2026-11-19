@@ -57,6 +57,7 @@ storage: lucidStorage({
   codec: collaborationCodec({
     docs: /^projects\/([^/]+)\/writing$/, // other documents are stored as they are
     subjects: () => crypto.subjects,
+    // ownerOf: your own lookup of the project's owner
     subject: async ([, projectId]) => ({ type: 'researcher', id: await ownerOf(projectId) }),
   }),
 }),
