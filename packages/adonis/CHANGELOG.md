@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 1.0.0-rc.10
+
+### Minor Changes
+
+- [#195](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/195) [`70b027d`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/70b027d388a73896ee759b189894a44af32d555e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - createdAt / updatedAt on documents and comments. `CollaborationStorage.loadDocument` may return `createdAt` / `updatedAt` (`Date`, optional, new `StoredCollabDocument` type): Lucid reads the existing `collab_documents.created_at` / `updated_at` columns, the memory storage tracks them and the file storage reports the file times. `describeDocument()` and `collaboration:documents:show` show them (ISO, `null` when unknown). A new comment now starts with `updatedAt` equal to `createdAt` instead of `null` (Lucid already stored it that way), and Lucid stores the comment's own `updatedAt`. No schema change.
+
 ## 1.0.0-rc.9
 
 ### Patch Changes
