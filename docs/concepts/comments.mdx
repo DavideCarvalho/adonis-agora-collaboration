@@ -58,7 +58,7 @@ Three operations, and a comment that is never really destroyed until you say so:
 
 ```ts
 const comment = await manager.comments.create(docName, { space, anchor, body, userId, authorName })
-// → { id, resolvedAt: null, createdAt, updatedAt: null, ... }
+// → { id, resolvedAt: null, createdAt, updatedAt, ... }   (updatedAt = createdAt until it changes)
 
 await manager.comments.resolve(docName, comment.id, true)   // resolvedAt = now
 await manager.comments.resolve(docName, comment.id, false)  // reopened — resolvedAt = null

@@ -89,6 +89,18 @@ describe('LucidStorage upsert (Postgres)', () => {
     expect(second!.updated_at.getTime()).toBeGreaterThan(first!.updated_at.getTime());
   });
 
+  it('loadDocument returns the row created_at / updated_at as Dates', async () => {
+    await storage.saveDocument('docs/dated', new Uint8Array([1]));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await storage.saveDocument('docs/dated', new Uint8Array([2]));
+    const row = await documentRow('docs/dated');
+    const loaded = await storage.loadDocument('docs/dated');
+
+    expect(loaded?.createdAt).toEqual(row!.created_at);
+    expect(loaded?.updatedAt).toEqual(row!.updated_at);
+    expect(loaded!.updatedAt!.getTime()).toBeGreaterThan(loaded!.createdAt!.getTime());
+  });
+
   it('a repeated save of the same state is a no-op row-count-wise (idempotent upsert)', async () => {
     await storage.saveDocument('docs/idempotent', new Uint8Array([5]));
     await storage.saveDocument('docs/idempotent', new Uint8Array([5]));
@@ -121,6 +133,15 @@ describe('LucidStorage upsert (Postgres)', () => {
     const stored = await storage.getComment('docs/first', 'comment-1');
     expect(stored?.body).toBe('edited note');
     expect(stored?.resolvedAt).not.toBeNull();
+  });
+
+  it('stores the comment own updatedAt, so a reload matches what the service returned', async () => {
+    const at = new Date(2026, 0, 1).toISOString();
+    await storage.saveComment('docs/first', { ...baseComment(), createdAt: at, updatedAt: at });
+    expect(await storage.getComment('docs/first', 'comment-1')).toMatchObject({
+      createdAt: at,
+      updatedAt: at,
+    });
   });
 });
 

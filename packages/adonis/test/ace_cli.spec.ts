@@ -198,6 +198,8 @@ describe('collaboration CLI', { timeout: 30_000 }, () => {
         engine: 'yjs',
         storage: 'configured',
         storedBytes: state.byteLength,
+        createdAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT.*Z$/),
+        updatedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT.*Z$/),
         versions: 1,
         comments: 3,
         presence: 0,

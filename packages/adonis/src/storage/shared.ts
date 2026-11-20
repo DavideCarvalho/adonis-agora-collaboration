@@ -86,3 +86,20 @@ export async function countCommentsIn(
   if (storage.countComments) return storage.countComments(docName, space);
   return (await storage.listComments(docName, space)).length;
 }
+
+/**
+ * A stored timestamp (`Date`, an ISO/SQL string, epoch ms or a Luxon `DateTime`) as a `Date`;
+ * `null` when there is none or it does not parse.
+ */
+export function toDateOrNull(value: unknown): Date | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (
+    typeof value === 'object' &&
+    typeof (value as { toJSDate?: unknown }).toJSDate === 'function'
+  ) {
+    return toDateOrNull((value as { toJSDate(): Date }).toJSDate());
+  }
+  const date = new Date(value as string | number);
+  return Number.isNaN(date.getTime()) ? null : date;
+}

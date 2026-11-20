@@ -178,6 +178,16 @@ export interface ListPageOptions {
 /** Sort direction of a listing — see {@link ListPageOptions.order}. */
 export type ListOrder = 'asc' | 'desc';
 
+/** What {@link CollaborationStorage.loadDocument} returns for a stored document. */
+export interface StoredCollabDocument {
+  state: Uint8Array;
+  meta?: Record<string, unknown> | null;
+  /** When the document was first stored. Optional: a storage that keeps it returns it. */
+  createdAt?: Date | null;
+  /** When the document was last stored. Optional, like `createdAt`. */
+  updatedAt?: Date | null;
+}
+
 /**
  * Persistence of documents + versions + comments. The host app implements
  * this (database, S3...) and the library only knows the interface.
@@ -189,9 +199,7 @@ export interface CollaborationStorage {
    * Throw when the stored state cannot be read — never return an empty state
    * for a document that has one.
    */
-  loadDocument(
-    docName: string,
-  ): Promise<{ state: Uint8Array; meta?: Record<string, unknown> | null } | null>;
+  loadDocument(docName: string): Promise<StoredCollabDocument | null>;
   saveDocument(docName: string, state: Uint8Array, meta?: Record<string, unknown>): Promise<void>;
   /**
    * Versions of a document, oldest first. `page` bounds the result — omit it

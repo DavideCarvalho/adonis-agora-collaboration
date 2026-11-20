@@ -134,4 +134,5 @@ export type {
   LiveDocumentResult,
   PartyKitConfig,
   PruneVersionsOptions,
+  StoredCollabDocument,
 } from './types.js';

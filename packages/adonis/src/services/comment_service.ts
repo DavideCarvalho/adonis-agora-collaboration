@@ -51,7 +51,7 @@ export class CommentService {
       id: randomUUID(),
       resolvedAt: null,
       createdAt: now,
-      updatedAt: null,
+      updatedAt: now,
     };
     await this.storage.saveComment(docName, created);
     return created;

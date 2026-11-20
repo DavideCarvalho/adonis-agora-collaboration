@@ -4,6 +4,7 @@ import type {
   CollabVersion,
   ListPageOptions,
   PruneVersionsOptions,
+  StoredCollabDocument,
 } from '../types.js';
 import { assertPruneKeep, resolvePage, versionsToPrune } from './shared.js';
 
@@ -24,17 +25,22 @@ function paginate<T>(items: T[], page?: ListPageOptions): T[] {
  * storage (Postgres/S3).
  */
 export class InMemoryCollaborationStorage implements CollaborationStorage {
-  private docs = new Map<string, Uint8Array>();
+  private docs = new Map<string, { state: Uint8Array; createdAt: Date; updatedAt: Date }>();
   private versions = new Map<string, Array<{ version: CollabVersion; snapshot: Uint8Array }>>();
   private comments = new Map<string, CollabComment[]>();
 
-  async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
-    const state = this.docs.get(docName);
-    return state ? { state } : null;
+  async loadDocument(docName: string): Promise<StoredCollabDocument | null> {
+    const stored = this.docs.get(docName);
+    return stored ? { ...stored } : null;
   }
 
   async saveDocument(docName: string, state: Uint8Array): Promise<void> {
-    this.docs.set(docName, state);
+    const now = new Date();
+    this.docs.set(docName, {
+      state,
+      createdAt: this.docs.get(docName)?.createdAt ?? now,
+      updatedAt: now,
+    });
   }
 
   async listVersions(docName: string, page?: ListPageOptions): Promise<CollabVersion[]> {

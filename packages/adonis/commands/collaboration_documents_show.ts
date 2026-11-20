@@ -29,6 +29,8 @@ export default class CollaborationDocumentsShow extends CollaborationCommand {
     if (params.length > 0) table.row(['Params', params.map(([k, v]) => `${k}=${v}`).join(', ')]);
     table.row(['Engine', doc.engine]);
     table.row(['Stored', doc.storedBytes === null ? 'nothing stored' : `${doc.storedBytes} bytes`]);
+    table.row(['Created', doc.createdAt ?? '—']);
+    table.row(['Updated', doc.updatedAt ?? '—']);
     table.row(['Versions', String(doc.versions)]);
     table.row(['Comments', String(doc.comments)]);
     table.row(['Presence', String(doc.presence)]);

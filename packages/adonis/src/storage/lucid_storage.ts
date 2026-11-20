@@ -5,6 +5,7 @@ import type {
   CollabVersion,
   ListPageOptions,
   PruneVersionsOptions,
+  StoredCollabDocument,
 } from '../types.js';
 import {
   CodecStorage,
@@ -14,7 +15,7 @@ import {
   type StorageCodec,
   StorageCodecRunner,
 } from './codec.js';
-import { assertPruneKeep, resolvePage, versionsToPrune } from './shared.js';
+import { assertPruneKeep, resolvePage, toDateOrNull, versionsToPrune } from './shared.js';
 
 /**
  * Minimal structural contract for the lucid connection — avoids the
@@ -290,13 +291,18 @@ export class LucidStorage implements CollaborationStorage {
     throw failed.reason;
   }
 
-  async loadDocument(
-    docName: string,
-  ): Promise<{ state: Uint8Array; meta: Record<string, unknown> | null } | null> {
+  async loadDocument(docName: string): Promise<
+    | (StoredCollabDocument & {
+        meta: Record<string, unknown> | null;
+        createdAt: Date | null;
+        updatedAt: Date | null;
+      })
+    | null
+  > {
     await this.ensure();
     const row = await (await this.knex())
       .from(this.t('collab_documents'))
-      .select('state', 'meta')
+      .select('state', 'meta', 'created_at', 'updated_at')
       .where('doc_name', docName)
       .first();
     const meta = parseMeta(row?.meta);
@@ -306,7 +312,12 @@ export class LucidStorage implements CollaborationStorage {
     }
     const stored = new Uint8Array(row.state as Buffer);
     const state = this.codec ? await this.codec.decodeDocument(stored, docName, meta) : stored;
-    return { state, meta };
+    return {
+      state,
+      meta,
+      createdAt: toDateOrNull(row.created_at),
+      updatedAt: toDateOrNull(row.updated_at),
+    };
   }
 
   /**
@@ -559,7 +570,7 @@ export class LucidStorage implements CollaborationStorage {
       user_id: comment.userId,
       author_name: comment.authorName ?? null,
       resolved_at: comment.resolvedAt ? new Date(comment.resolvedAt) : null,
-      updated_at: new Date(),
+      updated_at: comment.updatedAt ? new Date(comment.updatedAt) : new Date(),
     };
     // Same single-upsert shape as `saveDocument` — `id` is the table's primary
     // key, and `created_at` is excluded from `.merge()` so an edit does not
