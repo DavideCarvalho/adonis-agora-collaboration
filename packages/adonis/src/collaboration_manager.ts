@@ -14,6 +14,7 @@ import {
   PresenceService,
   type PresenceStore,
 } from './services/presence_service.js';
+import { toDateOrNull } from './storage/shared.js';
 import type {
   CollabConnectionContext,
   CollabDiffSummary,
@@ -505,6 +506,8 @@ export class CollaborationManager {
       engine,
       storage: this.config.storage ? 'configured' : 'memory',
       storedBytes: stored ? stored.state.byteLength : null,
+      createdAt: isoOrNull(stored?.createdAt),
+      updatedAt: isoOrNull(stored?.updatedAt),
       versions,
       comments,
       presence: presence.length,
@@ -516,6 +519,10 @@ export class CollaborationManager {
     await Promise.all([...this.drivers.values()].map((driver) => driver.close()));
     await this.presence?.close();
   }
+}
+
+function isoOrNull(value: unknown): string | null {
+  return toDateOrNull(value)?.toISOString() ?? null;
 }
 
 /** One entry of {@link CollaborationManager.listDocumentDeclarations}. */
@@ -541,6 +548,10 @@ export interface DocumentDescription {
   storage: 'configured' | 'memory';
   /** Bytes of the stored state, `null` when nothing is stored. */
   storedBytes: number | null;
+  /** When the document was first stored (ISO 8601), `null` when unknown or nothing is stored. */
+  createdAt: string | null;
+  /** When the document was last stored (ISO 8601), `null` when unknown or nothing is stored. */
+  updatedAt: string | null;
   versions: number;
   comments: number;
   /** People in presence (across instances when `redisUrl` is set). */

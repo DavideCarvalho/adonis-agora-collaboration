@@ -14,7 +14,7 @@ Automerge or an edge worker.
 
 ```ts
 interface CollaborationStorage {
-  loadDocument(docName): Promise<{ state: Uint8Array } | null>
+  loadDocument(docName): Promise<{ state: Uint8Array; meta?; createdAt?: Date; updatedAt?: Date } | null>
   saveDocument(docName, state, meta?): Promise<void>
 
   listVersions(docName, page?): Promise<CollabVersion[]>

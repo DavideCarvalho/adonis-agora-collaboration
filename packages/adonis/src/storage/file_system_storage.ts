@@ -6,6 +6,7 @@ import type {
   CollabVersion,
   ListPageOptions,
   PruneVersionsOptions,
+  StoredCollabDocument,
 } from '../types.js';
 import { assertPruneKeep, resolvePage, versionsToPrune } from './shared.js';
 
@@ -57,10 +58,16 @@ export class FileSystemStorage implements CollaborationStorage {
     return join(this.baseDir, 'comments', `${encodeURIComponent(docName)}.json`);
   }
 
-  async loadDocument(docName: string): Promise<{ state: Uint8Array } | null> {
+  async loadDocument(docName: string): Promise<StoredCollabDocument | null> {
     try {
-      const content = await readFile(this.docPath(docName));
-      return { state: new Uint8Array(content) };
+      const path = this.docPath(docName);
+      const [content, info] = await Promise.all([readFile(path), stat(path)]);
+      return {
+        state: new Uint8Array(content),
+        // The file's birth time where the filesystem records it, else unknown.
+        createdAt: info.birthtimeMs > 0 ? info.birthtime : null,
+        updatedAt: info.mtime,
+      };
     } catch {
       return null;
     }

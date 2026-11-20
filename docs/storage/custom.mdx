@@ -93,6 +93,8 @@ export class S3CollabStorage implements CollaborationStorage {
 
   async loadDocument(docName: string) {
     const bytes = await s3.getBytes(this.options.bucket, this.#docKey(docName))
+    // `createdAt` / `updatedAt` are optional: return them when your backend has them, and
+    // `documents:show` / `describeDocument` show them.
     return bytes ? { state: bytes } : null
   }
 
