@@ -137,7 +137,7 @@
   "devDependencies": {
     "@adonisjs/assembler": "8.6.0",
     "@adonisjs/core": "7.7.0",
-    "@adonisjs/lucid": "22.4.2",
+    "@adonisjs/lucid": "22.5.0",
     "@hocuspocus/provider": "4.8.0",
     "@mdx-js/mdx": "3.1.1",
     "@swc/core": "1.16.22",
