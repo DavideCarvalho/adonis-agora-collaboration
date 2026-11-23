@@ -141,7 +141,7 @@
     "@hocuspocus/provider": "4.8.0",
     "@mdx-js/mdx": "3.1.1",
     "@swc/core": "1.16.22",
-    "@testcontainers/postgresql": "12.2.1",
+    "@testcontainers/postgresql": "12.2.2",
     "@types/luxon": "3.7.6",
     "@types/node": "26.6.6",
     "@types/pg": "8.23.1",
@@ -149,7 +149,7 @@
     "luxon": "3.7.2",
     "mysql2": "3.24.6",
     "pg": "8.23.1",
-    "testcontainers": "12.2.1",
+    "testcontainers": "12.2.2",
     "typescript": "7.0.2",
     "unplugin-swc": "2.0.0",
     "vitest": "5.1.1"
