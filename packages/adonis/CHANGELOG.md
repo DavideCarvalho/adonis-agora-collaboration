@@ -1,5 +1,11 @@
 # @adonis-agora/collaboration
 
+## 1.0.0-rc.12
+
+### Patch Changes
+
+- fix(deps): update dependency ioredis to v6.1.0 ([#209](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/209))
+
 ## 1.0.0-rc.11
 
 ### Patch Changes
