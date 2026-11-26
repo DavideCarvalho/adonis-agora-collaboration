@@ -216,8 +216,8 @@ importers:
   packages/adonis:
     dependencies:
       '@adonis-agora/filter':
-        specifier: ^1.0.0-rc
-        version: 1.0.0-rc.6(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(@adonisjs/lucid@22.5.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(luxon@3.7.2)(mysql2@3.24.6(@types/node@26.6.6))(pg@8.23.1)(supports-color@10.2.2))
+        specifier: ^1.0.0
+        version: 1.0.0(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(@adonisjs/lucid@22.5.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(luxon@3.7.2)(mysql2@3.24.6(@types/node@26.6.6))(pg@8.23.1)(supports-color@10.2.2))
       '@automerge/automerge':
         specifier: 3.5.0
         version: 3.5.0
@@ -298,8 +298,8 @@ importers:
   packages/client:
     dependencies:
       '@adonis-agora/filter-client':
-        specifier: ^1.0.0-rc.1
-        version: 1.0.0-rc.1
+        specifier: ^1.0.0
+        version: 1.0.0
       '@automerge/automerge':
         specifier: 3.5.0
         version: 3.5.0
@@ -358,8 +358,8 @@ importers:
 
 packages:
 
-  '@adonis-agora/filter-client@1.0.0-rc.1':
-    resolution: {integrity: sha512-aTMnF8aElvXbok/7y9R24xoNG27zjeM1XVhmdiUCMu5L59RzTabmNQXQxfrF6sgjCjjRbYbSzZ2Q4JWi0xntiw==}
+  '@adonis-agora/filter-client@1.0.0':
+    resolution: {integrity: sha512-2g0sgrDT1I0WK2pC71DIO7ZiV956KLpIUICwLgbRNHrzZW3dOZkTQyexbabof9OblPBUxjDcfCmr5adF2gOY3w==}
     engines: {node: '>=24'}
     peerDependencies:
       '@tanstack/table-core': '>=8.0.0'
@@ -367,8 +367,8 @@ packages:
       '@tanstack/table-core':
         optional: true
 
-  '@adonis-agora/filter@1.0.0-rc.6':
-    resolution: {integrity: sha512-WMb4+CIj26Ej+cb9gPQlZIDw/L0tT3FJfTfSn0ZoTuCG1QMMYm+1Jh217wpYZSjN9HoOA5JZBYeURCzOFZEAmw==}
+  '@adonis-agora/filter@1.0.0':
+    resolution: {integrity: sha512-Qxt7A2AnMmKC7u07WzaIIdQZFc8FEyq6tIg7Rd4zYACneB9u2kK4iUKPnNWzZwADoRkUSNtp6qf4oVm+atsX8A==}
     engines: {node: '>=24'}
     peerDependencies:
       '@adonisjs/core': ^7.3.0
@@ -4941,9 +4941,9 @@ packages:
 
 snapshots:
 
-  '@adonis-agora/filter-client@1.0.0-rc.1': {}
+  '@adonis-agora/filter-client@1.0.0': {}
 
-  '@adonis-agora/filter@1.0.0-rc.6(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(@adonisjs/lucid@22.5.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(luxon@3.7.2)(mysql2@3.24.6(@types/node@26.6.6))(pg@8.23.1)(supports-color@10.2.2))':
+  '@adonis-agora/filter@1.0.0(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(@adonisjs/lucid@22.5.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(@adonisjs/core@7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1))(luxon@3.7.2)(mysql2@3.24.6(@types/node@26.6.6))(pg@8.23.1)(supports-color@10.2.2))':
     dependencies:
       '@adonisjs/core': 7.7.0(@adonisjs/assembler@8.6.0(typescript@7.0.2))(supports-color@10.2.2)(youch@4.1.1)
     optionalDependencies:

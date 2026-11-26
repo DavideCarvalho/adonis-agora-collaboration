@@ -1,5 +1,67 @@
 # @adonis-agora/collaboration
 
+## 1.0.0
+
+### Major Changes
+
+- [#172](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/172) [`abef88a`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/abef88a50cea6c87940c5d0be677e704b8fa3002) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `GET /comments` and `GET /versions` use the `@adonis-agora/filter` list format: `filter[space]`, `sort` (`createdAt`/`-createdAt` for comments, `seq`/`-seq` for versions), 1-based `page` + `size`, answered as `{ data, meta: { total, perPage, currentPage, lastPage, firstPage } }`. An unknown filter field or sort answers `400`. `order` and the flat `space` param are gone. Storages may implement the optional `countVersions` / `countComments`; the manager gains `countVersions({ docName })` and `comments.count(docName, space?)`.
+  
+  The client's `listComments(config, docName, { space?, sort?, page?, size? })` and `listVersions(config, docName, { sort?, page?, size? })` return `OffsetPage<T>`; `useComments` / `useVersions` take `sort` instead of `order` and return `meta`.
+
+- [`3566224`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/3566224c893898bae7cc05d42ea234b8547e2c32) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Security: on the `partykit` engine, read-only users could edit documents. **Regenerate and redeploy the PartyKit worker** (`node ace collaboration:init --engine=partykit --force`, then `npx partykit deploy`).
+  
+  - Edge tokens now carry a `canWrite` claim taken from `authorize`. The worker opens the socket read-only unless it is `true`, so a reader's Yjs updates are no longer applied, stored or persisted.
+  - The worker's HTTP API (`onRequest`, used for state reads and version restore) only accepts tokens signed with a server key derived from `jwtSecret`. No browser token is signed with that key. Before, any user token could POST an update into the room.
+  - The worker → Adonis secret (`x-collab-worker-secret`) is now derived from `jwtSecret` (HKDF), so the JWT signing key no longer travels as a request header. No new env var: remove `COLLAB_WORKER_SECRET` from the worker (`npx partykit secret delete COLLAB_WORKER_SECRET`). The optional `partykit.workerSecret` overrides the derived value.
+  - An outdated worker fails loudly. `POST /collaboration/state` answers `403` and driver calls fail with a `401` `PartyKitRoomError`; both messages name the upgrade steps. The provider warns at boot while `partykit-worker/party.ts` predates the current template.
+  - The worker's initial load now works. It used to call `GET /collaboration/state` without a user session, get refused, and start every room empty, which Durable Object storage hid. It now authenticates with a one-minute token signed with the worker secret and bound to that document, and gets the stored state (`404` when nothing is stored).
+  - `collaboration:init` gains `--force`, which overwrites the generated worker files.
+
+- [#166](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/166) [`80baff1`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/80baff1cc2cc3fd33cad639cc0cd1cca03866a7e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - 1.0. See [Migrating to 1.0](https://davidecarvalho.github.io/agora/docs/collaboration/migrating-to-1.0).
+  
+  **Breaking changes**
+  
+  - `@adonis-agora/collaboration-client`: `useComments().create` no longer accepts `authorName`. The author, name included, is the authenticated user (`resolveUser`). Drop the field from the call.
+  - `@adonis-agora/collaboration-client`: `createComment(config, input)` no longer accepts `authorName`, for the same reason.
+  - `@adonis-agora/collaboration`: `signPartyKitToken` and `verifyPartyKitToken` are removed, from the package root and from `@adonis-agora/collaboration/drivers/partykit`. Use `signCollabToken` and `verifyCollabToken` (same arguments, same result) with `partykit.jwtSecret` as the key.
+  - `@adonis-agora/collaboration`: `PARTYKIT_TOKEN_TTL_SECONDS` is removed. Use `COLLAB_TOKEN_TTL_SECONDS` (the same value, 300).
+  - Automerge engine: one wire protocol. The whole-document mode and the `sync=changes` / `CHANGES_ACK` handshake are removed (`CHANGES_ACK` is no longer exported from `@adonis-agora/collaboration/drivers/automerge`); the client gets the document once and both sides exchange change chunks. Upgrade `@adonis-agora/collaboration` and `@adonis-agora/collaboration-client` together.
+  - `@adonis-agora/collaboration-client`: a pre-issued token's expiry is read from `expiresAt` only; the JWT `exp` is no longer decoded. Pass the `expiresAt` that `issueCollaborationToken` returns.
+  - `@adonis-agora/collaboration`: the `appKey` fallback reads `appKey` only as a `Secret` (`new Secret(env.get('APP_KEY'))`); a plain string is ignored.
+  - Both packages require Node.js 24 or newer.
+
+### Minor Changes
+
+- [#170](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/170) [`4a9d122`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/4a9d122a1df15a8a4631328b0523419acee873b8) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `lucidStorage({ connection, schema })`: the `collab_documents`, `collab_versions` and `collab_comments` tables live in their own Postgres schema (MySQL: database). Every query names it, so nothing depends on `search_path` and it is safe behind PgBouncer in transaction mode; the first use creates the schema when missing and explains the grant when the role cannot. `collaboration:init --schema` (defaulting to the configured one) publishes migrations that create the schema and the tables in it. A `schema` on a SQLite connection fails the boot. Two processes creating the tables at the same moment no longer fail, and a failed table creation is retried on the next call.
+
+- [#175](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/175) [`c6af23e`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/c6af23e83ee1862c423680ae8f4aa29531cb5349) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `node ace` commands for documents, versions and comments: `collaboration:documents:list|show`, `collaboration:versions:list|create|restore` and `collaboration:comments:list|resolve|delete`. They call the same manager methods as the REST routes, print a table or `--json` (`{ data, meta }` for lists), ask before restore/delete unless `--force`, and record `cli:<os user>` as the version author. A restore refuses while anyone is in presence. New `CollaborationManager.listDocumentDeclarations()` and `describeDocument({ docName })`.
+
+- [#195](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/195) [`70b027d`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/70b027d388a73896ee759b189894a44af32d555e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - createdAt / updatedAt on documents and comments. `CollaborationStorage.loadDocument` may return `createdAt` / `updatedAt` (`Date`, optional, new `StoredCollabDocument` type): Lucid reads the existing `collab_documents.created_at` / `updated_at` columns, the memory storage tracks them and the file storage reports the file times. `describeDocument()` and `collaboration:documents:show` show them (ISO, `null` when unknown). A new comment now starts with `updatedAt` equal to `createdAt` instead of `null` (Lucid already stored it that way), and Lucid stores the comment's own `updatedAt`. No schema change.
+
+- [#166](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/166) [`80baff1`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/80baff1cc2cc3fd33cad639cc0cd1cca03866a7e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Comment and version lists can be paged and sorted from the client, and the client follows a custom route prefix.
+  
+  - `GET /comments` and `GET /versions` accept `order=desc` (newest first; default `asc`). `ListPageOptions` gains `order`, and `manager.listVersions` / `manager.comments.list` pass it to the storage. A custom `CollaborationStorage` should honour `page.order` in `listVersions` and `listComments`.
+  - `useVersions` and `useComments` take `page`, `size` and `order`, and refetch when they change. `listVersions(config, docName, options?)` and `listComments(config, docName, space?, options?)` send them. New `CollabListOptions`, `UseVersionsOptions` and `UseCommentsOptions` types.
+  - `CollaborationProvider` takes `prefix` (default `/collaboration`), so a server with `routes.prefix: '/api/collab'` is reachable without a custom `fetchImpl`.
+
+- [#184](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/184) [`857fe80`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/857fe807545e58e8e32691616e052ad30e2dd79e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Storage codecs for encryption at rest: `lucidStorage({ codec })` and `withCodec(storage, codec)` run an async `{ encode, decode }` over document state, version snapshots, comment bodies and comment anchors, with `{ docName, kind, field, versionId?, commentId?, meta? }` to pick a key. The server still works on plaintext in memory. Existing plaintext rows keep loading and are encoded on their next save, or all at once with `node ace collaboration:reencode` (`LucidStorage.reencodeAll`). A value that fails to decode throws a `StorageCodecError`, and the storage then refuses to save that document instead of overwriting it. `CollaborationStorage.loadDocument` may now return `meta`, and `LucidStorage.loadDocument` does.
+
+### Patch Changes
+
+- [`2ce3220`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/2ce3220f5bcc46e2aba191525f0e5e5ac9b4c9d4) Thanks [@github-actions[bot]](https://github.com/github-actions%5Bbot%5D)! - fix(deps): update hocuspocus monorepo to v4.9.0 ([#206](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/206))
+
+- [`a033dd0`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/a033dd0d2ef2c78ab421c0c1658d27dd88f046b1) Thanks [@github-actions[bot]](https://github.com/github-actions%5Bbot%5D)! - fix(deps): update dependency ws to v8.22.2 ([#169](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/169))
+
+- [`e101866`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/e10186657a1d489b293969dd5bb4756094cdc768) Thanks [@github-actions[bot]](https://github.com/github-actions%5Bbot%5D)! - fix(deps): update dependency ioredis to v6.1.0 ([#209](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/209))
+
+- [`b836a73`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/b836a7319ee8966e6b56da3c9e73e06c35e30607) Thanks [@github-actions[bot]](https://github.com/github-actions%5Bbot%5D)! - fix(deps): update dependency @adonis-agora/filter to ^1.0.0-rc ([#186](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/186))
+
+- [`de36494`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/de36494da6c3a290991ef9241af27827a861aa67) Thanks [@github-actions[bot]](https://github.com/github-actions%5Bbot%5D)! - fix(deps): update dependency ws to v8.23.0 ([#182](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/182))
+
+- [#192](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/192) [`566a93d`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/566a93d741559dd4c9b8c2a0783347ccc9a0b25a) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `config/collaboration.ts` describes what it runs on under `Symbol.for('@adonis-agora/stack')`: the Lucid or file-system storage (`documents`), `redisUrl` (`presence`, linked to the matching `config/redis.ts` connection when there is one) and the PartyKit host (`sync`). The provider resolves the default Lucid connection and its client, so telescope's Architecture page shows them with no extra code.
+
+- [#188](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/188) [`5c633cc`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/5c633ccbade3b96e6c963ba62126842ed1e56f81) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Yjs: saving a live document no longer drops changes another process wrote to storage. Every save (the debounced autosave, the save when the last client leaves, `restoreVersion`) first merges the stored state into the live document, then writes the union. Connected clients receive the merged changes. If the stored state can't be read, the save fails and nothing is overwritten. New `getStoredDocumentState({ docName })` reads storage even when this process has the document open.
+
 ## 1.0.0-rc.13
 
 ### Major Changes

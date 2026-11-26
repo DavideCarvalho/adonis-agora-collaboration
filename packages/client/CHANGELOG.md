@@ -1,5 +1,40 @@
 # @adonis-agora/collaboration-client
 
+## 1.0.0
+
+### Major Changes
+
+- [#172](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/172) [`abef88a`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/abef88a50cea6c87940c5d0be677e704b8fa3002) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `GET /comments` and `GET /versions` use the `@adonis-agora/filter` list format: `filter[space]`, `sort` (`createdAt`/`-createdAt` for comments, `seq`/`-seq` for versions), 1-based `page` + `size`, answered as `{ data, meta: { total, perPage, currentPage, lastPage, firstPage } }`. An unknown filter field or sort answers `400`. `order` and the flat `space` param are gone. Storages may implement the optional `countVersions` / `countComments`; the manager gains `countVersions({ docName })` and `comments.count(docName, space?)`.
+  
+  The client's `listComments(config, docName, { space?, sort?, page?, size? })` and `listVersions(config, docName, { sort?, page?, size? })` return `OffsetPage<T>`; `useComments` / `useVersions` take `sort` instead of `order` and return `meta`.
+
+- [#166](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/166) [`80baff1`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/80baff1cc2cc3fd33cad639cc0cd1cca03866a7e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - 1.0. See [Migrating to 1.0](https://davidecarvalho.github.io/agora/docs/collaboration/migrating-to-1.0).
+  
+  **Breaking changes**
+  
+  - `@adonis-agora/collaboration-client`: `useComments().create` no longer accepts `authorName`. The author, name included, is the authenticated user (`resolveUser`). Drop the field from the call.
+  - `@adonis-agora/collaboration-client`: `createComment(config, input)` no longer accepts `authorName`, for the same reason.
+  - `@adonis-agora/collaboration`: `signPartyKitToken` and `verifyPartyKitToken` are removed, from the package root and from `@adonis-agora/collaboration/drivers/partykit`. Use `signCollabToken` and `verifyCollabToken` (same arguments, same result) with `partykit.jwtSecret` as the key.
+  - `@adonis-agora/collaboration`: `PARTYKIT_TOKEN_TTL_SECONDS` is removed. Use `COLLAB_TOKEN_TTL_SECONDS` (the same value, 300).
+  - Automerge engine: one wire protocol. The whole-document mode and the `sync=changes` / `CHANGES_ACK` handshake are removed (`CHANGES_ACK` is no longer exported from `@adonis-agora/collaboration/drivers/automerge`); the client gets the document once and both sides exchange change chunks. Upgrade `@adonis-agora/collaboration` and `@adonis-agora/collaboration-client` together.
+  - `@adonis-agora/collaboration-client`: a pre-issued token's expiry is read from `expiresAt` only; the JWT `exp` is no longer decoded. Pass the `expiresAt` that `issueCollaborationToken` returns.
+  - `@adonis-agora/collaboration`: the `appKey` fallback reads `appKey` only as a `Secret` (`new Secret(env.get('APP_KEY'))`); a plain string is ignored.
+  - Both packages require Node.js 24 or newer.
+
+### Minor Changes
+
+- [#166](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/166) [`80baff1`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/80baff1cc2cc3fd33cad639cc0cd1cca03866a7e) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - Comment and version lists can be paged and sorted from the client, and the client follows a custom route prefix.
+  
+  - `GET /comments` and `GET /versions` accept `order=desc` (newest first; default `asc`). `ListPageOptions` gains `order`, and `manager.listVersions` / `manager.comments.list` pass it to the storage. A custom `CollaborationStorage` should honour `page.order` in `listVersions` and `listComments`.
+  - `useVersions` and `useComments` take `page`, `size` and `order`, and refetch when they change. `listVersions(config, docName, options?)` and `listComments(config, docName, space?, options?)` send them. New `CollabListOptions`, `UseVersionsOptions` and `UseCommentsOptions` types.
+  - `CollaborationProvider` takes `prefix` (default `/collaboration`), so a server with `routes.prefix: '/api/collab'` is reachable without a custom `fetchImpl`.
+
+### Patch Changes
+
+- [#189](https://github.com/DavideCarvalho/adonis-agora-collaboration/pull/189) [`670498e`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/670498e2015c3d9b09cad227fc48613c0f97bc8b) Thanks [@DavideCarvalho](https://github.com/DavideCarvalho)! - `useAwareness` no longer re-renders when a remote cursor moves and the connection status is unchanged.
+
+- [`2ce3220`](https://github.com/DavideCarvalho/adonis-agora-collaboration/commit/2ce3220f5bcc46e2aba191525f0e5e5ac9b4c9d4) Thanks [@github-actions[bot]](https://github.com/github-actions%5Bbot%5D)! - fix(deps): update hocuspocus monorepo to v4.9.0 ([#206](https://github.com/DavideCarvalho/adonis-agora-collaboration/issues/206))
+
 ## 1.0.0-rc.3
 
 ### Patch Changes
