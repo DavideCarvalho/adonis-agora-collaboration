@@ -4,3 +4,4 @@ dist/
 coverage/
 *.tsbuildinfo
 packages/adonis/test/integration/__generated__/
+packages/adonis/test/__generated__/

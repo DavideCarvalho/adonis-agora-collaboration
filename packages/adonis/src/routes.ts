@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { offsetPage } from '@adonis-agora/filter';
+import { PARTYKIT_WORKER_IDENTITY, resolvePartyKitWorkerSecret } from './auth/partykit_keys.js';
 import {
   type AuthorizeFn,
   CollabForbiddenError,
   type IssuedToken,
   issueToken,
+  verifyCollabToken,
 } from './auth/token.js';
 import { InvalidColumnFilterError, parseCommentList, parseVersionList } from './http/list_api.js';
 import {
@@ -53,7 +55,7 @@ import type { CollabPermission } from './types.js';
 interface RuntimeSettings {
   engine: string;
   path: string;
-  partykit: { roomHost?: string; jwtSecret?: string; party?: string };
+  partykit: { roomHost?: string; jwtSecret?: string; workerSecret?: string; party?: string };
 }
 
 /** Resolved runtime captured by the handler closures. */
@@ -75,7 +77,7 @@ const DENY_ALL: CollabPermission = { canRead: false, canWrite: false, canComment
 interface AppConfigShape {
   engine?: string;
   path?: string;
-  partykit?: { roomHost?: string; jwtSecret?: string; party?: string };
+  partykit?: { roomHost?: string; jwtSecret?: string; workerSecret?: string; party?: string };
   authorize?: AuthorizeFn;
   routes?: { resolveUser?: ResolveUserFn };
 }
@@ -510,11 +512,87 @@ async function handleGetState(
   resolveUser: NonNullable<CollabRoutesRuntime['resolveUser']>,
 ): Promise<unknown> {
   const doc = ctx.request.qs().doc as string | undefined;
+  // The PartyKit worker loading a room it just woke up for. A separate,
+  // machine-only branch: it is taken only when the request carries a worker
+  // credential, and that credential is a token signed with the worker secret
+  // and bound to this one document — never something a browser holds.
+  if (ctx.request.header('x-collab-worker-secret') || isWorkerBearer(ctx)) {
+    return handleWorkerLoad(ctx, runtime, doc);
+  }
   const allowed = await guard(ctx, runtime, resolveUser, doc, 'canRead');
   if (isDenied(allowed)) return allowed.denied;
 
   const manager = await runtime.manager();
   const state = await manager.getDocumentState({ docName: allowed.docName });
+  ctx.response.header('content-type', 'application/octet-stream');
+  return ctx.response.send(Buffer.from(state));
+}
+
+/** Message for a worker generated from a template older than the current protocol. */
+const OUTDATED_WORKER_ERROR =
+  'outdated PartyKit worker: it sent the JWT signing key (COLLAB_JWT_SECRET) as its worker secret. ' +
+  'Regenerate the worker with `node ace collaboration:init --engine=partykit --force`, remove the old ' +
+  'COLLAB_WORKER_SECRET (`npx partykit secret delete COLLAB_WORKER_SECRET` — it is now derived ' +
+  'from COLLAB_JWT_SECRET) and run `npx partykit deploy`. If you set partykit.workerSecret explicitly, ' +
+  'it must differ from partykit.jwtSecret.';
+
+function bearer(ctx: CollabHttpContext): string | undefined {
+  return ctx.request.header('authorization')?.replace(/^Bearer /, '') || undefined;
+}
+
+/** Cheap pre-check: the bearer's payload claims the worker identity. Verified later. */
+function isWorkerBearer(ctx: CollabHttpContext): boolean {
+  const body = bearer(ctx)?.split('.')[1];
+  if (!body) return false;
+  try {
+    return (
+      JSON.parse(Buffer.from(body, 'base64url').toString()).userId === PARTYKIT_WORKER_IDENTITY
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `GET /state` for the PartyKit worker: what storage holds for the room.
+ *
+ * Storage, not `getDocumentState`: on the edge engine that would ask the
+ * worker — the very caller — for the state it is trying to load.
+ */
+async function handleWorkerLoad(
+  ctx: CollabHttpContext,
+  runtime: Runtime,
+  doc: string | undefined,
+): Promise<unknown> {
+  if (!doc) {
+    return ctx.response.status(400).json({ error: 'query param "doc" is required' });
+  }
+  const { partykit } = await runtime.settings();
+  if (secretsMatch(ctx.request.header('x-collab-worker-secret'), partykit.jwtSecret)) {
+    return ctx.response.status(403).json({ error: OUTDATED_WORKER_ERROR });
+  }
+  const workerSecret = resolvePartyKitWorkerSecret(partykit);
+  const token = bearer(ctx);
+  const claims = workerSecret && token ? verifyCollabToken(token, workerSecret, doc) : null;
+  if (!claims || claims.userId !== PARTYKIT_WORKER_IDENTITY) {
+    return ctx.response.status(403).json({
+      error:
+        'invalid worker credential for this document. Check that COLLAB_JWT_SECRET on the worker equals ' +
+        'config.partykit.jwtSecret (and COLLAB_WORKER_SECRET equals partykit.workerSecret, if you set one). ' +
+        'A worker generated from an older template must be regenerated: ' +
+        '`node ace collaboration:init --engine=partykit --force`, then `npx partykit deploy`.',
+    });
+  }
+
+  const manager = await runtime.manager();
+  if (!manager.getStoredDocumentState) {
+    return ctx.response.status(501).json({
+      error: 'loading worker snapshots requires a storage-backed CollaborationManager',
+    });
+  }
+  const state = await manager.getStoredDocumentState({ docName: doc });
+  // Nothing stored yet: the worker starts the room empty.
+  if (state.byteLength === 0) return ctx.response.status(404).json({ error: 'no stored state' });
   ctx.response.header('content-type', 'application/octet-stream');
   return ctx.response.send(Buffer.from(state));
 }
@@ -525,7 +603,14 @@ async function handleSaveState(ctx: CollabHttpContext, runtime: Runtime): Promis
     return ctx.response.status(400).json({ error: 'query param "doc" is required' });
   }
   const { partykit } = await runtime.settings();
-  if (!secretsMatch(ctx.request.header('x-collab-worker-secret'), partykit.jwtSecret)) {
+  const received = ctx.request.header('x-collab-worker-secret');
+  // An older worker template sent the JWT signing key itself as this header.
+  // Refused — that key must not travel — but loudly, with the fix, rather
+  // than as a bare 403 that looks like a typo in a secret.
+  if (secretsMatch(received, partykit.jwtSecret)) {
+    return ctx.response.status(403).json({ error: OUTDATED_WORKER_ERROR });
+  }
+  if (!secretsMatch(received, resolvePartyKitWorkerSecret(partykit))) {
     return ctx.response.status(403).json({ error: 'invalid worker secret' });
   }
 

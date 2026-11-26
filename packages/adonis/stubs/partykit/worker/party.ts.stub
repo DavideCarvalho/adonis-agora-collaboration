@@ -11,6 +11,18 @@
  * o PartyKitDriver no Adonis consome pra estado/texto/restore.
  *
  * Deploy: npx partykit deploy (config em partykit.toml)
+ *
+ * Worker protocol v2 (@adonis-agora/collaboration). Only COLLAB_JWT_SECRET and
+ * ADONIS_BASE_URL are needed: the other keys are derived from it (HKDF), with
+ * the same constants as `src/auth/partykit_keys.ts` in the package.
+ *  - browser tokens (`onConnect`) are signed with COLLAB_JWT_SECRET and carry
+ *    `canWrite`; without it the socket is read-only;
+ *  - the HTTP API (`onRequest`) only accepts tokens signed with the derived
+ *    server key, i.e. minted by Adonis for itself — never a browser token;
+ *  - persisting back to Adonis sends the derived worker secret, never the
+ *    JWT signing key. COLLAB_WORKER_SECRET overrides it only when Adonis sets
+ *    `partykit.workerSecret` to the same value.
+ * A worker generated from an older template must be regenerated and redeployed.
  */
 import { onConnect } from 'y-partykit';
 import type { PartyConnection, PartyConnectionContext, PartyRequest, PartyServer } from 'partykit/server';
@@ -21,6 +33,43 @@ interface CollabToken {
   userId: string;
   docName: string;
   exp: number;
+  /** `authorize`'s canWrite at issue time. Absent = read-only. */
+  canWrite?: boolean;
+}
+
+/** Identity the Adonis PartyKitDriver signs its own calls with. */
+const SERVER_IDENTITY = 'adonis-server';
+/** Identity this worker signs its state reads from Adonis with. */
+const WORKER_IDENTITY = 'partykit-worker';
+
+// Keep in step with src/auth/partykit_keys.ts in @adonis-agora/collaboration.
+const HKDF_SALT = '@adonis-agora/collaboration:partykit';
+const WORKER_SECRET_LABEL = 'worker-secret:v1';
+const SERVER_KEY_LABEL = 'server-token:v1';
+
+const derivedKeys = new Map<string, Promise<string>>();
+let warnedLegacyWorkerSecret = false;
+
+/** HKDF-SHA256(secret, salt, label) → 32 bytes, base64url — as Node's `hkdfSync`. */
+function deriveKey(secret: string, label: string): Promise<string> {
+  const cacheKey = `${label}\u0000${secret}`;
+  let derived = derivedKeys.get(cacheKey);
+  if (!derived) {
+    derived = (async () => {
+      const encoder = new TextEncoder();
+      const ikm = await crypto.subtle.importKey('raw', encoder.encode(secret), 'HKDF', false, [
+        'deriveBits',
+      ]);
+      const bits = await crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt: encoder.encode(HKDF_SALT), info: encoder.encode(label) },
+        ikm,
+        256,
+      );
+      return Buffer.from(bits).toString('base64url');
+    })();
+    derivedKeys.set(cacheKey, derived);
+  }
+  return derived;
 }
 
 /**
@@ -70,6 +119,32 @@ async function verifyToken(
 }
 
 /**
+ * HS256 JWT `{ userId: 'partykit-worker', docName }`, valid for one minute,
+ * signed with the worker secret — how this worker proves itself to
+ * `GET /collaboration/state` without sending the secret, and only for the
+ * room it is loading.
+ */
+async function signWorkerToken(secret: string, docName: string): Promise<string> {
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const unsigned = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({
+    userId: WORKER_IDENTITY,
+    docName,
+    iat: now,
+    exp: now + 60,
+  })}`;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(unsigned));
+  return `${unsigned}.${Buffer.from(signature).toString('base64url')}`;
+}
+
+/**
  * The room being addressed, read from the URL: `/parties/<party>/<room>`.
  *
  * Taken from the path rather than from the token, obviously — the whole point
@@ -94,22 +169,45 @@ export default class CollabParty implements PartyServer {
     if (!claims) {
       return new Response('invalid or expired token', { status: 401 });
     }
-    // Forward claims to onConnect via synthetic headers.
-    request.headers.set('x-collab-user', claims.userId);
-    request.headers.set('x-collab-doc', claims.docName);
+    return request;
   }
 
   async onConnect(connection: PartyConnection, ctx: PartyConnectionContext) {
+    // Verified again here rather than trusting headers forwarded from
+    // onBeforeConnect: the permission must come from the signed token, and a
+    // header is something a client can send too.
+    const claims = await verifyToken(
+      new URL(ctx.request.url).searchParams.get('token'),
+      (this.party.env.COLLAB_JWT_SECRET as string | undefined) ?? '',
+      this.docName,
+    );
+    if (!claims) {
+      connection.close(4401, 'invalid or expired token');
+      return;
+    }
     await onConnect(connection, this.party, {
+      // A reader's socket still receives updates and awareness, but every
+      // Yjs update it sends is dropped — it never reaches the doc, the DO
+      // storage or Adonis. Only an explicit `canWrite: true` writes.
+      readOnly: claims.canWrite !== true,
       // Debounced persistence into DO storage; large docs should use the
       // history mode (10 MB cap) — tune for your workload.
       persist: { mode: 'snapshot' },
       load: async () => {
         // Initial state: fetch the authoritative snapshot from Adonis
         // (source of truth for versions). Falls back to empty.
+        // 404 means nothing is stored yet; anything else non-2xx is a
+        // misconfiguration, and Adonis's answer says how to fix it.
         try {
           const response = await this.fetchFromAdonis(`/collaboration/state`);
-          if (!response.ok) return Y.encodeStateAsUpdate(new Y.Doc());
+          if (!response.ok) {
+            if (response.status !== 404) {
+              console.error(
+                `[collab-worker] loading "${this.docName}" from Adonis failed (${response.status}): ${await response.text()}`,
+              );
+            }
+            return Y.encodeStateAsUpdate(new Y.Doc());
+          }
           return new Uint8Array(await response.arrayBuffer());
         } catch {
           return Y.encodeStateAsUpdate(new Y.Doc());
@@ -135,19 +233,24 @@ export default class CollabParty implements PartyServer {
     });
   }
 
-  /** HTTP API consumed by the PartyKitDriver (Adonis side). */
+  /**
+   * HTTP API consumed by the PartyKitDriver (Adonis side) — and only by it.
+   *
+   * Requires a token signed with the server key derived from
+   * COLLAB_JWT_SECRET, which Adonis never uses for a browser token. A user's
+   * token (even a writer's, even one whose userId is "adonis-server") is
+   * refused: POST applies an arbitrary update to the room.
+   */
   async onRequest(request: PartyRequest): Promise<Response> {
     const secret = this.party.env.COLLAB_JWT_SECRET as string | undefined;
-    const url = new URL(request.url);
-    const room = this.docName;
-    const claims =
-      (await verifyToken(url.searchParams.get('token'), secret ?? '', room)) ??
-      (await verifyToken(
-        request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '',
-        secret ?? '',
-        room,
-      ));
-    if (!claims) {
+    if (!secret) return new Response('unauthenticated', { status: 401 });
+    const serverKey = await deriveKey(secret, SERVER_KEY_LABEL);
+    const claims = await verifyToken(
+      request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '',
+      serverKey,
+      this.docName,
+    );
+    if (!claims || claims.userId !== SERVER_IDENTITY) {
       return new Response('unauthenticated', { status: 401 });
     }
 
@@ -193,14 +296,39 @@ export default class CollabParty implements PartyServer {
     return this.party.name;
   }
 
-  private fetchFromAdonis(path: string, init?: { method: 'POST'; body: Uint8Array }): Promise<Response> {
+  /**
+   * The secret sent to Adonis in `x-collab-worker-secret`: derived from
+   * COLLAB_JWT_SECRET, unless COLLAB_WORKER_SECRET is set (to match an
+   * explicit `partykit.workerSecret` in Adonis). A COLLAB_WORKER_SECRET equal
+   * to the JWT secret — what older templates asked for — is ignored: the
+   * signing key never leaves the worker.
+   */
+  private async workerSecret(): Promise<string> {
+    const jwtSecret = (this.party.env.COLLAB_JWT_SECRET as string | undefined) ?? '';
+    const explicit = this.party.env.COLLAB_WORKER_SECRET as string | undefined;
+    if (explicit && explicit !== jwtSecret) return explicit;
+    if (explicit && !warnedLegacyWorkerSecret) {
+      warnedLegacyWorkerSecret = true;
+      console.warn(
+        '[collab-worker] COLLAB_WORKER_SECRET equals COLLAB_JWT_SECRET and is ignored — the worker secret is now ' +
+          'derived from COLLAB_JWT_SECRET. Remove it: npx partykit secret delete COLLAB_WORKER_SECRET',
+      );
+    }
+    return jwtSecret ? deriveKey(jwtSecret, WORKER_SECRET_LABEL) : '';
+  }
+
+  private async fetchFromAdonis(
+    path: string,
+    init?: { method: 'POST'; body: Uint8Array },
+  ): Promise<Response> {
     const base = this.party.env.ADONIS_BASE_URL as string;
     const url = `${base}${path}?doc=${encodeURIComponent(this.docName)}`;
-    const headers: Record<string, string> = {
-      // Shared secret configured via `partykit secret put COLLAB_WORKER_SECRET`
-      'x-collab-worker-secret': (this.party.env.COLLAB_WORKER_SECRET as string | undefined) ?? '',
-      ...(init?.body ? { 'content-type': 'application/octet-stream' } : {}),
-    };
+    const workerSecret = await this.workerSecret();
+    // Reads authenticate with a short-lived token bound to this room; the
+    // write (persist) sends the worker secret itself.
+    const headers: Record<string, string> = init?.body
+      ? { 'x-collab-worker-secret': workerSecret, 'content-type': 'application/octet-stream' }
+      : { authorization: `Bearer ${await signWorkerToken(workerSecret, this.docName)}` };
     return fetch(url, {
       method: init?.method ?? 'GET',
       headers,

@@ -151,7 +151,7 @@ collaborationRoutes(router, {
 })
 ```
 
-Without a resolver the token endpoint fails closed (401): pass `routes.resolveUser` or run your auth middleware first. The binary `state` POST is machine-to-machine (PartyKit worker → Adonis) and requires the shared worker secret instead of a user.
+Without a resolver the token endpoint fails closed (401): pass `routes.resolveUser` or run your auth middleware first. The binary `state` POST is machine-to-machine (PartyKit worker → Adonis) and requires the shared worker secret instead of a user (derived from `partykit.jwtSecret`, nothing extra to configure). After upgrading, regenerate the worker with `node ace collaboration:init --engine=partykit --force` and redeploy it: older templates let read-only users write.
 
 > **Route type-safety caveat**: auto-registered routes live in the provider's `ready()` phase, which runs after the codegen warmup — so they may not appear in `.adonisjs/server/routes.d.ts`. If your app relies on generated route types (e.g. Tuyau), use manual mode: set `routes.enabled = false` and call `collaborationRoutes(router)` in `start/routes.ts`, where routes are always picked up.
 
