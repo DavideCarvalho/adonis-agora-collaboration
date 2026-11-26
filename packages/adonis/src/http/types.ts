@@ -109,6 +109,8 @@ export interface CollabManagerLike {
     restoredBy: string | null;
   }): Promise<void>;
   persistDocument?(options: { docName: string; state: Uint8Array }): Promise<void>;
+  /** What storage holds for the document (empty when nothing is stored). */
+  getStoredDocumentState?(options: { docName: string }): Promise<Uint8Array>;
   comments: {
     list(
       docName: string,
@@ -138,5 +140,5 @@ export interface CollabRoutesRuntime {
   engine?: string;
   /** WS path of the embedded Hocuspocus server (default '/collaboration'). */
   path?: string;
-  partykit?: { roomHost?: string; jwtSecret?: string; party?: string };
+  partykit?: { roomHost?: string; jwtSecret?: string; workerSecret?: string; party?: string };
 }

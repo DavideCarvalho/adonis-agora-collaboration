@@ -32,6 +32,16 @@ const bytes = await collaboration.current.getDocumentState({ docName })
 Missing `doc` returns `400`. A document that has never existed returns an empty body rather than a
 `404` — an empty document and an absent one are the same thing here.
 
+## The worker's read path
+
+When a PartyKit room wakes up, the worker reads the stored document from `GET /state`. It has no
+user session, so it sends a token signed with the worker secret: identity `partykit-worker`, bound
+to the one document in `?doc=`, valid for a minute. That request gets what storage holds, not the
+live state, which on the edge engine would mean asking the worker itself. It answers `404` when
+nothing is stored yet, and the worker starts the room empty. A worker token for another document,
+or one signed with the JWT key that browser tokens use, gets `403`. A request without a worker
+credential takes the normal user path.
+
 ## The write path
 
 `POST /state` takes the raw body and persists it as the document's state. The worker calls it after
@@ -40,9 +50,15 @@ lives.
 
 <Callout type="warn" title="This one is not authenticated by a user session">
 There is no user in this request. It is one server talking to another, so it is authenticated by a
-**shared worker secret** in `x-collab-worker-secret`, compared timing-safely against
-`config.partykit.jwtSecret`. A request without it — or with the wrong one — gets `403` and never
-reaches storage.
+**shared worker secret** in `x-collab-worker-secret`, compared timing-safely. The secret is
+derived from `config.partykit.jwtSecret` (HKDF, label `worker-secret:v1`), and the generated worker
+derives the same value, so you configure nothing extra. Set `config.partykit.workerSecret`, and
+`COLLAB_WORKER_SECRET` on the worker, only to rotate it on its own. A request without it, or with
+the wrong one, gets `403` and never reaches storage.
+
+The JWT signing key itself is refused as the worker secret, with a `403` that explains how to
+regenerate the worker. Older worker templates sent it, which put the key that mints every user's
+token into a request header.
 
 Treat that secret exactly like a database password. Anyone who has it can overwrite the content of
 any document name they can guess, and no `authorize` call stands in the way.

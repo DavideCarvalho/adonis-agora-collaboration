@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { partyKitServerKey } from '../../auth/partykit_keys.js';
 import { signCollabToken } from '../../auth/token.js';
 import type { CollaborationDriver, PartyKitDriverOptions } from '../../driver.js';
 import type {
@@ -35,6 +36,17 @@ export { signPartyKitToken, verifyPartyKitToken } from '../../auth/token.js';
 /** Identity the driver signs its own worker calls with (not a user of the app). */
 export const PARTYKIT_SERVER_IDENTITY = 'adonis-server';
 
+/**
+ * Hint appended to a 401 from the worker. The usual cause is not a bad secret
+ * but a worker deployed from an older template: since the read-only fix the
+ * driver signs with a key derived from `jwtSecret`, which an old worker does
+ * not know about.
+ */
+const OUTDATED_WORKER_HINT =
+  ' — the worker rejected the server credential. Either COLLAB_JWT_SECRET on the worker differs from ' +
+  'config.partykit.jwtSecret, or the worker was generated from an older template: regenerate it with ' +
+  '`node ace collaboration:init --engine=partykit` (overwrite partykit-worker/party.ts) and run `npx partykit deploy`.';
+
 /** Typed error for non-2xx worker responses. */
 export class PartyKitRoomError extends Error {
   constructor(
@@ -42,7 +54,9 @@ export class PartyKitRoomError extends Error {
     public readonly body: string,
     public readonly docName: string,
   ) {
-    super(`PartyKit room "${docName}" responded ${status}: ${body}`);
+    super(
+      `PartyKit room "${docName}" responded ${status}: ${body}${status === 401 ? OUTDATED_WORKER_HINT : ''}`,
+    );
     this.name = 'PartyKitRoomError';
   }
 }
@@ -81,10 +95,11 @@ export class PartyKitDriver implements CollaborationDriver {
   /**
    * Authenticated HTTP call to the worker's `onRequest`.
    *
-   * The worker answers 401 to anything without a JWT signed with its secret and
-   * bound to the room, so every call carries one — same format the browser
-   * gets, issued to the server's own identity. Without it every state read,
-   * version snapshot and restore failed against a real worker.
+   * The worker answers 401 to anything without a JWT bound to the room and
+   * signed with the **server key** — derived from `jwtSecret`, but not equal
+   * to it (see `auth/partykit_keys.ts`). Browser tokens are signed with
+   * `jwtSecret` itself, so no user's token — whatever its `userId` — can call
+   * the worker's HTTP API and push an update into a room.
    */
   private async roomRequest(
     docName: string,
@@ -97,7 +112,10 @@ export class PartyKitDriver implements CollaborationDriver {
           '(the same COLLAB_JWT_SECRET the worker verifies with) to call the worker',
       );
     }
-    const token = signCollabToken({ userId: PARTYKIT_SERVER_IDENTITY, docName }, pk.jwtSecret);
+    const token = signCollabToken(
+      { userId: PARTYKIT_SERVER_IDENTITY, docName },
+      partyKitServerKey(pk.jwtSecret),
+    );
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), pk.fetchTimeoutMs ?? 10_000);
     try {

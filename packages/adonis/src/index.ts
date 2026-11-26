@@ -2,6 +2,14 @@
 // finds the hook without hitting the ./configure subpath.
 export { configure } from '../configure.js';
 export {
+  derivePartyKitKey,
+  PARTYKIT_HKDF_SALT,
+  PARTYKIT_SERVER_KEY_LABEL,
+  PARTYKIT_WORKER_SECRET_LABEL,
+  partyKitServerKey,
+  resolvePartyKitWorkerSecret,
+} from './auth/partykit_keys.js';
+export {
   type CollabTokenSecret,
   CollabTokenSecretMissingError,
   resolveTokenSecret,

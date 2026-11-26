@@ -32,6 +32,18 @@ export interface PartyKitConfig {
    * worker rejects connections when configured with `requireToken`.
    */
   jwtSecret?: string;
+  /**
+   * Shared secret the worker sends (`x-collab-worker-secret`) when it
+   * persists a room back to Adonis (`POST /collaboration/state`).
+   *
+   * **Leave it unset**: it is derived from `jwtSecret` (HKDF, purpose label
+   * `worker-secret:v1`), and the worker template derives the same value, so
+   * no extra env var is needed. Set it only to rotate it independently — and
+   * then set the same value on the worker with
+   * `npx partykit secret put COLLAB_WORKER_SECRET`. It must differ from
+   * `jwtSecret`: the JWT signing key never travels as a header.
+   */
+  workerSecret?: string;
   /** Timeout for HTTP calls to the worker, in ms (default 10000). */
   fetchTimeoutMs?: number;
 }

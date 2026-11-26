@@ -1,4 +1,8 @@
 import { BaseCommand, flags } from '@adonisjs/core/ace';
+import {
+  outdatedPartyKitWorkerMessage,
+  partyKitWorkerStubStatus,
+} from '../src/drivers/partykit/worker_stub.js';
 import { stubsRoot } from '../stubs/main.js';
 
 /**
@@ -26,6 +30,12 @@ export default class CollaborationInit extends BaseCommand {
     description: 'Sync engine (yjs | automerge | partykit) — defaults to the one in config',
   })
   declare engine?: string;
+
+  @flags.boolean({
+    description:
+      'Overwrite the generated PartyKit worker (partykit-worker/) — use it to upgrade an outdated worker',
+  })
+  declare force?: boolean;
 
   override async run(): Promise<void> {
     const appConfig = this.app.config.get<{
@@ -63,18 +73,28 @@ export default class CollaborationInit extends BaseCommand {
           'engine=partykit without config.partykit.roomHost — the driver will fail at runtime until configured',
         );
       }
+      const workerPath = this.app.makePath('partykit-worker', 'party.ts');
+      const status = await partyKitWorkerStubStatus(workerPath);
+      // Only the worker is overwritten under --force: re-running the other
+      // stubs must never clobber files the app has edited.
+      codemods.overwriteExisting = this.force === true;
       await codemods.makeUsingStub(stubsRoot, 'partykit/worker/party.ts.stub', {});
       await codemods.makeUsingStub(stubsRoot, 'partykit/worker/package.json.stub', {});
       await codemods.makeUsingStub(stubsRoot, 'partykit/worker/partykit.toml.stub', {
         partykitWorkerName: this.app.appName ?? 'collab-worker',
         adonisBaseUrl: process.env.APP_URL ?? 'http://localhost:3333',
       });
+      codemods.overwriteExisting = false;
+      if (status === 'outdated' && this.force !== true) {
+        this.logger.warning(outdatedPartyKitWorkerMessage('partykit-worker/party.ts'));
+      }
       this.logger.info(
         [
           '',
           'PartyKit worker generated at partykit-worker/',
           '  1. cd partykit-worker && npm install',
-          '  2. npx partykit secret put COLLAB_JWT_SECRET',
+          '  2. npx partykit secret put COLLAB_JWT_SECRET   # same value as config.partykit.jwtSecret',
+          '     (no COLLAB_WORKER_SECRET needed: it is derived from COLLAB_JWT_SECRET)',
           '  3. npx partykit dev   # local',
           '  4. npx partykit deploy # production',
           '',

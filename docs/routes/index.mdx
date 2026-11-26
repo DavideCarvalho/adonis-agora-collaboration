@@ -116,7 +116,7 @@ POST /collaboration/state?doc=researches/42/writing   ← the worker's snapshot
 ```
 
 Machine-to-machine, used by edge workers. `POST` requires the worker's shared secret in
-`x-collab-worker-secret` and answers `403` without it. See
+`x-collab-worker-secret` (derived from `partykit.jwtSecret`) and answers `403` without it. See
 [Binary state](/docs/collaboration/routes/state).
 
 ## Three levels of control

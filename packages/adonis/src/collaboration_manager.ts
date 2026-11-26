@@ -228,6 +228,16 @@ export class CollaborationManager {
     return this.#driverFor(docName).then((driver) => driver.getDocumentState(docName));
   }
 
+  /**
+   * What storage holds for the document (empty when nothing is stored). Used
+   * by the PartyKit worker's initial load, which must not ask the worker —
+   * the caller itself — through `getDocumentState`.
+   */
+  async getStoredDocumentState({ docName }: { docName: string }): Promise<Uint8Array> {
+    const stored = this.config.storage ? await this.config.storage.loadDocument(docName) : null;
+    return stored?.state ?? new Uint8Array();
+  }
+
   getDocumentText({ docName }: { docName: string }): Promise<string> {
     return this.#driverFor(docName).then((driver) => driver.getDocumentText(docName));
   }

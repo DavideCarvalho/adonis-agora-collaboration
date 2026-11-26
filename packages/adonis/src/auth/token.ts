@@ -80,6 +80,15 @@ export interface CollabTokenPayload {
   docName: string;
   /** Presence metadata, carried so the roster does not need a second lookup. */
   user?: { name?: string; avatarUrl?: string | null };
+  /**
+   * Whether the holder may change the document — `authorize`'s `canWrite` at
+   * issue time. Carried by edge (`partykit`) tokens, where the worker cannot
+   * call `authorize` itself: it opens the socket read-only unless this is
+   * `true`. Absent means read-only, so a token minted without it never
+   * writes. (The self-hosted engines ask `authorize` at the handshake and do
+   * not need it.)
+   */
+  canWrite?: boolean;
 }
 
 /** Signs a minimal HS256 JWT — no external dependency. */
@@ -281,8 +290,14 @@ export async function issueToken(
     if (!config.partykit?.jwtSecret) {
       throw new Error('config.partykit.jwtSecret is required when engine=partykit');
     }
+    // The worker has no `authorize` to call, so the write permission rides in
+    // the signed token. Without it every reader's socket was a writer's: the
+    // worker applied (and persisted) whatever Yjs update a read-only user sent.
     return {
-      token: signPartyKitToken({ userId: user.id, docName }, config.partykit.jwtSecret),
+      token: signCollabToken(
+        { userId: user.id, docName, canWrite: permission.canWrite === true },
+        config.partykit.jwtSecret,
+      ),
       wsUrl: buildWsUrl(config, docName),
       engine: config.engine,
       expiresAt: Date.now() + COLLAB_TOKEN_TTL_SECONDS * 1000,
