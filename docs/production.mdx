@@ -199,13 +199,14 @@ next reconnect, within a backoff window.
 Running an [edge engine](/docs/collaboration/engines/edge) adds one secret with real reach:
 `config.partykit.jwtSecret`, shared with the worker.
 
-It signs the tokens the worker trusts **and** authenticates `POST /collaboration/state`. Whoever
+It signs the tokens the worker trusts, and the keys that authenticate `POST /collaboration/state`
+and the worker's HTTP API are derived from it. Whoever
 holds it can mint a credential for any document name and overwrite any document's content — no
 `authorize` call stands in the way. Treat it like a database password: environment-injected, never
 in the repo, rotated on a schedule and immediately after any suspected exposure.
 
 Rotation means updating both sides — `config.partykit.jwtSecret` and
-`partykit secret put COLLAB_JWT_SECRET`. Tokens minted with the old secret are refused, so
+`partykit secret put COLLAB_JWT_SECRET`. The derived keys rotate with it. Tokens minted with the old secret are refused, so
 connected clients reconnect with fresh ones within a backoff window.
 
 ## Timeouts and proxies
@@ -229,5 +230,7 @@ is far away and those operations start failing rather than being slow.
 - [ ] Proxy read timeouts raised well above the reconnect interval
 - [ ] Graceful shutdown long enough for the debounce window to flush
 - [ ] `jwtSecret` injected from the environment, if you run an edge engine
+- [ ] the PartyKit worker regenerated from the current template and redeployed (no outdated-worker
+      warning at boot)
 - [ ] A version-retention plan, if versions are created automatically
 - [ ] `collab_documents` in the backup, and a restore that has actually been tried

@@ -142,7 +142,9 @@ controller of your own can apply exactly the same one.
 
 `canWrite: false` binds the **connection**, not the UI. A client that is merely told it may not
 write can simply not ask, so the rule is applied where the update arrives: Hocuspocus marks the
-connection read-only, and the Automerge driver drops that client's inbound messages. The client
+connection read-only, and the Automerge driver drops that client's inbound messages. On the edge
+engines the worker cannot call `authorize`, so the token carries `canWrite` and the worker opens
+the socket read-only unless it is `true`. The client
 still receives everyone else's edits — read-only means read-only, not disconnected.
 
 <Callout title="Read them on the client too, for a UI that tells the truth">

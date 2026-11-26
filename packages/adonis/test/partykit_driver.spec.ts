@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { partyKitServerKey } from '../src/auth/partykit_keys.js';
 import { signCollabToken, verifyCollabToken } from '../src/auth/token.js';
 import type { PartyKitDriverOptions } from '../src/driver.js';
 import {
@@ -102,11 +103,24 @@ describe('PartyKitDriver', () => {
     const authorization = (init.headers as Record<string, string>).authorization;
     expect(authorization).toMatch(/^Bearer /);
     const token = authorization.replace(/^Bearer /, '');
-    expect(verifyCollabToken(token, SECRET, 'researches/42/writing')?.userId).toBe(
+    const serverKey = partyKitServerKey(SECRET);
+    expect(verifyCollabToken(token, serverKey, 'researches/42/writing')?.userId).toBe(
       PARTYKIT_SERVER_IDENTITY,
     );
     // Bound to this document: it opens no other room on the worker.
-    expect(verifyCollabToken(token, SECRET, 'researches/43/writing')).toBeNull();
+    expect(verifyCollabToken(token, serverKey, 'researches/43/writing')).toBeNull();
+    // Signed with the derived server key, never with jwtSecret itself — the
+    // key every browser token is signed with must not mint server calls.
+    expect(verifyCollabToken(token, SECRET, 'researches/42/writing')).toBeNull();
+  });
+
+  it('explains a 401 from the worker as a secret mismatch or an outdated worker', async () => {
+    stubFetch();
+    fetchMock.mockResolvedValue(new Response('unauthenticated', { status: 401 }));
+    const driver = new PartyKitDriver(makeConfig());
+    await expect(driver.getDocumentState('doc')).rejects.toThrow(
+      /collaboration:init --engine=partykit.*partykit deploy/,
+    );
   });
 
   it('refuses to call the worker without a jwtSecret instead of collecting a 401', async () => {

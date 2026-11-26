@@ -1,12 +1,15 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { verifyCollabToken } from '../src/auth/token.js';
+import { resolvePartyKitWorkerSecret } from '../src/auth/partykit_keys.js';
+import { signCollabToken, verifyCollabToken } from '../src/auth/token.js';
 import type { CollabHttpContext, CollabManagerLike, CollabRouteUser } from '../src/http/types.js';
 import { CollabUnauthorizedError } from '../src/http/types.js';
 import { collaborationRoutes } from '../src/routes.js';
 import { TEST_TOKEN_SECRET } from './helpers/token.js';
 
 const SECRET = 'test-secret-32-chars-minimum-ok!';
+/** What the worker sends: derived from jwtSecret, never jwtSecret itself. */
+const WORKER_SECRET = resolvePartyKitWorkerSecret({ jwtSecret: SECRET })!;
 
 /* ── fakes ───────────────────────────────────────────────────────────── */
 
@@ -505,6 +508,74 @@ describe('state endpoints', () => {
     expect(Buffer.from(ctx.__sentBody as Buffer)).toEqual(Buffer.from([1, 2, 3]));
   });
 
+  describe('GET /state for the PartyKit worker', () => {
+    async function setup() {
+      const manager = makeManager() as CollabManagerLike & Record<string, unknown>;
+      const stored = vi.fn(async ({ docName }: { docName: string }) =>
+        docName === 'docs/1' ? new Uint8Array([7, 7]) : new Uint8Array(),
+      );
+      manager.getStoredDocumentState = stored;
+      const { router, find } = makeRouter();
+      await collaborationRoutes(router, {
+        ...baseOptions(manager),
+        partykit: { jwtSecret: SECRET },
+      });
+      const get = async (doc: string, headers: Record<string, string>) => {
+        const ctx = makeCtx({ qs: { doc }, headers });
+        await find('GET', '/state').handler(ctx);
+        return ctx;
+      };
+      return { get, stored };
+    }
+    const workerToken = (docName: string, key = WORKER_SECRET) =>
+      `Bearer ${signCollabToken({ userId: 'partykit-worker', docName }, key, 60)}`;
+
+    it('serves stored state to a worker token bound to that document', async () => {
+      const { get } = await setup();
+      const ctx = await get('docs/1', { authorization: workerToken('docs/1') });
+      expect(Buffer.from(ctx.__sentBody as Buffer)).toEqual(Buffer.from([7, 7]));
+    });
+
+    it('refuses a worker token issued for another document', async () => {
+      const { get, stored } = await setup();
+      const ctx = await get('docs/1', { authorization: workerToken('docs/2') });
+      expect(ctx.__responses[0]!.status).toBe(403);
+      expect(stored).not.toHaveBeenCalled();
+    });
+
+    it('refuses the worker identity signed with the user-token key', async () => {
+      // Every browser token is signed with jwtSecret. Claiming the worker's
+      // identity in one must not open storage.
+      const { get, stored } = await setup();
+      const ctx = await get('docs/1', { authorization: workerToken('docs/1', SECRET) });
+      expect(ctx.__responses[0]!.status).toBe(403);
+      expect(stored).not.toHaveBeenCalled();
+    });
+
+    it('answers an older worker (JWT key as secret) with the upgrade steps', async () => {
+      const { get, stored } = await setup();
+      const ctx = await get('docs/1', { 'x-collab-worker-secret': SECRET });
+      expect(ctx.__responses[0]!.status).toBe(403);
+      expect(JSON.stringify(ctx.__responses[0]!.payload)).toMatch(
+        /outdated PartyKit worker.*collaboration:init --engine=partykit --force/,
+      );
+      expect(stored).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 when nothing is stored, so the worker starts empty', async () => {
+      const { get } = await setup();
+      const ctx = await get('docs/3', { authorization: workerToken('docs/3') });
+      expect(ctx.__responses[0]!.status).toBe(404);
+    });
+
+    it('a request without a worker credential still goes through the user guard', async () => {
+      // The harness's resolveUser throws for a caller with no session.
+      const { get, stored } = await setup();
+      await expect(get('docs/1', {})).rejects.toThrow(/unauthenticated/);
+      expect(stored).not.toHaveBeenCalled();
+    });
+  });
+
   it('POST requires the worker shared secret', async () => {
     const manager = makeManager();
     const { router, find } = makeRouter();
@@ -522,12 +593,60 @@ describe('state endpoints', () => {
 
     const withSecret = makeCtx({
       qs: { doc: 'docs/1' },
-      headers: { 'x-collab-worker-secret': SECRET },
+      headers: { 'x-collab-worker-secret': WORKER_SECRET },
       raw: new Uint8Array([9]).buffer,
     });
     await find('POST', '/state').handler(withSecret);
     expect(withSecret.__responses[0]!.status).toBe(204);
     expect(manager.calls.some((c) => c === 'persist:docs/1:1')).toBe(true);
+  });
+
+  it('POST refuses the JWT signing key as worker secret, naming the upgrade steps', async () => {
+    // What an older worker template sent. Refused — the key that mints every
+    // user token must not travel as a header — but with the fix in the body.
+    const manager = makeManager();
+    const { router, find } = makeRouter();
+    await collaborationRoutes(router, {
+      ...baseOptions(manager),
+      partykit: { jwtSecret: SECRET },
+    });
+
+    const ctx = makeCtx({
+      qs: { doc: 'docs/1' },
+      headers: { 'x-collab-worker-secret': SECRET },
+      raw: new Uint8Array([9]).buffer,
+    });
+    await find('POST', '/state').handler(ctx);
+    expect(ctx.__responses[0]!.status).toBe(403);
+    expect(JSON.stringify(ctx.__responses[0]!.payload)).toMatch(
+      /outdated PartyKit worker.*collaboration:init --engine=partykit.*partykit secret delete COLLAB_WORKER_SECRET/,
+    );
+    expect(manager.calls.some((call) => call.startsWith('persist:'))).toBe(false);
+  });
+
+  it('POST accepts an explicit partykit.workerSecret instead of the derived one', async () => {
+    const manager = makeManager();
+    const { router, find } = makeRouter();
+    await collaborationRoutes(router, {
+      ...baseOptions(manager),
+      partykit: { jwtSecret: SECRET, workerSecret: 'explicit-worker-secret' },
+    });
+
+    const derived = makeCtx({
+      qs: { doc: 'docs/1' },
+      headers: { 'x-collab-worker-secret': WORKER_SECRET },
+      raw: new Uint8Array([9]).buffer,
+    });
+    await find('POST', '/state').handler(derived);
+    expect(derived.__responses[0]!.status).toBe(403);
+
+    const explicit = makeCtx({
+      qs: { doc: 'docs/1' },
+      headers: { 'x-collab-worker-secret': 'explicit-worker-secret' },
+      raw: new Uint8Array([9]).buffer,
+    });
+    await find('POST', '/state').handler(explicit);
+    expect(explicit.__responses[0]!.status).toBe(204);
   });
 
   it('POST reads the binary body from the request stream, as Adonis leaves it', async () => {
@@ -542,7 +661,7 @@ describe('state endpoints', () => {
     // still on the stream. Persisting `raw() ?? empty` used to store a zero-byte document.
     const ctx = makeCtx({
       qs: { doc: 'docs/1' },
-      headers: { 'x-collab-worker-secret': SECRET },
+      headers: { 'x-collab-worker-secret': WORKER_SECRET },
       raw: null,
       stream: Readable.from([Buffer.from([1, 2]), Buffer.from([3])]),
     });
@@ -561,7 +680,7 @@ describe('state endpoints', () => {
 
     const ctx = makeCtx({
       qs: { doc: 'docs/1' },
-      headers: { 'x-collab-worker-secret': SECRET },
+      headers: { 'x-collab-worker-secret': WORKER_SECRET },
       raw: null,
       stream: Readable.from(['decoded text']),
     });
@@ -580,7 +699,7 @@ describe('state endpoints', () => {
 
     const ctx = makeCtx({
       qs: { doc: 'docs/1' },
-      headers: { 'x-collab-worker-secret': SECRET },
+      headers: { 'x-collab-worker-secret': WORKER_SECRET },
       raw: null,
     });
     await find('POST', '/state').handler(ctx);
@@ -600,7 +719,7 @@ describe('state endpoints', () => {
 
     const ctx = makeCtx({
       qs: { doc: 'docs/1' },
-      headers: { 'x-collab-worker-secret': SECRET },
+      headers: { 'x-collab-worker-secret': WORKER_SECRET },
       raw: new Uint8Array([9]).buffer,
     });
     await find('POST', '/state').handler(ctx);

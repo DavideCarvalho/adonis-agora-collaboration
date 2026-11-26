@@ -20,12 +20,14 @@ a hint.
 ```text
 Browser ──GET /collaboration/token?doc=…──▶ Adonis
                                              ↳ authorize(ctx, docName)
-                                             ↳ signs a 5-minute HS256 JWT { userId, docName }
+                                             ↳ signs a 5-minute HS256 JWT { userId, docName, canWrite }
                     ◀── { token, wsUrl: wss://<host>/parties/main/<doc>, engine }
 
 Browser ──WebSocket──▶ Cloudflare Durable Object (one per document)
                           ↳ verifies the JWT with the shared secret
-                          ↳ GET  /collaboration/state?doc=…   ← loads the initial state
+                          ↳ opens the socket read-only unless the token says canWrite
+                          ↳ GET  /collaboration/state?doc=…   ← loads the stored state
+                                 (a 1-minute worker token bound to that document)
                           ↳ POST /collaboration/state?doc=…   → persists, post-debounce
                                  (authenticated by the worker secret, not a user session)
 ```
@@ -33,11 +35,18 @@ Browser ──WebSocket──▶ Cloudflare Durable Object (one per document)
 Two boundaries carry the security here, and they are different in kind:
 
 - **The token is a grant.** The worker has no database and cannot re-run `authorize`, so it trusts
-  the signature. That is why the JWT is short-lived and scoped to a single document name — see
+  the signature. That is why the JWT is short-lived, scoped to a single document name, and carries
+  the `canWrite` your `authorize` returned: a reader's socket is opened read-only, so the Yjs
+  updates it sends are dropped — never applied, stored or persisted to Adonis. See
   [Authorization](/docs/collaboration/concepts/authorization).
+- **The worker's HTTP API is for Adonis only.** The `PartyKitDriver` reads state and restores
+  versions through it, signing with a server key derived from `jwtSecret`. No browser token is
+  ever signed with that key, so no user — reader or writer — can push an update through it.
 - **`POST /state` is machine-to-machine.** It carries the raw document binary from the worker back
   to your database, so it is authenticated by a **shared worker secret** compared timing-safely, not
-  by a user session. See [Binary state](/docs/collaboration/routes/state).
+  by a user session. That secret is derived from `jwtSecret` on both sides, so there is nothing
+  extra to configure, and the JWT signing key itself never travels in a header. See
+  [Binary state](/docs/collaboration/routes/state).
 
 ## Setting it up
 
@@ -82,8 +91,37 @@ npx partykit dev                            # local
 npx partykit deploy                         # production
 ```
 
+`COLLAB_JWT_SECRET` is the only secret the worker needs. The server key and the worker secret are
+derived from it with HKDF, on both sides, with the same constants.
+
 </Step>
 </Steps>
+
+## Upgrading a generated worker
+
+The worker is generated once and deployed on its own, so a fix to the template does not reach it
+until you regenerate it. The current template carries a protocol marker
+(`Worker protocol v2 (@adonis-agora/collaboration)`). When `partykit-worker/party.ts` lacks it,
+the provider logs a warning at boot and `collaboration:init` warns too.
+
+```sh
+node ace collaboration:init --engine=partykit --force   # overwrites partykit-worker/ only
+cd partykit-worker
+npx partykit secret delete COLLAB_WORKER_SECRET         # if you had set it; it is derived now
+npx partykit deploy
+```
+
+Until you redeploy, the pieces fail loudly rather than quietly:
+
+- `POST /collaboration/state` from an old worker answers `403`, with a message naming these
+  steps. Old templates sent the JWT signing key as the worker secret, and Adonis now refuses that.
+- Driver calls (`getDocumentState`, `createVersion`, `restoreVersion`) fail with a
+  `PartyKitRoomError` 401 that names the same steps.
+
+The old template also let read-only users edit, which is the main reason to redeploy now.
+
+If you need to rotate the worker secret on its own, set `partykit.workerSecret` in Adonis and the
+same value with `npx partykit secret put COLLAB_WORKER_SECRET`. It must differ from `jwtSecret`.
 
 <Callout type="warn" title="The secret is the whole boundary">
 The worker's only way to know a connection is legitimate is the signature. A leaked

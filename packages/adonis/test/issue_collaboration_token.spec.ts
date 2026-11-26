@@ -130,6 +130,25 @@ describe('issueCollaborationToken', () => {
     });
   });
 
+  it('carries canWrite in the edge token, so the worker can open readers read-only', async () => {
+    // The worker cannot call `authorize`; the signed token is the only place
+    // the write permission can come from. Without it a reader's socket wrote.
+    const options = { partykit: { roomHost: 'party.example.com', jwtSecret: SECRET } };
+    const reader = await issueCollaborationToken(
+      { user: jane, docName: DOC },
+      {
+        manager: makeManager({ canRead: true, canWrite: false, canComment: true }, 'partykit'),
+        ...options,
+      },
+    );
+    const writer = await issueCollaborationToken(
+      { user: jane, docName: DOC },
+      { manager: makeManager(ALLOW, 'partykit'), ...options },
+    );
+    expect(verifyCollabToken(reader.token, SECRET, DOC)?.canWrite).toBe(false);
+    expect(verifyCollabToken(writer.token, SECRET, DOC)?.canWrite).toBe(true);
+  });
+
   it('reports when the edge credential dies, so a stale page prop can be discarded', async () => {
     const manager = makeManager(ALLOW, 'partykit');
     const before = Date.now();

@@ -55,6 +55,7 @@ defineConfig({
   roomHost: string          // 'my-app.partykit.dev' or 'localhost:1999'
   party?: string            // default 'main'
   jwtSecret?: string        // HS256 secret shared with the worker
+  workerSecret?: string     // optional: derived from jwtSecret when unset
   fetchTimeoutMs?: number   // default 10000
 }
 ```
@@ -363,7 +364,7 @@ collaborationRoutes(router, {
   manager?: CollabManagerLike | (() => Promise<CollabManagerLike>)
   engine?: string
   path?: string
-  partykit?: { roomHost?; jwtSecret?; party? }
+  partykit?: { roomHost?; jwtSecret?; workerSecret?; party? }
 }): void
 ```
 

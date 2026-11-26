@@ -2,6 +2,10 @@ import type { ApplicationService } from '@adonisjs/core/types';
 import { Redis } from 'ioredis';
 import { CollaborationManager } from '../src/collaboration_manager.js';
 import type { CollaborationAppConfig } from '../src/define_config.js';
+import {
+  outdatedPartyKitWorkerMessage,
+  partyKitWorkerStubStatus,
+} from '../src/drivers/partykit/worker_stub.js';
 import { type CollabLogger, setCollaborationLogger } from '../src/observability.js';
 import { collaborationRoutes } from '../src/routes.js';
 import { setBootedApp } from '../src/services/booted_app.js';
@@ -114,6 +118,8 @@ export default class CollaborationServiceProvider {
 
     const manager = await this.app.container.make(CollaborationManager);
 
+    if (this.config?.engine === 'partykit') await this.warnOnOutdatedWorker();
+
     const adonisServer = (await this.app.container.make('server')) as {
       getNodeServer?(): import('node:http').Server | undefined;
     };
@@ -126,6 +132,25 @@ export default class CollaborationServiceProvider {
     }
 
     await manager.attach(nodeServer);
+  }
+
+  /**
+   * The worker is a separate deployment generated once from a template, so a
+   * security fix to the template never reaches it by itself. When the
+   * generated file sits in the app (the default layout) and predates the
+   * current protocol, say so on every boot until it is regenerated.
+   */
+  private async warnOnOutdatedWorker() {
+    const workerPath = this.app.makePath('partykit-worker', 'party.ts');
+    if ((await partyKitWorkerStubStatus(workerPath)) !== 'outdated') return;
+    try {
+      const logger = (await this.app.container.make('logger')) as unknown as {
+        warn(message: string): void;
+      };
+      logger.warn(outdatedPartyKitWorkerMessage('partykit-worker/party.ts'));
+    } catch {
+      console.warn(outdatedPartyKitWorkerMessage('partykit-worker/party.ts'));
+    }
   }
 
   async shutdown() {

@@ -1,6 +1,6 @@
 ---
 title: Migrating to 1.0
-description: What changes in your code when you move @adonis-agora/collaboration and @adonis-agora/collaboration-client to 1.0 — the comment author name, the token helper names and the list format.
+description: What changes in your code when you move @adonis-agora/collaboration and @adonis-agora/collaboration-client to 1.0 — the comment author name, the token helper names, the list format and the PartyKit worker.
 icon: CircleArrowUp
 ---
 
@@ -214,6 +214,28 @@ import { Secret } from '@adonisjs/core/helpers'
 
 export const appKey = new Secret(env.get('APP_KEY'))
 ```
+
+## Regenerate and redeploy the PartyKit worker
+
+Only for the `partykit` engine. The worker template changed, and a worker generated from an older
+one must be regenerated and redeployed. The old template let users with `canRead` but not
+`canWrite` edit the document, and its HTTP API accepted any user's token.
+
+```sh
+node ace collaboration:init --engine=partykit --force   # overwrites partykit-worker/ only
+cd partykit-worker
+npx partykit secret delete COLLAB_WORKER_SECRET         # if you had set it
+npx partykit deploy
+```
+
+`COLLAB_WORKER_SECRET` is no longer needed. The worker secret is derived from
+`COLLAB_JWT_SECRET` / `partykit.jwtSecret`, so the JWT signing key never travels as a request
+header. To rotate it on its own, set `partykit.workerSecret` in Adonis and the same value as
+`COLLAB_WORKER_SECRET` on the worker.
+
+Until the new worker is deployed, its persistence calls to `POST /collaboration/state` get a `403`
+and the driver's calls to the worker get a `401`. Both error messages name the steps above, and
+the provider logs a warning at boot while `partykit-worker/party.ts` is outdated.
 
 ## Comment and version listings answer `{ data, meta }`
 
