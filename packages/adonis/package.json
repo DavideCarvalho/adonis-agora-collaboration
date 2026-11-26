@@ -117,7 +117,7 @@
     "@automerge/automerge": "3.5.0",
     "@hocuspocus/server": "4.9.0",
     "@hocuspocus/transformer": "4.9.0",
-    "ioredis": "6.0.0",
+    "ioredis": "6.1.0",
     "ws": "8.23.0",
     "y-protocols": "1.0.7",
     "yjs": "13.6.33"
