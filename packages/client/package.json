@@ -42,6 +42,9 @@
     "README.md"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "tag": "v0"
+  },
   "scripts": {
     "build": "pnpm run clean && tsc -p tsconfig.build.json",
     "check:dist": "node ../../scripts/assert-build-output.mjs dist src/index.js",
